@@ -2,28 +2,14 @@
   "name": "freesong",
   "version": "1.0.0",
   "private": true,
-  "description": "FreeSong: reproductor de música web (PWA para iPhone) y app Android con Capacitor.",
+  "description": "FreeSong: Reproductor de música web (PWA para iPhone / iOS).",
   "scripts": {
+    "build": "npm run css",
     "css": "tailwindcss -i src/input.css -o www/app.css --minify",
-    "css:watch": "tailwindcss -i src/input.css -o www/app.css --watch",
-    "prepare-assets": "node scripts/prepare.mjs",
-    "build": "npm run prepare-assets && npm run css",
-    "serve": "node scripts/serve.mjs",
-    "android-assets": "node scripts/android-assets.mjs",
-    "sync": "npm run build && cap sync android",
-    "apk": "npm run sync && cd android && gradlew.bat assembleDebug",
-    "open:android": "cap open android"
-  },
-  "dependencies": {
-    "@capacitor/android": "^8.5.3",
-    "@capacitor/app": "^8.1.2",
-    "@capacitor/core": "^8.5.3",
-    "@capgo/capacitor-media-session": "^8.1.5"
+    "css:watch": "tailwindcss -i src/input.css -o www/app.css --watch"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.3",
     "@fontsource-variable/inter": "^5.3.0",
-    "sharp": "^0.35.5",
     "tailwindcss": "^3.4.17"
   }
 }
