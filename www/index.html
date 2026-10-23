@@ -15,6 +15,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="app.css" />
+  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
@@ -269,6 +270,10 @@
       </div>
     </div>
 
+  <!-- Motor de audio de doble deck continuo -->
+  <div id="deckWrapper" style="position:fixed;bottom:0;right:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1;overflow:hidden;">
+    <div id="deckA"></div>
+    <div id="deckB"></div>
   </div>
 
   <script src="app.js"></script>
