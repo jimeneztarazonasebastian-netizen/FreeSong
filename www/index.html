@@ -111,7 +111,7 @@
           <span id="statusText"></span>
           <button id="statusCloseBtn" aria-label="Cerrar aviso" class="opacity-70 hover:opacity-100 shrink-0"><svg class="w-4 h-4"><use href="#i-close"/></svg></button>
         </div>
-        <div id="mainContent" class="flex-1 pb-6"></div>
+        <div id="mainContent" class="flex-1 pb-32 lg:pb-8"></div>
 
         <!-- Instalación -->
         <section id="installView" class="hidden flex-1 p-5 sm:p-8 space-y-6 max-w-4xl">
@@ -357,8 +357,9 @@
   </div>
 
   <!-- Reproductor a pantalla completa (celular) -->
-  <div id="nowSheet" data-open="false" class="fixed inset-0 z-30 tint-sheet flex flex-col lg:hidden" style="padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);" role="dialog" aria-modal="true" aria-label="Reproduciendo ahora">
-    <div class="flex items-center justify-between px-4 py-3">
+  <!-- Reproductor a pantalla completa (celular) -->
+  <div id="nowSheet" data-open="false" class="fixed inset-0 z-30 tint-sheet flex flex-col justify-between lg:hidden overflow-y-auto no-scrollbar" style="padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);" role="dialog" aria-modal="true" aria-label="Reproduciendo ahora">
+    <div class="flex items-center justify-between px-4 py-2 shrink-0">
       <button id="sheetCloseBtn" aria-label="Cerrar" class="p-2 -ml-2 text-white press"><svg class="w-7 h-7"><use href="#i-down"/></svg></button>
       <div class="text-center min-w-0 px-2">
         <p class="text-[10px] uppercase tracking-[0.18em] text-white/60">Reproduciendo desde</p>
@@ -366,33 +367,33 @@
       </div>
       <button id="sheetMoreBtn" aria-label="Más opciones" class="p-2 -mr-2 text-white press"><svg class="w-6 h-6"><use href="#i-more"/></svg></button>
     </div>
-    <div class="flex-1 min-h-0 flex items-center justify-center px-7">
-      <div id="sheetCover" class="w-full max-w-[min(100%,52vh)] aspect-square rounded-lg overflow-hidden shadow-[0_24px_60px_-12px_rgba(0,0,0,.6)] bg-zinc-800 flex items-center justify-center"></div>
+    <div class="flex-1 min-h-0 flex items-center justify-center px-6 py-2 my-auto">
+      <div id="sheetCover" class="w-full max-w-[min(76vw,34vh)] aspect-square rounded-2xl overflow-hidden shadow-[0_20px_50px_-10px_rgba(0,0,0,.7)] bg-zinc-800 flex items-center justify-center"></div>
     </div>
-    <div class="px-7 pt-6 pb-3 space-y-4">
+    <div class="px-6 pt-2 pb-5 space-y-3 shrink-0">
       <div class="flex items-center justify-between gap-3">
         <div class="min-w-0">
-          <p id="sheetTitle" class="text-[22px] leading-tight font-bold tracking-tight text-white truncate"></p>
-          <button id="sheetArtist" class="text-[15px] text-white/70 truncate max-w-full text-left"></button>
+          <p id="sheetTitle" class="text-[20px] leading-tight font-bold tracking-tight text-white truncate"></p>
+          <button id="sheetArtist" class="text-[14px] text-white/70 truncate max-w-full text-left"></button>
         </div>
         <button id="sheetLikeBtn" aria-label="Me gusta" class="p-2 -mr-2 text-white shrink-0 press"><svg class="w-7 h-7"><use href="#i-heart"/></svg></button>
       </div>
       <div>
-        <input id="sheetSeek" type="range" min="0" max="100" step="0.1" value="0" aria-label="Posición" class="w-full cursor-pointer" />
-        <div class="flex justify-between text-[11px] font-mono tabular-nums text-white/60 mt-0.5"><span id="sheetCur">0:00</span><span id="sheetDur">0:00</span></div>
+        <input id="sheetSeek" type="range" min="0" max="100" step="0.1" value="0" aria-label="Posición" class="w-full cursor-pointer h-1.5" />
+        <div class="flex justify-between text-[11px] font-mono tabular-nums text-white/60 mt-1"><span id="sheetCur">0:00</span><span id="sheetDur">0:00</span></div>
       </div>
       <div class="flex items-center justify-between">
         <button id="sheetShuffleBtn" aria-label="Aleatorio" class="relative p-2 text-white/70 press"><svg class="w-6 h-6"><use href="#i-shuffle"/></svg></button>
-        <button id="sheetPrevBtn" aria-label="Anterior" class="p-2 text-white press"><svg class="w-9 h-9"><use href="#i-prev"/></svg></button>
-        <button id="sheetPlayBtn" aria-label="Reproducir" class="w-[68px] h-[68px] rounded-full bg-white text-black flex items-center justify-center press"><svg class="w-8 h-8"><use href="#i-play"/></svg></button>
-        <button id="sheetNextBtn" aria-label="Siguiente" class="p-2 text-white press"><svg class="w-9 h-9"><use href="#i-next"/></svg></button>
+        <button id="sheetPrevBtn" aria-label="Anterior" class="p-2 text-white press"><svg class="w-8 h-8"><use href="#i-prev"/></svg></button>
+        <button id="sheetPlayBtn" aria-label="Reproducir" class="w-[62px] h-[62px] rounded-full bg-white text-black flex items-center justify-center shadow-lg press"><svg class="w-7 h-7"><use href="#i-play"/></svg></button>
+        <button id="sheetNextBtn" aria-label="Siguiente" class="p-2 text-white press"><svg class="w-8 h-8"><use href="#i-next"/></svg></button>
         <button id="sheetRepeatBtn" aria-label="Repetir" class="relative p-2 text-white/70 press"><svg class="w-6 h-6"><use href="#i-repeat"/></svg></button>
       </div>
       <div class="flex items-center justify-between pt-1">
-        <span id="sheetSourceBadge" class="text-[10px] font-semibold uppercase tracking-wider px-2 py-1 rounded-full bg-white/10 text-white/80"></span>
+        <span id="sheetSourceBadge" class="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-white/10 text-white/80"></span>
         <div class="flex items-center gap-1">
-          <button data-open-side="lyrics" aria-label="Letra" class="p-2 text-white/80 press"><svg class="w-6 h-6"><use href="#i-lyrics"/></svg></button>
-          <button data-open-side="queue" aria-label="Cola" class="p-2 text-white/80 press"><svg class="w-6 h-6"><use href="#i-queue"/></svg></button>
+          <button data-open-side="lyrics" aria-label="Letra" class="p-2 text-white/80 press"><svg class="w-5 h-5"><use href="#i-lyrics"/></svg></button>
+          <button data-open-side="queue" aria-label="Cola" class="p-2 text-white/80 press"><svg class="w-5 h-5"><use href="#i-queue"/></svg></button>
         </div>
       </div>
     </div>

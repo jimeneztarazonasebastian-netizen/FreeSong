@@ -8,6 +8,9 @@
     "backgroundColor": "#09090b"
   },
   "plugins": {
+    "MediaSession": {
+      "foregroundService": "always"
+    },
     "SystemBars": {
       "insetsHandling": "css",
       "style": "DARK",

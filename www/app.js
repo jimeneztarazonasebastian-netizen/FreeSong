@@ -1022,7 +1022,7 @@ const Synth = {
 // ============================================================================
 const Media = {
   plugin: nativePlugin('MediaSession'),
-  web: !Platform.native && 'mediaSession' in navigator,
+  web: 'mediaSession' in navigator,
   iconData: '',
   lastPos: 0,
   async init() {
@@ -1039,7 +1039,8 @@ const Media = {
     for (const [action, fn] of Object.entries(handlers)) {
       if (this.plugin) {
         try { await this.plugin.setActionHandler({ action }, fn); } catch { /* acción no soportada */ }
-      } else if (this.web) {
+      }
+      if (this.web) {
         try { navigator.mediaSession.setActionHandler(action, fn); } catch { /* acción no soportada */ }
       }
     }
@@ -1061,7 +1062,8 @@ const Media = {
     if (this.plugin) {
       const src = art && art.startsWith('https') ? art : this.iconData;
       this.plugin.setMetadata({ ...meta, artwork: src ? [{ src }] : [] }).catch(() => {});
-    } else if (this.web && 'MediaMetadata' in window) {
+    }
+    if (this.web && 'MediaMetadata' in window) {
       const artwork = art && !art.startsWith('blob:')
         ? [{ src: art, sizes: '480x480', type: 'image/jpeg' }]
         : [{ src: new URL('icons/icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' }];
@@ -1071,7 +1073,9 @@ const Media = {
   setState() {
     const state = Player.current ? (Player.playing ? 'playing' : 'paused') : 'none';
     if (this.plugin) this.plugin.setPlaybackState({ playbackState: state }).catch(() => {});
-    else if (this.web) navigator.mediaSession.playbackState = state;
+    if (this.web) {
+      try { navigator.mediaSession.playbackState = state; } catch { /* nada */ }
+    }
     this.setPosition(true);
   },
   setPosition(force = false) {
@@ -1082,7 +1086,7 @@ const Media = {
     if (!Number.isFinite(duration) || duration <= 0) return;
     const state = { duration, position: clamp(Player.position(), 0, duration), playbackRate: S.rate || 1 };
     if (this.plugin) this.plugin.setPositionState(state).catch(() => {});
-    else if (this.web && navigator.mediaSession.setPositionState) {
+    if (this.web && navigator.mediaSession.setPositionState) {
       try { navigator.mediaSession.setPositionState(state); } catch { /* nada */ }
     }
   }
@@ -3396,11 +3400,20 @@ function bindEvents() {
     $('installPromptBtn').classList.remove('hidden');
   });
 
-  // Guardar al salir
+  // Guardar al salir y asegurar continuidad de audio en segundo plano
   window.addEventListener('pagehide', saveNow);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) saveNow();
-    else if (Engine.ctx && Player.playing && Engine.ctx.state !== 'running') Engine.ctx.resume().catch(() => {});
+    if (document.hidden) {
+      saveNow();
+      if (Engine.ctx && Player.playing && Engine.ctx.state !== 'running') {
+        Engine.ctx.resume().catch(() => {});
+      }
+    } else {
+      if (Engine.ctx && Player.playing && Engine.ctx.state !== 'running') {
+        Engine.ctx.resume().catch(() => {});
+      }
+      Media.setState();
+    }
   });
 
   // Botón Atrás de Android (APK): cerrar menús, volver, o minimizar sin parar la música
