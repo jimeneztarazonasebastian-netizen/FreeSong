@@ -15,7 +15,6 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="app.css" />
-  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
@@ -270,13 +269,6 @@
       </div>
     </div>
 
-  </div>
-
-  <!-- Motor de reproducción de doble deck (Deck A y Deck B) + audio de fondo iOS -->
-  <div id="ytEngineWrapper" style="position:fixed;top:-9999px;left:-9999px;width:200px;height:200px;opacity:0.01;pointer-events:none;overflow:hidden;z-index:-1;">
-    <div id="deckA"></div>
-    <div id="deckB"></div>
-    <audio id="silentDeck" loop preload="auto" src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
   </div>
 
   <script src="app.js"></script>

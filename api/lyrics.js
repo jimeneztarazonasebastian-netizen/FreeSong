@@ -1,37 +1,49 @@
 // api/lyrics.js - Letras sincronizadas con LRCLIB
 export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
-  const trackName = (req.query && req.query.track) || urlObj.searchParams.get('track');
-  const artistName = (req.query && req.query.artist) || urlObj.searchParams.get('artist');
+  const rawTrack = (req.query && req.query.track) || urlObj.searchParams.get('track');
+  const rawArtist = (req.query && req.query.artist) || urlObj.searchParams.get('artist');
 
-  if (!trackName) {
+  if (!rawTrack) {
     const err = JSON.stringify({ error: 'Falta nombre de pista' });
     if (res && res.status) return res.status(400).send(err);
     return new Response(err, { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
 
   try {
-    const cleanTrack = trackName
-      .replace(/\s*[\(\[](official\s*video|audio|lyrics|video\s*oficial|visualizer|remix)[\)\]]/gi, '')
+    let cleanTrack = rawTrack
+      .replace(/\s*[\(\[](official\s*video|audio|lyrics|video\s*oficial|visualizer|remix|hd|4k|videoclip|music\s*video)[\)\]]/gi, '')
+      .replace(/\s*-\s*official\s*(music\s*)?video/gi, '')
       .trim();
 
-    const queryParams = new URLSearchParams({ track_name: cleanTrack });
-    if (artistName && artistName !== 'Artista') {
-      queryParams.append('artist_name', artistName);
+    let cleanArtist = rawArtist && rawArtist !== 'Artista' ? rawArtist.trim() : '';
+
+    // Si el título viene con formato "Artista - Canción"
+    if (cleanTrack.includes(' - ')) {
+      const parts = cleanTrack.split(' - ');
+      if (!cleanArtist) cleanArtist = parts[0].trim();
+      cleanTrack = parts.slice(1).join(' - ').trim();
     }
 
-    const lrcRes = await fetch(`https://lrclib.net/api/get?${queryParams.toString()}`, {
-      headers: { 'User-Agent': 'FreeSong/1.0 (https://github.com/jimeneztarazonasebastian-netizen/FreeSong)' }
-    });
+    const queryParams = new URLSearchParams({ track_name: cleanTrack });
+    if (cleanArtist) {
+      queryParams.append('artist_name', cleanArtist);
+    }
+
+    const headers = {
+      'User-Agent': 'FreeSong/1.0 (https://github.com/jimeneztarazonasebastian-netizen/FreeSong)'
+    };
 
     let data = null;
+    const lrcRes = await fetch(`https://lrclib.net/api/get?${queryParams.toString()}`, { headers });
     if (lrcRes.ok) {
       data = await lrcRes.json();
     } else {
-      // Fallback a search si get exacto no dio resultado
-      const searchRes = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanTrack + ' ' + (artistName || ''))}`, {
-        headers: { 'User-Agent': 'FreeSong/1.0 (https://github.com/jimeneztarazonasebastian-netizen/FreeSong)' }
-      });
+      // Fallback 1: Buscar por texto combinado
+      const searchRes = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTrack + (cleanArtist ? ' ' + cleanArtist : ''))}`,
+        { headers }
+      );
       if (searchRes.ok) {
         const results = await searchRes.json();
         data = results?.[0] || null;

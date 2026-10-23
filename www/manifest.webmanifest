@@ -1,7 +1,7 @@
 {
   "name": "FreeSong",
   "short_name": "FreeSong",
-  "description": "Música completa de Audius, letras sincronizadas, radio, descargas y tus propios archivos.",
+  "description": "Reproductor de música premium con catálogo completo, letras sincronizadas y crossfade para iPhone y web.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

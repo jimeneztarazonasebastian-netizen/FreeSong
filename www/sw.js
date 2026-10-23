@@ -1,6 +1,6 @@
 // Service worker de FreeSong: guarda la app para abrirla sin internet.
 // El audio y las APIs externas no se interceptan (las descargas viven en IndexedDB).
-const VERSION = 'freesong-v1.1.0';
+const VERSION = 'freesong-v2.0.0';
 const SHELL = [
   './',
   'index.html',
