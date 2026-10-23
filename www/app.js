@@ -1,4 +1,4 @@
-// FreeSong Web Music Player - Core Logic & Dual-Deck Crossfade Engine
+// FreeSong Web Music Player - Core Logic & Dual-Deck YouTube Engine with Spotify Crossfade
 (() => {
   'use strict';
 
@@ -8,7 +8,7 @@
     currentIndex: -1,
     isPlaying: false,
     crossfade: true,
-    crossfadeDuration: 6,
+    crossfadeDuration: 6, // 6 segundos de fundido como Spotify por defecto
     shuffle: false,
     repeat: 'all', // 'off', 'all', 'one'
     favorites: JSON.parse(localStorage.getItem('fs_favorites') || '[]'),
@@ -18,7 +18,7 @@
     activeTab: 'home'
   };
 
-  // Cargar configuración de crossfade guardada
+  // Cargar configuración guardada
   const savedXf = localStorage.getItem('fs_crossfade');
   if (savedXf !== null) S.crossfade = savedXf === 'true';
   const savedXfDur = localStorage.getItem('fs_crossfade_dur');
@@ -28,25 +28,102 @@
   const $ = (id) => document.getElementById(id);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  // --- Motor de Audio con Doble Deck (Crossfade tipo Spotify) ---
-  const decks = [new Audio(), new Audio()];
+  // --- Motor de Reproducción con Doble Deck YouTube (Crossfade tipo Spotify) ---
+  const ytPlayers = [null, null];
   let activeDeckIdx = 0;
   let isCrossfading = false;
   let fadeInterval = null;
+  let timeMonitorInterval = null;
+  let readyCount = 0;
+  let isEngineReady = false;
+  const silentDeck = $('silentDeck');
 
-  decks.forEach((d) => {
-    d.preload = 'auto';
-    d.crossOrigin = 'anonymous';
-  });
+  function getActivePlayer() {
+    return ytPlayers[activeDeckIdx];
+  }
 
-  const getActiveDeck = () => decks[activeDeckIdx];
-  const getInactiveDeck = () => decks[1 - activeDeckIdx];
+  function getInactivePlayer() {
+    return ytPlayers[1 - activeDeckIdx];
+  }
 
   function formatTime(secs) {
     if (isNaN(secs) || secs < 0) return '0:00';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
+  }
+
+  // --- Inicialización de los dos Decks de YouTube ---
+  function initYouTubePlayers() {
+    const commonVars = {
+      autoplay: 0,
+      controls: 0,
+      disablekb: 1,
+      fs: 0,
+      rel: 0,
+      playsinline: 1,
+      enablejsapi: 1,
+      origin: window.location.origin
+    };
+
+    ytPlayers[0] = new YT.Player('deckA', {
+      height: '200',
+      width: '200',
+      videoId: '',
+      playerVars: commonVars,
+      events: {
+        onReady: () => onDeckReady(0),
+        onStateChange: (e) => onDeckStateChange(0, e)
+      }
+    });
+
+    ytPlayers[1] = new YT.Player('deckB', {
+      height: '200',
+      width: '200',
+      videoId: '',
+      playerVars: commonVars,
+      events: {
+        onReady: () => onDeckReady(1),
+        onStateChange: (e) => onDeckStateChange(1, e)
+      }
+    });
+  }
+
+  function onDeckReady(deckIdx) {
+    readyCount++;
+    if (readyCount >= 2) {
+      isEngineReady = true;
+      startTimeMonitor();
+    }
+  }
+
+  function onDeckStateChange(deckIdx, event) {
+    if (deckIdx !== activeDeckIdx) return;
+
+    // YT.PlayerState: PLAYING = 1, PAUSED = 2, ENDED = 0, BUFFERING = 3
+    if (event.data === 1) {
+      S.isPlaying = true;
+      updatePlayPauseIcons(true);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    } else if (event.data === 2) {
+      S.isPlaying = false;
+      updatePlayPauseIcons(false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    } else if (event.data === 0) {
+      // Fin de la canción (si no se activó el crossfade anticipado)
+      if (!isCrossfading) {
+        playNext();
+      }
+    }
+  }
+
+  // Exponer a la ventana para el callback de YouTube
+  window.onYouTubeIframeAPIReady = () => {
+    initYouTubePlayers();
+  };
+
+  if (window.YT && window.YT.Player) {
+    initYouTubePlayers();
   }
 
   // --- Notificación en Pantalla de Bloqueo de iOS (MediaSession) ---
@@ -59,7 +136,8 @@
         album: 'FreeSong Premium',
         artwork: [
           { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' },
-          { src: track.thumbnail, sizes: '192x192', type: 'image/jpeg' }
+          { src: track.thumbnail, sizes: '192x192', type: 'image/jpeg' },
+          { src: track.thumbnail, sizes: '96x96', type: 'image/jpeg' }
         ]
       });
 
@@ -69,10 +147,18 @@
       navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime != null) {
-          getActiveDeck().currentTime = details.seekTime;
+          const p = getActivePlayer();
+          if (p && p.seekTo) p.seekTo(details.seekTime, true);
         }
       });
     } catch {}
+  }
+
+  // Mantener despierta la sesión de audio en iOS Safari
+  function keepAudioAlive() {
+    if (silentDeck && silentDeck.paused) {
+      silentDeck.play().catch(() => {});
+    }
   }
 
   // --- Reproducción y Cambio de Pista ---
@@ -81,44 +167,62 @@
     S.currentIndex = index;
     const track = S.queue[index];
 
+    // Mantener audio activo en iOS
+    keepAudioAlive();
+
     // Actualizar UI de forma inmediata
     updatePlayerUI(track);
     saveHistory(track);
     loadLyrics(track);
+    updateMediaSession(track);
+
+    if (!isEngineReady) {
+      // Si el motor aún está cargando la API, esperar brevemente
+      setTimeout(() => playTrack(index, immediate), 300);
+      return;
+    }
+
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate;
+    const outPlayer = getActivePlayer();
+    const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
 
     try {
-      // 1. Obtener la URL de audio directo
-      const res = await fetch(`/api/stream?id=${track.id}`);
-      if (!res.ok) throw new Error('Error al obtener stream');
-      const data = await res.json();
-      if (!data.url) throw new Error('URL de audio inválida');
+      if (shouldCrossfade) {
+        // Cargar en el deck entrante con volumen 0
+        inPlayer.setVolume(0);
+        inPlayer.loadVideoById({
+          videoId: track.id,
+          startSeconds: 0
+        });
+        inPlayer.playVideo();
 
-      const incomingDeck = (S.crossfade && S.isPlaying && !immediate) ? getInactiveDeck() : getActiveDeck();
-      const outgoingDeck = getActiveDeck();
+        // Iniciar Crossfade igual que Spotify Premium
+        performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
+      } else {
+        if (isCrossfading) {
+          clearInterval(fadeInterval);
+          isCrossfading = false;
+        }
+        if (outPlayer && outPlayer !== inPlayer) {
+          outPlayer.stopVideo();
+        }
+        inPlayer.setVolume(100);
+        inPlayer.loadVideoById({
+          videoId: track.id,
+          startSeconds: 0
+        });
+        inPlayer.playVideo();
+      }
 
-      incomingDeck.src = data.url;
-      incomingDeck.volume = (S.crossfade && S.isPlaying && !immediate) ? 0 : 1;
-
-      await incomingDeck.play();
       S.isPlaying = true;
       updatePlayPauseIcons(true);
-      updateMediaSession(track);
-
-      // Si aplica Crossfade: fundido suave entre canciones
-      if (S.crossfade && outgoingDeck !== incomingDeck && !outgoingDeck.paused) {
-        performCrossfade(outgoingDeck, incomingDeck, S.crossfadeDuration);
-      } else {
-        outgoingDeck.volume = 1;
-      }
     } catch (err) {
-      console.error('Error de reproducción:', err);
-      // Si falla una canción, intentar la siguiente tras breve pausa
-      setTimeout(() => playNext(), 1200);
+      console.error('Error al reproducir pista:', err);
     }
   }
 
-  // Curva de Crossfade en S (Equal-Power como Spotify)
-  function performCrossfade(outDeck, inDeck, durationSec) {
+  // --- Curva de Crossfade Senoidal en S (Equal-Power de Spotify) ---
+  function performCrossfade(outP, inP, durationSec) {
     if (isCrossfading) clearInterval(fadeInterval);
     isCrossfading = true;
 
@@ -130,40 +234,51 @@
       currentStep++;
       const progress = currentStep / steps; // 0.0 -> 1.0
 
-      // Curva senoidal de potencia constante
-      outDeck.volume = Math.max(0, Math.cos((progress * Math.PI) / 2));
-      inDeck.volume = Math.min(1, Math.sin((progress * Math.PI) / 2));
+      // Curva trigonométrica de potencia constante para no perder energía sonora
+      const outVol = Math.cos((progress * Math.PI) / 2) * 100;
+      const inVol = Math.sin((progress * Math.PI) / 2) * 100;
+
+      try {
+        outP.setVolume(Math.max(0, Math.round(outVol)));
+        inP.setVolume(Math.min(100, Math.round(inVol)));
+      } catch {}
 
       if (currentStep >= steps) {
         clearInterval(fadeInterval);
-        outDeck.pause();
-        outDeck.currentTime = 0;
-        outDeck.volume = 1;
-        inDeck.volume = 1;
-        activeDeckIdx = 1 - activeDeckIdx; // Cambiar deck activo
+        try {
+          outP.stopVideo();
+          outP.setVolume(100);
+          inP.setVolume(100);
+        } catch {}
+        activeDeckIdx = 1 - activeDeckIdx; // El deck entrante pasa a ser el activo
         isCrossfading = false;
       }
     }, stepTime);
   }
 
   function pausePlayback() {
-    getActiveDeck().pause();
-    getInactiveDeck().pause();
+    const p = getActivePlayer();
+    if (p && p.pauseVideo) p.pauseVideo();
+    const inact = getInactivePlayer();
+    if (inact && inact.pauseVideo) inact.pauseVideo();
     S.isPlaying = false;
     updatePlayPauseIcons(false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   }
 
   function resumePlayback() {
+    keepAudioAlive();
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
       return;
     }
-    getActiveDeck().play().then(() => {
+    const p = getActivePlayer();
+    if (p && p.playVideo) {
+      p.playVideo();
       S.isPlaying = true;
       updatePlayPauseIcons(true);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    }).catch(() => {});
+    }
   }
 
   function togglePlayPause() {
@@ -174,8 +289,8 @@
   function playNext() {
     if (S.queue.length === 0) return;
     if (S.repeat === 'one') {
-      getActiveDeck().currentTime = 0;
-      getActiveDeck().play();
+      const p = getActivePlayer();
+      if (p && p.seekTo) p.seekTo(0, true);
       return;
     }
     let nextIdx = S.currentIndex + 1;
@@ -191,9 +306,9 @@
 
   function playPrev() {
     if (S.queue.length === 0) return;
-    const deck = getActiveDeck();
-    if (deck.currentTime > 3) {
-      deck.currentTime = 0;
+    const p = getActivePlayer();
+    if (p && p.getCurrentTime && p.getCurrentTime() > 3) {
+      p.seekTo(0, true);
       return;
     }
     let prevIdx = S.currentIndex - 1;
@@ -201,40 +316,44 @@
     playTrack(prevIdx, true);
   }
 
-  // --- Monitoreo de tiempo y Auto-Crossfade ---
-  function attachDeckListeners(deck) {
-    deck.addEventListener('timeupdate', () => {
-      if (deck !== getActiveDeck()) return;
-      const cur = deck.currentTime;
-      const dur = deck.duration;
+  // --- Monitoreo de tiempo, progreso, letras y Auto-Crossfade ---
+  function startTimeMonitor() {
+    if (timeMonitorInterval) clearInterval(timeMonitorInterval);
+    timeMonitorInterval = setInterval(() => {
+      const p = getActivePlayer();
+      if (!p || !p.getCurrentTime || !p.getDuration) return;
 
-      if (!isNaN(dur) && dur > 0) {
-        $('playerCurTime').textContent = formatTime(cur);
-        $('playerDurTime').textContent = formatTime(dur);
-        const pct = (cur / dur) * 100;
-        $('playerSeek').value = pct;
-        $('miniProgress').style.width = `${pct}%`;
+      try {
+        const cur = p.getCurrentTime() || 0;
+        const dur = p.getDuration() || 0;
 
-        // Detección de inicio de Crossfade antes del fin de pista
-        if (S.crossfade && !isCrossfading && (dur - cur) <= S.crossfadeDuration && S.queue.length > 1) {
-          playNext();
+        if (dur > 0) {
+          $('playerCurTime').textContent = formatTime(cur);
+          $('playerDurTime').textContent = formatTime(dur);
+          const pct = (cur / dur) * 100;
+          $('playerSeek').value = pct;
+          $('miniProgress').style.width = `${pct}%`;
+
+          // Detección automática de inicio de Crossfade antes del fin de pista
+          const timeLeft = dur - cur;
+          if (
+            S.crossfade &&
+            !isCrossfading &&
+            timeLeft <= S.crossfadeDuration &&
+            timeLeft > 0.8 &&
+            S.queue.length > 1
+          ) {
+            playNext();
+          }
         }
-      }
 
-      // Sincronizar letra activa
-      if (S.syncedLyrics.length > 0) {
-        syncLyricsWithTime(cur);
-      }
-    });
-
-    deck.addEventListener('ended', () => {
-      if (!S.crossfade && deck === getActiveDeck()) {
-        playNext();
-      }
-    });
+        // Sincronizar letra activa
+        if (S.syncedLyrics.length > 0) {
+          syncLyricsWithTime(cur);
+        }
+      } catch {}
+    }, 250);
   }
-
-  decks.forEach(attachDeckListeners);
 
   // --- Letras Sincronizadas (LRCLIB) ---
   async function loadLyrics(track) {
@@ -289,7 +408,8 @@
 
     $$('.lyric-line').forEach((el, idx) => {
       el.addEventListener('click', () => {
-        getActiveDeck().currentTime = lyricsList[idx].time;
+        const p = getActivePlayer();
+        if (p && p.seekTo) p.seekTo(lyricsList[idx].time, true);
       });
     });
   }
@@ -308,7 +428,7 @@
       S.currentLyricIdx = activeIdx;
       $$('.lyric-line').forEach((el, i) => {
         if (i === activeIdx) {
-          el.className = 'lyric-line text-xl sm:text-2xl font-black text-white py-1 transition-all duration-300 scale-105 origin-center text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]';
+          el.className = 'lyric-line text-xl sm:text-2xl font-black py-1 transition-all duration-300 scale-105 origin-center text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]';
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
           el.className = 'lyric-line text-lg sm:text-xl font-bold text-zinc-500 py-1 transition-all duration-300 cursor-pointer hover:text-zinc-200';
@@ -613,9 +733,12 @@
     // Barra de búsqueda seek
     $('playerSeek').addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value);
-      const deck = getActiveDeck();
-      if (deck.duration) {
-        deck.currentTime = (pct / 100) * deck.duration;
+      const p = getActivePlayer();
+      if (p && p.getDuration) {
+        const dur = p.getDuration();
+        if (dur > 0) {
+          p.seekTo((pct / 100) * dur, true);
+        }
       }
     });
 
