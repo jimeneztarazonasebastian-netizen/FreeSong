@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#09090b" />
-  <meta name="description" content="FreeSong: reproductor de música con canciones completas de Audius, letras sincronizadas, radio, descargas y tus propios archivos." />
+  <meta name="description" content="FreeSong: Reproductor de música premium con catálogo completo, letras sincronizadas y crossfade para iPhone y web." />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -16,9 +16,9 @@
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="app.css" />
 </head>
-<body data-tab="home" class="font-sans antialiased select-none">
+<body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
-  <!-- Íconos SVG (un solo set, relleno sólido) -->
+  <!-- Íconos SVG -->
   <svg xmlns="http://www.w3.org/2000/svg" class="hidden" aria-hidden="true">
     <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.79-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" d="M7 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm7 0h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></symbol>
@@ -29,411 +29,248 @@
     <symbol id="i-repeat-one" viewBox="0 0 24 24"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path fill="currentColor" d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z"/></symbol>
     <symbol id="i-heart-fill" viewBox="0 0 24 24"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></symbol>
-    <symbol id="i-volume" viewBox="0 0 24 24"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></symbol>
-    <symbol id="i-mute" viewBox="0 0 24 24"><path fill="currentColor" d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path fill="currentColor" d="M12.7 2.65a1 1 0 0 0-1.4 0l-9 8.5A1 1 0 0 0 3 12.9h1V20a1 1 0 0 0 1 1h5v-6h4v6h5a1 1 0 0 0 1-1v-7.1h1a1 1 0 0 0 .7-1.75l-9-8.5z"/></symbol>
     <symbol id="i-library" viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h2v18H4zm5 0h2v18H9zm5.4.6l1.9-.6 5.3 17.2-1.9.6z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></symbol>
     <symbol id="i-queue" viewBox="0 0 24 24"><path fill="currentColor" d="M3 6h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14-4v6.18A3 3 0 1 0 19 19v-7h3v-2h-5z"/></symbol>
-    <symbol id="i-tune" viewBox="0 0 24 24"><path fill="currentColor" d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></symbol>
-    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
+    <symbol id="i-lyrics" viewBox="0 0 24 24"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></symbol>
-    <symbol id="i-back" viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></symbol>
-    <symbol id="i-install" viewBox="0 0 24 24"><path fill="currentColor" d="M17 1H7c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 18H7V5h10v14zm-1-6h-3V8h-2v5H8l4 4 4-4z"/></symbol>
-    <symbol id="i-trash" viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
-    <symbol id="i-external" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></symbol>
-    <symbol id="i-folder" viewBox="0 0 24 24"><path fill="currentColor" d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></symbol>
-    <symbol id="i-mix" viewBox="0 0 24 24"><path fill="currentColor" d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/></symbol>
-    <symbol id="i-more" viewBox="0 0 24 24"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v6.17l2.59-2.58L17 12l-5 5-5-5 1.41-1.41L11 13.17V7h2z"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></symbol>
-    <symbol id="i-music" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></symbol>
-    <symbol id="i-radio" viewBox="0 0 24 24"><path fill="currentColor" d="M3.24 6.15A2 2 0 0 0 2 8v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2H8.3l8.26-3.34L15.88 1 3.24 6.15zM7 20a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm13-8h-2v-2h-2v2H4V8h16v4z"/></symbol>
-    <symbol id="i-wave" viewBox="0 0 24 24"><path fill="currentColor" d="M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z"/></symbol>
-    <symbol id="i-lyrics" viewBox="0 0 24 24"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.5 5v5.25l4.5 2.67-.75 1.23L11 13V7h1.5z"/></symbol>
-    <symbol id="i-person" viewBox="0 0 24 24"><path fill="currentColor" d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></symbol>
-    <symbol id="i-up" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path fill="currentColor" d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></symbol>
   </svg>
 
-  <div class="app-shell flex flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+  <div class="flex flex-col h-screen w-screen overflow-hidden">
 
-    <!-- Cabecera -->
-    <header class="flex items-center gap-3 px-4 py-2.5 shrink-0">
-      <button id="logoBtn" class="flex items-center gap-2.5 shrink-0 press" aria-label="Ir al inicio">
-        <img src="icons/icon-192.png" alt="" width="32" height="32" class="w-8 h-8 rounded-lg" />
-        <span class="font-extrabold text-[17px] tracking-tight text-white">FreeSong</span>
-      </button>
-      <div class="hidden lg:flex items-center gap-1 ml-4">
-        <button id="backBtn" aria-label="Atrás" class="w-8 h-8 rounded-full bg-zinc-900 text-zinc-300 hover:text-white flex items-center justify-center press"><svg class="w-5 h-5"><use href="#i-back"/></svg></button>
+    <!-- Encabezado superior -->
+    <header class="flex items-center justify-between px-5 pt-3 pb-2.5 shrink-0 bg-zinc-950/80 backdrop-blur-md z-10" style="padding-top: max(12px, env(safe-area-inset-top));">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-black text-base shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+          FS
+        </div>
+        <span class="font-bold text-lg tracking-tight text-white">FreeSong</span>
       </div>
-      <form id="headerSearchForm" class="hidden lg:flex flex-1 max-w-md" role="search">
-        <label class="relative flex-1">
-          <span class="sr-only">Buscar</span>
-          <svg class="w-5 h-5 absolute left-3.5 top-2.5 text-zinc-400 pointer-events-none"><use href="#i-search"/></svg>
-          <input id="headerSearchInput" type="search" autocomplete="off" placeholder="¿Qué quieres escuchar?"
-            class="w-full pl-11 pr-4 py-2.5 rounded-full bg-zinc-900 border border-transparent text-sm text-white placeholder-zinc-500 hover:border-zinc-700 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition" />
-        </label>
-      </form>
-      <div class="flex-1 lg:hidden"></div>
-      <span id="offlinePill" class="hidden text-[11px] font-semibold px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">Sin conexión</span>
-      <button id="installNavBtn" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-zinc-900 text-zinc-200 hover:bg-zinc-800 transition flex items-center gap-1.5 press">
-        <svg class="w-4 h-4"><use href="#i-install"/></svg><span>Instalar</span>
-      </button>
+      <div id="headerPill" class="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">
+        Web Premium
+      </div>
     </header>
 
-    <div class="flex-1 flex min-h-0 lg:gap-2 lg:px-2">
+    <!-- Área de contenido principal -->
+    <main id="mainContainer" class="flex-1 overflow-y-auto px-4 pb-32 no-scrollbar">
 
-      <!-- Biblioteca -->
-      <aside data-panel="library" class="panel hidden lg:flex flex-col w-full lg:w-72 shrink-0 bg-zinc-900/40 lg:rounded-xl overflow-hidden">
-        <div class="px-4 pt-4 pb-2 flex items-center justify-between">
-          <span class="flex items-center gap-2.5 text-zinc-200 font-bold text-[15px]">
-            <svg class="w-6 h-6 text-zinc-400"><use href="#i-library"/></svg>Tu biblioteca
-          </span>
-          <button id="newPlaylistBtn" title="Crear playlist" aria-label="Crear playlist" class="w-8 h-8 rounded-full hover:bg-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition press">
-            <svg class="w-5 h-5"><use href="#i-plus"/></svg>
+      <!-- PESTAÑA: INICIO -->
+      <section id="viewHome" class="space-y-6 pt-2">
+        <div class="rounded-2xl p-5 bg-gradient-to-br from-emerald-950/60 via-zinc-900/60 to-zinc-950 border border-emerald-500/20 shadow-lg relative overflow-hidden">
+          <div class="relative z-10 space-y-1.5">
+            <span class="text-[10px] font-bold tracking-widest uppercase text-emerald-400">Spotify Experience</span>
+            <h1 class="text-2xl font-extrabold text-white tracking-tight">Tu música sin límites</h1>
+            <p class="text-xs text-zinc-300 max-w-sm">Canciones completas, sonido fluido con Crossfade automático y letras en tiempo real.</p>
+          </div>
+          <div class="absolute -right-6 -bottom-6 w-32 h-32 rounded-full bg-emerald-500/10 blur-2xl pointer-events-none"></div>
+        </div>
+
+        <!-- Secciones dinámicas de YouTube Music -->
+        <div id="homeShelves" class="space-y-6">
+          <div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">
+            Cargando recomendaciones de música...
+          </div>
+        </div>
+      </section>
+
+      <!-- PESTAÑA: BUSCAR -->
+      <section id="viewSearch" class="hidden space-y-4 pt-2">
+        <div class="relative">
+          <svg class="w-5 h-5 absolute left-3.5 top-3 text-zinc-400 pointer-events-none"><use href="#i-search"/></svg>
+          <input id="searchInput" type="search" placeholder="¿Qué quieres escuchar hoy?" autocomplete="off"
+            class="w-full pl-11 pr-10 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition shadow-inner" />
+          <button id="searchClearBtn" class="hidden absolute right-3 top-3 text-zinc-400 hover:text-white p-0.5"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+        </div>
+
+        <div id="searchResults" class="space-y-1.5">
+          <div class="text-center py-16 text-zinc-500 text-xs">
+            Escribe el nombre de una canción, artista o álbum para buscar
+          </div>
+        </div>
+      </section>
+
+      <!-- PESTAÑA: BIBLIOTECA -->
+      <section id="viewLibrary" class="hidden space-y-5 pt-2">
+        <h2 class="text-xl font-bold text-white tracking-tight">Tu biblioteca</h2>
+        <div class="grid grid-cols-2 gap-3">
+          <button id="libLikedBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-gradient-to-br from-emerald-600/30 to-zinc-900 border border-emerald-500/20 text-left h-28 press">
+            <div class="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-md"><svg class="w-5 h-5"><use href="#i-heart-fill"/></svg></div>
+            <div>
+              <p class="font-bold text-sm text-white">Tus Me Gusta</p>
+              <p id="libLikedCount" class="text-[11px] text-zinc-400">0 canciones</p>
+            </div>
+          </button>
+          <button id="libRecentBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 text-left h-28 press">
+            <div class="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-300"><svg class="w-5 h-5"><use href="#i-queue"/></svg></div>
+            <div>
+              <p class="font-bold text-sm text-white">Historial</p>
+              <p id="libRecentCount" class="text-[11px] text-zinc-400">0 escuchadas</p>
+            </div>
           </button>
         </div>
-        <div id="libraryChips" class="px-4 pb-2 flex gap-2 overflow-x-auto no-scrollbar"></div>
-        <div id="libraryList" class="px-2 pb-3 space-y-0.5 overflow-y-auto flex-1"></div>
-        <div class="p-3">
-          <label for="localAudioInput" class="cursor-pointer w-full py-2.5 px-3 rounded-full bg-white hover:bg-zinc-200 text-black font-bold text-xs flex items-center justify-center gap-1.5 transition press">
-            <svg class="w-4 h-4"><use href="#i-folder"/></svg><span>Importar mis canciones</span>
-          </label>
-          <input id="localAudioInput" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.opus,.aac" multiple class="hidden" />
-        </div>
-      </aside>
 
-      <!-- Centro -->
-      <main id="mainScroll" data-panel="home" class="panel flex flex-1 min-w-0 flex-col bg-zinc-900/40 lg:rounded-xl overflow-y-auto relative">
-        <div id="statusBanner" class="hidden sticky top-0 z-20 mx-3 mt-3 px-3.5 py-2.5 rounded-xl border text-xs flex items-start justify-between gap-2 backdrop-blur-md" role="status" aria-live="polite">
-          <span id="statusText"></span>
-          <button id="statusCloseBtn" aria-label="Cerrar aviso" class="opacity-70 hover:opacity-100 shrink-0"><svg class="w-4 h-4"><use href="#i-close"/></svg></button>
-        </div>
-        <div id="mainContent" class="flex-1 pb-32 lg:pb-8"></div>
+        <div id="libPlaylistContent" class="space-y-2 pt-2"></div>
+      </section>
 
-        <!-- Instalación -->
-        <section id="installView" class="hidden flex-1 p-5 sm:p-8 space-y-6 max-w-4xl">
-          <div>
-            <button id="installBackBtn" class="mb-4 text-sm text-zinc-400 hover:text-white inline-flex items-center gap-1"><svg class="w-5 h-5"><use href="#i-back"/></svg>Volver</button>
-            <h2 class="text-2xl sm:text-4xl font-extrabold tracking-tight text-white">Lleva FreeSong en tu celular</h2>
-            <p class="text-sm text-zinc-400 mt-2 max-w-xl">En iPhone se instala desde Safari como app web. En Android puedes instalar la APK, que incluye controles en la pantalla bloqueada.</p>
-          </div>
+      <!-- PESTAÑA: AJUSTES -->
+      <section id="viewSettings" class="hidden space-y-5 pt-2 max-w-lg mx-auto">
+        <h2 class="text-xl font-bold text-white tracking-tight">Ajustes</h2>
 
-          <button id="installPromptBtn" class="hidden px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition press">
-            Instalar FreeSong en este dispositivo
-          </button>
-
-          <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div class="md:col-span-3 p-5 rounded-2xl bg-zinc-900 space-y-3">
-              <p class="text-xs font-bold uppercase tracking-wider text-zinc-400">iPhone y iPad</p>
-              <ol class="text-sm text-zinc-200 space-y-2 list-decimal list-inside">
-                <li>Abre la dirección web de FreeSong en <strong>Safari</strong>.</li>
-                <li>Toca <strong>Compartir</strong>, el cuadro con la flecha hacia arriba.</li>
-                <li>Elige <strong>Agregar a pantalla de inicio</strong> y confirma.</li>
-                <li>Abre FreeSong desde el ícono nuevo.</li>
-              </ol>
-              <p class="text-xs text-zinc-500 leading-relaxed">En iPhone el volumen se maneja con los botones del teléfono. El modo compatible viene activado para que la música siga con la pantalla bloqueada; si lo apagas en Sonido tendrás ecualizador y crossfade, pero iOS puede pausar la música al bloquear.</p>
+        <!-- Crossfade Card -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3.5">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-bold text-sm text-white">Crossfade (Fundido entre pistas)</p>
+              <p class="text-xs text-zinc-400">Solapamiento sin pausas como en Spotify Premium</p>
             </div>
-            <div class="md:col-span-2 p-5 rounded-2xl bg-zinc-900 space-y-3">
-              <p class="text-xs font-bold uppercase tracking-wider text-zinc-400">Android</p>
-              <ol class="text-sm text-zinc-200 space-y-2 list-decimal list-inside">
-                <li>Copia <code class="text-emerald-300">FreeSong.apk</code> al teléfono y ábrela.</li>
-                <li>Permite <strong>instalar apps desconocidas</strong> si te lo pide.</li>
-              </ol>
-              <p class="text-xs text-zinc-500 leading-relaxed">También puedes abrir la web en Chrome y tocar ⋮ → Instalar app.</p>
-            </div>
-          </div>
-
-          <div class="p-5 rounded-2xl bg-zinc-900 space-y-3">
-            <p class="text-xs font-bold uppercase tracking-wider text-zinc-400">De dónde sale la música</p>
-            <dl class="grid sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-              <div><dt class="font-semibold text-emerald-300">Audius</dt><dd class="text-zinc-400">Canciones completas que los artistas suben a esa plataforma abierta. Casi todos son independientes.</dd></div>
-              <div><dt class="font-semibold text-red-300">YouTube</dt><dd class="text-zinc-400">Casi cualquier canción completa, con el reproductor oficial de YouTube. El video se ve en un recuadro, puede tener anuncios (salvo con YouTube Premium) y se pausa al bloquear la pantalla.</dd></div>
-              <div><dt class="font-semibold text-indigo-300">Vistas previas de Apple</dt><dd class="text-zinc-400">Fragmentos oficiales de 30 s de artistas comerciales, con enlace para escucharlas completas en Apple Music.</dd></div>
-              <div><dt class="font-semibold text-cyan-300">Radio en directo</dt><dd class="text-zinc-400">Miles de emisoras del directorio abierto Radio Browser, incluidas las de tu país.</dd></div>
-              <div><dt class="font-semibold text-rose-300">Tus archivos y descargas</dt><dd class="text-zinc-400">Se guardan solo en tu dispositivo y suenan sin internet.</dd></div>
-              <div><dt class="font-semibold text-amber-300">Estudio</dt><dd class="text-zinc-400">Música generada en el dispositivo con un sintetizador.</dd></div>
-              <div><dt class="font-semibold text-zinc-200">Letras</dt><dd class="text-zinc-400">Letras sincronizadas de LRCLIB, cuando existen.</dd></div>
-            </dl>
-          </div>
-
-          <details class="p-5 rounded-2xl bg-zinc-900">
-            <summary class="text-sm font-bold text-white cursor-pointer">Diagnóstico técnico</summary>
-            <pre id="diagnosticsPre" class="mt-3 p-3 rounded-lg bg-zinc-950 text-[11px] font-mono text-emerald-400 overflow-x-auto select-text"></pre>
-          </details>
-        </section>
-      </main>
-
-      <!-- Lateral derecho: cola, letra y sonido -->
-      <aside data-panel="side" class="panel hidden lg:flex flex-col w-full lg:w-80 shrink-0 bg-zinc-900/40 lg:rounded-xl overflow-hidden">
-        <div class="flex gap-1 p-2 m-2 mb-1 rounded-full bg-zinc-950/60" role="tablist">
-          <button data-side-tab="queue" role="tab" class="side-tab flex-1 py-1.5 rounded-full text-xs font-semibold transition">Cola</button>
-          <button data-side-tab="lyrics" role="tab" class="side-tab flex-1 py-1.5 rounded-full text-xs font-semibold transition">Letra</button>
-          <button data-side-tab="sound" role="tab" class="side-tab flex-1 py-1.5 rounded-full text-xs font-semibold transition">Sonido</button>
-        </div>
-
-        <!-- Hueco del video de YouTube (computador): el reproductor oficial se coloca encima -->
-        <div id="videoSlotSide" class="hidden mx-3 mb-2 aspect-[4/3] rounded-xl bg-black"></div>
-
-        <div class="px-3 pb-2">
-          <div class="relative h-14 w-full rounded-xl overflow-hidden bg-zinc-950/60">
-            <canvas id="spectrumCanvas" class="w-full h-full block" aria-hidden="true"></canvas>
-            <span id="engineBadge" class="absolute top-1.5 right-2 text-[10px] font-mono text-zinc-500"></span>
-          </div>
-        </div>
-
-        <!-- Cola -->
-        <div id="queuePanel" class="flex-1 overflow-y-auto px-3 pb-3"></div>
-
-        <!-- Letra -->
-        <div id="lyricsPanel" class="hidden flex-1 overflow-y-auto px-5 pb-6"></div>
-
-        <!-- Sonido -->
-        <div id="soundPanel" class="hidden flex-1 overflow-y-auto px-4 pb-5 space-y-5">
-          <p id="directOutputNotice" class="hidden text-[11px] leading-relaxed p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200"></p>
-
-          <section class="space-y-3">
-            <div class="flex justify-between items-baseline">
-              <label for="crossfadeSlider" class="text-sm font-semibold text-white">Crossfade</label>
-              <span id="crossfadeVal" class="font-mono text-xs text-emerald-400">6 s</span>
-            </div>
-            <input id="crossfadeSlider" type="range" min="0" max="12" step="1" value="6" class="w-full cursor-pointer" />
-            <button id="mixNowBtn" class="w-full py-2 px-3 rounded-full bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs transition flex items-center justify-center gap-1.5 press">
-              <svg class="w-4 h-4"><use href="#i-mix"/></svg><span>Mezclar ya con la siguiente</span>
-            </button>
-            <div class="w-full h-1 rounded-full bg-zinc-800 overflow-hidden flex" aria-hidden="true">
-              <div id="deckABar" class="bg-emerald-500 h-full" style="width:100%"></div>
-              <div id="deckBBar" class="bg-cyan-400 h-full" style="width:0%"></div>
-            </div>
-          </section>
-
-          <section class="space-y-1">
-            <label class="flex items-center justify-between gap-3 py-2 cursor-pointer">
-              <span><span class="block text-sm font-semibold text-white">Nivelar volumen</span><span class="block text-[11px] text-zinc-400">Iguala canciones fuertes y suaves</span></span>
-              <input id="levelerToggle" type="checkbox" class="w-5 h-5 accent-emerald-500 shrink-0" />
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input id="settingCrossfadeToggle" type="checkbox" checked class="sr-only peer" />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
             </label>
-            <label class="flex items-center justify-between gap-3 py-2 cursor-pointer">
-              <span><span class="block text-sm font-semibold text-white">Locutor</span><span class="block text-[11px] text-zinc-400">Una voz anuncia cada canción</span></span>
-              <input id="djToggle" type="checkbox" class="w-5 h-5 accent-emerald-500 shrink-0" />
-            </label>
-          </section>
+          </div>
 
-          <section class="space-y-2">
-            <div class="flex items-baseline justify-between">
-              <span class="text-sm font-semibold text-white">Velocidad</span>
-              <span id="rateVal" class="text-xs font-mono text-emerald-400">1.00x</span>
+          <div id="crossfadeSliderWrap" class="space-y-1.5 pt-1">
+            <div class="flex justify-between text-xs font-mono text-zinc-400">
+              <span>Duración del fundido:</span>
+              <span id="crossfadeDurationLabel" class="text-emerald-400 font-bold">6 segundos</span>
             </div>
-            <div id="rateButtons" class="grid grid-cols-4 gap-1.5">
-              <button data-rate="0.85" class="rate-btn py-2 rounded-lg text-[11px] font-semibold leading-tight transition press">0.85x<span class="block font-normal opacity-70">Slowed</span></button>
-              <button data-rate="1" class="rate-btn py-2 rounded-lg text-[11px] font-semibold leading-tight transition press">1.0x<span class="block font-normal opacity-70">Normal</span></button>
-              <button data-rate="1.12" class="rate-btn py-2 rounded-lg text-[11px] font-semibold leading-tight transition press">1.12x<span class="block font-normal opacity-70">Club</span></button>
-              <button data-rate="1.25" class="rate-btn py-2 rounded-lg text-[11px] font-semibold leading-tight transition press">1.25x<span class="block font-normal opacity-70">Nightcore</span></button>
-            </div>
-          </section>
-
-          <section class="space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-sm font-semibold text-white">Ecualizador</span>
-              <button id="eqResetBtn" class="text-[11px] text-zinc-400 hover:text-white">Restablecer</button>
-            </div>
-            <div class="grid grid-cols-4 gap-1.5" id="eqPresets">
-              <button data-preset="flat" class="eq-preset py-1.5 rounded-full text-[11px] font-semibold transition press">Plano</button>
-              <button data-preset="bass" class="eq-preset py-1.5 rounded-full text-[11px] font-semibold transition press">Bajos</button>
-              <button data-preset="vocal" class="eq-preset py-1.5 rounded-full text-[11px] font-semibold transition press">Voces</button>
-              <button data-preset="electronic" class="eq-preset py-1.5 rounded-full text-[11px] font-semibold transition press">Electro</button>
-            </div>
-            <div class="space-y-3">
-              <div>
-                <div class="flex justify-between text-xs mb-1"><label for="eqBass" class="text-zinc-300">Bajos · 80 Hz</label><span id="eqBassVal" class="font-mono text-zinc-400">0 dB</span></div>
-                <input id="eqBass" type="range" min="-12" max="12" step="1" value="0" class="w-full cursor-pointer" />
-              </div>
-              <div>
-                <div class="flex justify-between text-xs mb-1"><label for="eqMid" class="text-zinc-300">Medios · 1 kHz</label><span id="eqMidVal" class="font-mono text-zinc-400">0 dB</span></div>
-                <input id="eqMid" type="range" min="-12" max="12" step="1" value="0" class="w-full cursor-pointer" />
-              </div>
-              <div>
-                <div class="flex justify-between text-xs mb-1"><label for="eqTreble" class="text-zinc-300">Agudos · 8 kHz</label><span id="eqTrebleVal" class="font-mono text-zinc-400">0 dB</span></div>
-                <input id="eqTreble" type="range" min="-12" max="12" step="1" value="0" class="w-full cursor-pointer" />
-              </div>
-            </div>
-          </section>
-
-          <section class="space-y-2">
-            <label for="sleepSelect" class="block text-sm font-semibold text-white">Temporizador de apagado</label>
-            <select id="sleepSelect" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500">
-              <option value="0">Desactivado</option>
-              <option value="5">5 minutos</option>
-              <option value="15">15 minutos</option>
-              <option value="30">30 minutos</option>
-              <option value="45">45 minutos</option>
-              <option value="60">1 hora</option>
-              <option value="end">Al terminar la canción</option>
-            </select>
-            <p id="sleepInfo" class="text-[11px] text-zinc-500"></p>
-          </section>
-
-          <section class="pt-3 border-t border-zinc-800/80 space-y-2">
-            <p class="text-sm font-semibold text-white">YouTube</p>
-            <p class="text-[11px] text-zinc-400 leading-relaxed">Sin llave se usa una búsqueda pública que a veces falla. Con tu llave gratuita de YouTube Data API la búsqueda es oficial y estable (unas 100 búsquedas al día).</p>
-            <form id="ytKeyForm" class="flex gap-2">
-              <input id="ytKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Llave de YouTube (opcional)" aria-label="Llave de YouTube Data API"
-                class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500" />
-              <button type="submit" class="px-3 py-2 rounded-lg bg-white/[.08] hover:bg-white/[.14] text-xs font-semibold text-white press">Guardar</button>
-            </form>
-            <p id="ytKeyStatus" class="text-[11px] text-zinc-500"></p>
-          </section>
-
-          <section class="pt-3 border-t border-zinc-800/80">
-            <label class="flex items-start justify-between gap-3 cursor-pointer">
-              <span><span class="block text-sm font-semibold text-white">Modo compatible</span><span class="block text-[11px] text-zinc-400 leading-relaxed">Actívalo si la música se corta con la pantalla bloqueada. Apaga ecualizador, nivelador, espectro y crossfade.</span></span>
-              <input id="directOutputToggle" type="checkbox" class="w-5 h-5 mt-0.5 accent-emerald-500 shrink-0" />
-            </label>
-          </section>
+            <input id="settingCrossfadeRange" type="range" min="1" max="12" step="1" value="6" class="w-full accent-emerald-500 cursor-pointer" />
+          </div>
         </div>
-      </aside>
+
+        <!-- Info Card -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
+          <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
+          <p>Reproductor web de música libre para uso personal. Diseñado especialmente para iPhone (iOS) con soporte completo para pantalla de bloqueo, controles Bluetooth y segundo plano.</p>
+          <p class="text-[11px] text-zinc-500 pt-2">Versión 1.0.0 Web PWA</p>
+        </div>
+
+        <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
+          Restablecer favoritos e historial
+        </button>
+      </section>
+    </main>
+
+    <!-- Mini reproductor flotante -->
+    <div id="miniPlayer" class="hidden fixed bottom-[64px] left-3 right-3 z-30 rounded-2xl bg-zinc-900/95 border border-zinc-800/80 backdrop-blur-xl shadow-2xl p-2.5 transition-all duration-300 flex items-center justify-between cursor-pointer" style="margin-bottom: max(0px, env(safe-area-inset-bottom));">
+      <!-- Barra delgada de progreso -->
+      <div class="absolute -top-[1px] left-3 right-3 h-[2px] bg-zinc-800 rounded-full overflow-hidden">
+        <div id="miniProgress" class="h-full bg-emerald-500 transition-all duration-200" style="width: 0%;"></div>
+      </div>
+
+      <div class="flex items-center gap-3 min-w-0 flex-1">
+        <img id="miniCover" src="icons/icon-192.png" alt="" class="w-11 h-11 rounded-xl object-cover shrink-0 shadow-md bg-zinc-800" />
+        <div class="min-w-0 flex-1">
+          <p id="miniTitle" class="text-xs font-bold text-white truncate">Selecciona una canción</p>
+          <p id="miniArtist" class="text-[11px] text-zinc-400 truncate">FreeSong</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1 shrink-0 ml-2">
+        <button id="miniPlayBtn" aria-label="Reproducir o pausar" class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center press shadow-md">
+          <svg class="w-5 h-5"><use href="#i-play"/></svg>
+        </button>
+        <button id="miniNextBtn" aria-label="Siguiente canción" class="w-9 h-9 rounded-full text-zinc-300 hover:text-white flex items-center justify-center press">
+          <svg class="w-5 h-5"><use href="#i-next"/></svg>
+        </button>
+      </div>
     </div>
 
-    <!-- Reproductor inferior -->
-    <footer id="playerBar" class="shrink-0 relative px-2 lg:px-0 pt-1 lg:pt-0">
-      <div class="lg:hidden rounded-xl bg-zinc-800/90 tint-glow overflow-hidden relative">
-        <div class="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-white/10"><div id="miniProgress" class="h-full rounded-full bg-white" style="width:0%"></div></div>
-        <div class="h-14 px-2 flex items-center gap-2.5">
-          <button id="miniOpenBtn" class="flex items-center gap-2.5 min-w-0 flex-1 text-left" aria-label="Abrir reproductor">
-            <span id="miniCover" class="w-10 h-10 rounded-md shrink-0 overflow-hidden bg-zinc-700 flex items-center justify-center"></span>
-            <span class="min-w-0 flex-1">
-              <span id="miniTitle" class="block text-[13px] font-semibold text-white truncate">Elige una canción</span>
-              <span id="miniArtist" class="block text-xs text-zinc-400 truncate">FreeSong</span>
-            </span>
-          </button>
-          <button id="miniLikeBtn" aria-label="Me gusta" class="p-2 text-zinc-300 press"><svg class="w-6 h-6"><use href="#i-heart"/></svg></button>
-          <button id="miniPlayBtn" aria-label="Reproducir" class="p-2 text-white press"><svg class="w-7 h-7"><use href="#i-play"/></svg></button>
-        </div>
-      </div>
-
-      <div class="hidden lg:flex h-[88px] px-4 items-center justify-between gap-4">
-        <div class="flex items-center gap-3.5 min-w-0 w-[30%]">
-          <div id="nowCover" class="w-14 h-14 rounded-md shrink-0 overflow-hidden bg-zinc-800 flex items-center justify-center"></div>
-          <div class="min-w-0">
-            <p id="nowTitle" class="text-sm font-semibold text-white truncate">Elige una canción</p>
-            <button id="nowArtist" class="block text-xs text-zinc-400 hover:text-white hover:underline truncate max-w-full text-left">FreeSong</button>
-          </div>
-          <button id="nowLikeBtn" aria-label="Me gusta" class="text-zinc-400 hover:text-white transition shrink-0 p-1 press"><svg class="w-5 h-5"><use href="#i-heart"/></svg></button>
-        </div>
-
-        <div class="flex flex-col items-center w-[40%] max-w-[722px] gap-1">
-          <div class="flex items-center gap-4">
-            <button id="shuffleBtn" aria-label="Aleatorio" class="relative p-1.5 text-zinc-400 hover:text-white transition press"><svg class="w-5 h-5"><use href="#i-shuffle"/></svg></button>
-            <button id="prevBtn" aria-label="Anterior" class="p-1.5 text-zinc-300 hover:text-white transition press"><svg class="w-5 h-5"><use href="#i-prev"/></svg></button>
-            <button id="playBtn" aria-label="Reproducir" class="w-9 h-9 rounded-full bg-white hover:scale-105 text-black flex items-center justify-center transition press"><svg class="w-5 h-5"><use href="#i-play"/></svg></button>
-            <button id="nextBtn" aria-label="Siguiente" class="p-1.5 text-zinc-300 hover:text-white transition press"><svg class="w-5 h-5"><use href="#i-next"/></svg></button>
-            <button id="repeatBtn" aria-label="Repetir" class="relative p-1.5 text-zinc-400 hover:text-white transition press"><svg class="w-5 h-5"><use href="#i-repeat"/></svg></button>
-          </div>
-          <div class="flex w-full items-center gap-2">
-            <span id="curTime" class="text-[11px] font-mono tabular-nums text-zinc-400 w-12 text-right">0:00</span>
-            <input id="seekSlider" type="range" min="0" max="100" step="0.1" value="0" aria-label="Posición" class="flex-1 h-1 cursor-pointer" />
-            <span id="durTime" class="text-[11px] font-mono tabular-nums text-zinc-400 w-12">0:00</span>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-end gap-2 w-[30%]">
-          <button data-open-side="lyrics" title="Letra" aria-label="Letra" class="p-1.5 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-lyrics"/></svg></button>
-          <button data-open-side="queue" title="Cola" aria-label="Cola" class="p-1.5 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-queue"/></svg></button>
-          <button id="footerMixBtn" title="Mezclar con la siguiente" aria-label="Mezclar con la siguiente" class="p-1.5 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-mix"/></svg></button>
-          <button id="muteBtn" aria-label="Silenciar" class="p-1.5 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-volume"/></svg></button>
-          <input id="volumeSlider" type="range" min="0" max="100" value="85" aria-label="Volumen" class="w-28 h-1 cursor-pointer" />
-        </div>
-      </div>
-    </footer>
-
-    <!-- Pestañas inferiores (celular) -->
-    <nav class="lg:hidden shrink-0 grid grid-cols-4 bg-gradient-to-t from-zinc-950 via-zinc-950 to-zinc-950/80 pb-safe" aria-label="Secciones">
-      <button data-tab-btn="home" class="tab-btn flex flex-col items-center gap-1 pt-2.5 pb-2 text-[10px] font-medium"><svg class="w-6 h-6"><use href="#i-home"/></svg>Inicio</button>
-      <button data-tab-btn="search" class="tab-btn flex flex-col items-center gap-1 pt-2.5 pb-2 text-[10px] font-medium"><svg class="w-6 h-6"><use href="#i-search"/></svg>Buscar</button>
-      <button data-tab-btn="library" class="tab-btn flex flex-col items-center gap-1 pt-2.5 pb-2 text-[10px] font-medium"><svg class="w-6 h-6"><use href="#i-library"/></svg>Biblioteca</button>
-      <button data-tab-btn="side" class="tab-btn flex flex-col items-center gap-1 pt-2.5 pb-2 text-[10px] font-medium"><svg class="w-6 h-6"><use href="#i-queue"/></svg>En curso</button>
+    <!-- Barra de navegación inferior -->
+    <nav class="fixed bottom-0 left-0 right-0 z-20 bg-zinc-950/95 border-t border-zinc-900/80 backdrop-blur-xl flex items-center justify-around py-1.5 px-4" style="padding-bottom: max(6px, env(safe-area-inset-bottom));">
+      <button data-nav="home" class="flex flex-col items-center gap-1 py-1 px-3 text-emerald-400 font-semibold text-[10px] press">
+        <svg class="w-6 h-6"><use href="#i-home"/></svg><span>Inicio</span>
+      </button>
+      <button data-nav="search" class="flex flex-col items-center gap-1 py-1 px-3 text-zinc-400 hover:text-zinc-200 font-semibold text-[10px] press">
+        <svg class="w-6 h-6"><use href="#i-search"/></svg><span>Buscar</span>
+      </button>
+      <button data-nav="library" class="flex flex-col items-center gap-1 py-1 px-3 text-zinc-400 hover:text-zinc-200 font-semibold text-[10px] press">
+        <svg class="w-6 h-6"><use href="#i-library"/></svg><span>Biblioteca</span>
+      </button>
+      <button data-nav="settings" class="flex flex-col items-center gap-1 py-1 px-3 text-zinc-400 hover:text-zinc-200 font-semibold text-[10px] press">
+        <svg class="w-6 h-6"><use href="#i-settings"/></svg><span>Ajustes</span>
+      </button>
     </nav>
-  </div>
 
-  <!-- Reproductor a pantalla completa (celular) -->
-  <!-- Reproductor a pantalla completa (celular) -->
-  <div id="nowSheet" data-open="false" class="fixed inset-0 z-30 tint-sheet flex flex-col justify-between lg:hidden overflow-y-auto no-scrollbar" style="padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);" role="dialog" aria-modal="true" aria-label="Reproduciendo ahora">
-    <div class="flex items-center justify-between px-4 py-2 shrink-0">
-      <button id="sheetCloseBtn" aria-label="Cerrar" class="p-2 -ml-2 text-white press"><svg class="w-7 h-7"><use href="#i-down"/></svg></button>
-      <div class="text-center min-w-0 px-2">
-        <p class="text-[10px] uppercase tracking-[0.18em] text-white/60">Reproduciendo desde</p>
-        <p id="sheetContext" class="text-xs font-semibold text-white truncate"></p>
-      </div>
-      <button id="sheetMoreBtn" aria-label="Más opciones" class="p-2 -mr-2 text-white press"><svg class="w-6 h-6"><use href="#i-more"/></svg></button>
-    </div>
-    <div class="flex-1 min-h-0 flex items-center justify-center px-6 py-2 my-auto">
-      <div id="sheetCover" class="w-full max-w-[min(76vw,34vh)] aspect-square rounded-2xl overflow-hidden shadow-[0_20px_50px_-10px_rgba(0,0,0,.7)] bg-zinc-800 flex items-center justify-center"></div>
-    </div>
-    <div class="px-6 pt-2 pb-5 space-y-3 shrink-0">
-      <div class="flex items-center justify-between gap-3">
-        <div class="min-w-0">
-          <p id="sheetTitle" class="text-[20px] leading-tight font-bold tracking-tight text-white truncate"></p>
-          <button id="sheetArtist" class="text-[14px] text-white/70 truncate max-w-full text-left"></button>
+    <!-- Reproductor a pantalla completa -->
+    <div id="fullPlayerSheet" class="fixed inset-0 z-50 bg-zinc-950 flex flex-col justify-between p-6 transition-transform duration-300 translate-y-full" style="padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(20px, env(safe-area-inset-bottom));">
+      <!-- Cabecera del reproductor -->
+      <div class="flex items-center justify-between shrink-0">
+        <button id="playerCloseBtn" class="p-2 -ml-2 text-zinc-300 hover:text-white press" aria-label="Cerrar reproductor">
+          <svg class="w-7 h-7"><use href="#i-down"/></svg>
+        </button>
+        <div class="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-full border border-zinc-800 text-xs">
+          <button id="tabTrackBtn" class="px-3 py-1 rounded-full bg-emerald-500 text-black font-bold transition">Canción</button>
+          <button id="tabLyricsBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Letras</button>
+          <button id="tabQueueBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Cola</button>
         </div>
-        <button id="sheetLikeBtn" aria-label="Me gusta" class="p-2 -mr-2 text-white shrink-0 press"><svg class="w-7 h-7"><use href="#i-heart"/></svg></button>
+        <button id="playerLikeBtn" class="p-2 -mr-2 text-zinc-300 hover:text-emerald-400 press" aria-label="Me gusta">
+          <svg class="w-6 h-6"><use href="#i-heart"/></svg>
+        </button>
       </div>
-      <div>
-        <input id="sheetSeek" type="range" min="0" max="100" step="0.1" value="0" aria-label="Posición" class="w-full cursor-pointer h-1.5" />
-        <div class="flex justify-between text-[11px] font-mono tabular-nums text-white/60 mt-1"><span id="sheetCur">0:00</span><span id="sheetDur">0:00</span></div>
-      </div>
-      <div class="flex items-center justify-between">
-        <button id="sheetShuffleBtn" aria-label="Aleatorio" class="relative p-2 text-white/70 press"><svg class="w-6 h-6"><use href="#i-shuffle"/></svg></button>
-        <button id="sheetPrevBtn" aria-label="Anterior" class="p-2 text-white press"><svg class="w-8 h-8"><use href="#i-prev"/></svg></button>
-        <button id="sheetPlayBtn" aria-label="Reproducir" class="w-[62px] h-[62px] rounded-full bg-white text-black flex items-center justify-center shadow-lg press"><svg class="w-7 h-7"><use href="#i-play"/></svg></button>
-        <button id="sheetNextBtn" aria-label="Siguiente" class="p-2 text-white press"><svg class="w-8 h-8"><use href="#i-next"/></svg></button>
-        <button id="sheetRepeatBtn" aria-label="Repetir" class="relative p-2 text-white/70 press"><svg class="w-6 h-6"><use href="#i-repeat"/></svg></button>
-      </div>
-      <div class="flex items-center justify-between pt-1">
-        <span id="sheetSourceBadge" class="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-white/10 text-white/80"></span>
-        <div class="flex items-center gap-1">
-          <button data-open-side="lyrics" aria-label="Letra" class="p-2 text-white/80 press"><svg class="w-5 h-5"><use href="#i-lyrics"/></svg></button>
-          <button data-open-side="queue" aria-label="Cola" class="p-2 text-white/80 press"><svg class="w-5 h-5"><use href="#i-queue"/></svg></button>
+
+      <!-- Vista 1: Carátula y detalles de canción -->
+      <div id="sheetTrackView" class="flex-1 flex flex-col justify-center items-center my-auto min-h-0 py-4 space-y-6">
+        <div class="w-full max-w-[min(80vw,36vh)] aspect-square rounded-3xl overflow-hidden shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] bg-zinc-900 relative">
+          <img id="playerCover" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
+        </div>
+        <div class="w-full max-w-sm text-left">
+          <h2 id="playerTitle" class="text-xl sm:text-2xl font-extrabold text-white truncate tracking-tight">Sin reproducción</h2>
+          <p id="playerArtist" class="text-sm sm:text-base text-zinc-400 truncate mt-0.5">FreeSong Music</p>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- Video de YouTube: un solo contenedor fijo que se coloca sobre el hueco que toque -->
-  <div id="videoSlotFloat" aria-hidden="true"></div>
-  <div id="videoHandle" class="fixed z-[35] h-6 items-center justify-center gap-1.5 rounded-t-lg bg-zinc-800/95 text-[10px] font-semibold text-zinc-300 cursor-grab select-none" role="button" aria-label="Arrastrar el video">
-    <span class="w-8 h-1 rounded-full bg-zinc-500"></span><span>Arrastrar</span>
-  </div>
-  <div id="videoDock" class="hidden fixed z-[35] overflow-hidden rounded-xl bg-black shadow-[0_16px_40px_rgba(0,0,0,.55)]" aria-label="Video de YouTube"></div>
-
-  <!-- Crear playlist -->
-  <div id="playlistModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-40 flex items-end sm:items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="playlistModalTitle">
-    <form id="playlistForm" class="bg-zinc-900 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-[0_24px_60px_-12px_rgba(0,0,0,.7)]">
-      <div class="flex items-center justify-between">
-        <h3 id="playlistModalTitle" class="text-lg font-bold text-white">Nueva playlist</h3>
-        <button type="button" data-close-modal aria-label="Cerrar" class="text-zinc-400 hover:text-white"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+      <!-- Vista 2: Letras sincronizadas -->
+      <div id="sheetLyricsView" class="hidden flex-1 overflow-y-auto px-4 py-6 space-y-4 text-center no-scrollbar">
+        <div id="lyricsContainer" class="space-y-4 py-8">
+          <p class="text-zinc-500 text-sm">Buscando letra sincronizada...</p>
+        </div>
       </div>
-      <input id="playlistNameInput" type="text" maxlength="60" required placeholder="Nombre de la playlist" aria-label="Nombre de la playlist" class="w-full px-4 py-3 rounded-xl bg-zinc-800 border border-transparent text-base text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20" />
-      <div class="flex justify-end gap-2">
-        <button type="button" data-close-modal class="px-5 py-2.5 rounded-full text-zinc-300 text-sm font-semibold hover:text-white">Cancelar</button>
-        <button type="submit" class="px-5 py-2.5 rounded-full bg-emerald-500 text-black text-sm font-bold hover:bg-emerald-400 press">Crear</button>
+
+      <!-- Vista 3: Cola de reproducción -->
+      <div id="sheetQueueView" class="hidden flex-1 overflow-y-auto px-2 py-4 space-y-2 no-scrollbar">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-500 px-2 mb-2">A continuación</h3>
+        <div id="queueList" class="space-y-1.5"></div>
       </div>
-    </form>
-  </div>
 
-  <!-- Menú de acciones -->
-  <div id="actionMenu" class="hidden fixed inset-0 bg-black/60 z-40 flex items-end sm:items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="actionMenuTitle">
-    <div class="bg-zinc-900 w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-2 pb-safe shadow-[0_24px_60px_-12px_rgba(0,0,0,.7)] max-h-[80vh] overflow-y-auto">
-      <div id="actionMenuHead" class="flex items-center gap-3 p-3 border-b border-zinc-800 mb-1"></div>
-      <div id="actionMenuItems" class="py-1"></div>
-      <span id="actionMenuTitle" class="sr-only">Opciones</span>
+      <!-- Barra de progreso y controles (fijos abajo del sheet) -->
+      <div class="shrink-0 space-y-4 w-full max-w-sm mx-auto pt-2">
+        <!-- Seekbar -->
+        <div>
+          <input id="playerSeek" type="range" min="0" max="100" step="0.1" value="0" class="w-full accent-emerald-500 cursor-pointer h-1.5" />
+          <div class="flex justify-between text-[11px] font-mono text-zinc-400 mt-1">
+            <span id="playerCurTime">0:00</span>
+            <span id="playerDurTime">0:00</span>
+          </div>
+        </div>
+
+        <!-- Botones de reproducción -->
+        <div class="flex items-center justify-between">
+          <button id="playerShuffleBtn" aria-label="Aleatorio" class="p-2 text-zinc-400 hover:text-white press">
+            <svg class="w-5 h-5"><use href="#i-shuffle"/></svg>
+          </button>
+          <button id="playerPrevBtn" aria-label="Canción anterior" class="p-2 text-white press">
+            <svg class="w-8 h-8"><use href="#i-prev"/></svg>
+          </button>
+          <button id="playerPlayBtn" aria-label="Reproducir o pausar" class="w-16 h-16 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-[0_0_25px_rgba(16,185,129,0.4)] press">
+            <svg class="w-8 h-8"><use href="#i-play"/></svg>
+          </button>
+          <button id="playerNextBtn" aria-label="Siguiente canción" class="p-2 text-white press">
+            <svg class="w-8 h-8"><use href="#i-next"/></svg>
+          </button>
+          <button id="playerRepeatBtn" aria-label="Repetir" class="p-2 text-zinc-400 hover:text-white press">
+            <svg class="w-5 h-5"><use href="#i-repeat"/></svg>
+          </button>
+        </div>
+      </div>
     </div>
+
   </div>
 
-  <!-- Aviso flotante -->
-  <div id="toast" class="hidden fixed left-1/2 -translate-x-1/2 bottom-36 lg:bottom-28 z-40 px-4 py-2.5 rounded-xl bg-zinc-100 text-zinc-900 text-sm font-semibold shadow-lg max-w-[90vw] text-center" role="status" aria-live="polite"></div>
-
-  <script src="capacitor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
