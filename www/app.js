@@ -138,8 +138,14 @@
     });
 
     deck.addEventListener('error', () => {
-      if (idx === activeDeckIdx) {
-        console.error('Error cargando audio en deck', idx);
+      if (idx === activeDeckIdx && S.currentIndex >= 0) {
+        const track = S.queue[S.currentIndex];
+        console.warn('Reintentando audio con servidor de respaldo para:', track.title);
+        if (!deck.dataset.retried) {
+          deck.dataset.retried = 'true';
+          deck.src = `https://invidious.slipfox.xyz/latest_version?id=${encodeURIComponent(track.id)}&itag=140&local=true`;
+          deck.play().catch(() => {});
+        }
       }
     });
   });
