@@ -99,7 +99,7 @@
     });
 
     deck.addEventListener('ended', () => {
-      if (idx === activeDeckIdx) {
+      if (idx === activeDeckIdx && !isCrossfading) {
         playNext(true);
       }
     });
@@ -178,6 +178,35 @@
     } catch {}
   }
 
+  // --- Autoplay / Radio Continua: Generador Infinito de Cola ---
+  let isFetchingRelated = false;
+  async function ensureUpcomingTracks(track) {
+    if (!track || isFetchingRelated) return;
+    const remaining = S.queue.length - 1 - S.currentIndex;
+    if (remaining < 4) {
+      isFetchingRelated = true;
+      try {
+        const query = track.artist && track.artist !== 'Artista'
+          ? `${track.artist} exitos`
+          : `${track.title} mix`;
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (data.tracks && data.tracks.length > 0) {
+          const existingIds = new Set(S.queue.map((t) => t.id));
+          const newTracks = data.tracks.filter((t) => !existingIds.has(t.id));
+          if (newTracks.length > 0) {
+            S.queue.push(...newTracks);
+            renderQueue();
+          }
+        }
+      } catch (err) {
+        console.error('Error al cargar recomendaciones continuas:', err);
+      } finally {
+        isFetchingRelated = false;
+      }
+    }
+  }
+
   // --- Reproducción y Cambio de Pista ---
   async function playTrack(index, immediate = false) {
     if (index < 0 || index >= S.queue.length) return;
@@ -191,6 +220,7 @@
     saveHistory(track);
     loadLyrics(track);
     updateMediaSession(track);
+    ensureUpcomingTracks(track);
 
     const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}`;
 
@@ -201,8 +231,12 @@
 
     try {
       if (shouldCrossfade) {
+        inPlayer.pause();
+        inPlayer.currentTime = 0;
         inPlayer.volume = 0;
+        delete inPlayer.dataset.retried;
         inPlayer.src = streamUrl;
+        inPlayer.load();
         inPlayer.play().catch(() => {});
 
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
@@ -218,8 +252,12 @@
           } catch {}
         }
         inPlayer.volume = 1;
+        inPlayer.pause();
+        inPlayer.currentTime = 0;
+        delete inPlayer.dataset.retried;
         inPlayer.src = streamUrl;
-        inPlayer.play().catch(() => {});
+        inPlayer.load();
+        inPlayer.play().catch((err) => console.warn('inPlayer play error:', err));
       }
 
       S.isPlaying = true;
@@ -312,10 +350,10 @@
       nextIdx = Math.floor(Math.random() * S.queue.length);
     }
     if (nextIdx >= S.queue.length) {
-      if (S.repeat === 'all') nextIdx = 0;
-      else return;
+      nextIdx = 0;
     }
-    playTrack(nextIdx, immediate || isBackground() || !S.crossfade);
+    const isImmediate = typeof immediate === 'boolean' ? immediate : true;
+    playTrack(nextIdx, isImmediate || isBackground() || !S.crossfade);
   }
 
   function playPrev() {
@@ -509,14 +547,14 @@
         return;
       }
 
-      container.innerHTML = data.shelves.map((shelf) => `
+      container.innerHTML = data.shelves.map((shelf, sIdx) => `
         <div class="space-y-3">
           <div class="flex items-center justify-between px-1">
             <h2 class="text-lg font-bold text-white tracking-tight">${shelf.title}</h2>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            ${shelf.items.map((t) => `
-              <div class="group relative rounded-2xl bg-zinc-900/60 p-3 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-track-id="${t.id}" data-title="${encodeURIComponent(t.title)}" data-artist="${encodeURIComponent(t.artist)}" data-thumb="${encodeURIComponent(t.thumbnail)}">
+            ${shelf.items.map((t, itemIdx) => `
+              <div class="group relative rounded-2xl bg-zinc-900/60 p-3 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-shelf-idx="${sIdx}" data-item-idx="${itemIdx}">
                 <div class="w-full aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2.5 relative shadow-md">
                   <img src="${t.thumbnail}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
                   <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
@@ -533,16 +571,15 @@
         </div>
       `).join('');
 
-      $$('[data-track-id]').forEach((card) => {
+      $$('[data-shelf-idx]').forEach((card) => {
         card.addEventListener('click', () => {
-          const id = card.getAttribute('data-track-id');
-          const title = decodeURIComponent(card.getAttribute('data-title'));
-          const artist = decodeURIComponent(card.getAttribute('data-artist'));
-          const thumbnail = decodeURIComponent(card.getAttribute('data-thumb'));
-
-          const selectedTrack = { id, title, artist, thumbnail };
-          S.queue = [selectedTrack, ...S.queue.filter((x) => x.id !== id)];
-          playTrack(0, true);
+          const sIdx = parseInt(card.getAttribute('data-shelf-idx'), 10);
+          const itemIdx = parseInt(card.getAttribute('data-item-idx'), 10);
+          const shelf = data.shelves[sIdx];
+          if (shelf && shelf.items && shelf.items.length > 0) {
+            S.queue = [...shelf.items];
+            playTrack(itemIdx, true);
+          }
         });
       });
     } catch {
