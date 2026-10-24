@@ -35,20 +35,22 @@ jobs:
 
       - name: Compilar archivo nativo con Xcode
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace \
+          xcodebuild -project ios/App/App.xcodeproj \
             -scheme App \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/FreeSong.xcarchive \
-            archive \
+            -sdk iphoneos \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            build
 
       - name: Empaquetar archivo .ipa para Sideloadly / AltStore
         run: |
           mkdir -p Payload
-          cp -r build/FreeSong.xcarchive/Products/Applications/App.app Payload/
+          APP_PATH=$(find build -name "App.app" -type d | head -n 1)
+          echo "App bundle encontrado en: $APP_PATH"
+          cp -r "$APP_PATH" Payload/
           zip -r FreeSong.ipa Payload
           ls -lh FreeSong.ipa
 
