@@ -44,6 +44,8 @@
     <symbol id="i-trash" viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
     <symbol id="i-playlist-add" viewBox="0 0 24 24"><path fill="currentColor" d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z"/></symbol>
     <symbol id="i-radio" viewBox="0 0 24 24"><path fill="currentColor" d="M3.24 6.15C2.51 7.43 2 8.9 2 10.5c0 3.31 2.69 6 6 6s6-2.69 6-6c0-1.6-.51-3.07-1.24-4.35L11.3 7.6c.44.87.7 1.86.7 2.9 0 2.21-1.79 4-4 4s-4-1.79-4-4c0-1.04.26-2.03.7-2.9L3.24 6.15zM8 8c-1.38 0-2.5 1.12-2.5 2.5S6.62 13 8 13s2.5-1.12 2.5-2.5S9.38 8 8 8zm12.5-6.5L12 8.5v3.42l6.5-5.5V20c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-1h-2v1c0 2.21 1.79 4 4 4h10.5c2.21 0 4-1.79 4-4V3.5c0-1.1-.9-2-2-2z"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></symbol>
+    <symbol id="i-stats" viewBox="0 0 24 24"><path fill="currentColor" d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></symbol>
   </svg>
 
   <div class="flex flex-col h-screen w-screen overflow-hidden">
@@ -144,45 +146,91 @@
       </section>
 
       <!-- PESTAÑA: BIBLIOTECA -->
-      <section id="viewLibrary" class="hidden space-y-5 pt-2">
+      <section id="viewLibrary" class="hidden space-y-4 pt-2">
+        <!-- Encabezado de Biblioteca con botón de nueva playlist -->
         <div class="flex items-center justify-between">
-          <h2 class="text-xl font-bold text-white tracking-tight">Tu biblioteca</h2>
+          <h2 class="text-xl font-bold text-white tracking-tight">Tu Biblioteca</h2>
           <button id="libNewPlaylistBtn" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full press">
             <svg class="w-4 h-4"><use href="#i-plus"/></svg>
             <span>Nueva playlist</span>
           </button>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <button id="libLikedBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-gradient-to-br from-emerald-600/30 to-zinc-900 border border-emerald-500/20 text-left h-28 press shadow-md">
-            <div class="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-md"><svg class="w-5 h-5"><use href="#i-heart-fill"/></svg></div>
-            <div>
-              <p class="font-bold text-sm text-white">Tus Me Gusta</p>
-              <p id="libLikedCount" class="text-[11px] text-zinc-400">0 canciones</p>
-            </div>
-          </button>
-          <button id="libRecentBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 text-left h-28 press">
-            <div class="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-300"><svg class="w-5 h-5"><use href="#i-queue"/></svg></div>
-            <div>
-              <p class="font-bold text-sm text-white">Historial</p>
-              <p id="libRecentCount" class="text-[11px] text-zinc-400">0 escuchadas</p>
-            </div>
-          </button>
+        <!-- Filtros Rápidos de Biblioteca (Pills estilo Spotify) -->
+        <div class="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+          <button id="libFilterLikes" class="chip-btn active">Me Gusta ❤️</button>
+          <button id="libFilterPlaylists" class="chip-btn">Playlists 📂</button>
+          <button id="libFilterHistory" class="chip-btn">Historial 🕒</button>
+          <button id="libFilterStats" class="chip-btn">Cápsula Sonora 📊</button>
         </div>
 
-        <!-- Sección de Playlists del Usuario -->
-        <div class="space-y-2 pt-2">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Tus Playlists</h3>
-          <div id="userPlaylistsList" class="space-y-1.5">
-            <!-- Rellenado por app.js -->
+        <!-- Barra de Reproducción y Ordenación rápida -->
+        <div id="libActionsBar" class="flex items-center justify-between pt-1">
+          <div class="flex items-center gap-2">
+            <button id="libPlayAllBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 text-black font-bold text-xs press shadow-md">
+              <svg class="w-4 h-4"><use href="#i-play"/></svg>
+              <span>Reproducir</span>
+            </button>
+            <button id="libShuffleAllBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs press">
+              <svg class="w-4 h-4"><use href="#i-shuffle"/></svg>
+              <span>Aleatorio</span>
+            </button>
+          </div>
+          <!-- Selector de Orden -->
+          <div class="flex items-center gap-1 text-[11px] text-zinc-400">
+            <span>Orden:</span>
+            <select id="libSortSelect" class="bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-emerald-500">
+              <option value="recent">Recientes</option>
+              <option value="title">Título (A-Z)</option>
+              <option value="artist">Artista</option>
+            </select>
           </div>
         </div>
 
-        <div id="libPlaylistContent" class="space-y-2 pt-2"></div>
+        <!-- Vista 1 de Biblioteca: Lista de Canciones (Me Gusta / Historial) -->
+        <div id="libTrackListWrap" class="space-y-1.5">
+          <div id="libLikedList" class="space-y-1.5"></div>
+          <div id="libHistoryList" class="hidden space-y-1.5"></div>
+        </div>
+
+        <!-- Vista 2 de Biblioteca: Playlists del Usuario -->
+        <div id="libPlaylistsWrap" class="hidden space-y-2">
+          <div id="userPlaylistsList" class="space-y-1.5"></div>
+          <div id="libPlaylistContent" class="space-y-2 pt-2"></div>
+        </div>
+
+        <!-- Vista 3 de Biblioteca: Tu Cápsula Sonora (Stats tipo Spotify Wrapped) -->
+        <div id="libStatsWrap" class="hidden space-y-4 pt-1">
+          <div class="p-4 rounded-3xl bg-gradient-to-br from-emerald-600/30 via-zinc-900 to-black border border-emerald-500/30 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-black uppercase tracking-widest text-emerald-400">Tu Cápsula Sonora</span>
+              <span class="text-xs text-zinc-400 font-mono">Spotify Wrapped FreeSong</span>
+            </div>
+            <div class="grid grid-cols-2 gap-3 pt-1">
+              <div class="bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/60">
+                <p class="text-[10px] text-zinc-400 uppercase font-bold">Total Reproducidas</p>
+                <p id="statTotalPlays" class="text-2xl font-black text-white mt-1">0</p>
+                <p class="text-[10px] text-emerald-400">canciones en sesión</p>
+              </div>
+              <div class="bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/60">
+                <p class="text-[10px] text-zinc-400 uppercase font-bold">Tu Artista #1</p>
+                <p id="statTopArtist" class="text-lg font-black text-white mt-1 truncate">Sin datos</p>
+                <p id="statTopArtistPlays" class="text-[10px] text-emerald-400">0 reproducciones</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Top 5 Canciones más escuchadas</h3>
+            <div id="statTopTracksList" class="space-y-1.5">
+              <p class="text-zinc-500 text-xs py-4 text-center">Escucha canciones para descubrir tu Top 5.</p>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- PESTAÑA: AJUSTES -->
-      <section id="viewSettings" class="hidden space-y-5 pt-2 max-w-lg mx-auto">
+      <section id="viewSettings" class="hidden space-y-4 pt-2 max-w-lg mx-auto pb-10">
         <h2 class="text-xl font-bold text-white tracking-tight">Ajustes</h2>
 
         <!-- Sleep Timer en Ajustes -->
@@ -203,7 +251,7 @@
           <div class="flex items-center justify-between">
             <div class="pr-3">
               <p class="font-bold text-sm text-white">Crossfade (Fundido entre pistas)</p>
-              <p class="text-xs text-zinc-400">Solapamiento fluido estilo Spotify Premium. <span class="text-emerald-400">En iOS se recomienda mantener desactivado para segundo plano.</span></p>
+              <p class="text-xs text-zinc-400">Solapamiento fluido estilo Spotify Premium. <span class="text-emerald-400">Se adapta automáticamente si la pantalla está bloqueada.</span></p>
             </div>
             <label class="relative inline-flex items-center cursor-pointer shrink-0">
               <input id="settingCrossfadeToggle" type="checkbox" class="sr-only peer" />
@@ -220,24 +268,66 @@
           </div>
         </div>
 
+        <!-- Normalización de Volumen y Gapless / Autoplay -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Normalización de audio</p>
+              <p class="text-xs text-zinc-400">Equilibra el nivel de volumen entre canciones comerciales.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingNormalizeToggle" type="checkbox" class="sr-only peer" checked />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+          <div class="flex items-center justify-between pt-2 border-t border-zinc-800/60">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Autoplay infinito (Sin pausas)</p>
+              <p class="text-xs text-zinc-400">Genera canciones similares automáticamente cuando la cola se agota.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingAutoplayToggle" type="checkbox" class="sr-only peer" checked />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+        </div>
+
         <!-- Calidad de Audio / Ahorro de Datos -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2">
           <div class="flex items-center justify-between">
             <div>
               <p class="font-bold text-sm text-white">Calidad de audio</p>
-              <p class="text-xs text-zinc-400">AAC 128 kbps (itag 140) optimizado para iPhone.</p>
+              <p class="text-xs text-zinc-400">Optimizado para iPhone y bajo consumo de datos.</p>
             </div>
-            <span class="text-[11px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 rounded-full">
-              Alta (AAC)
-            </span>
+            <select id="settingQualitySelect" class="bg-zinc-800 border border-zinc-700 text-xs font-bold text-emerald-400 px-3 py-1.5 rounded-xl focus:outline-none">
+              <option value="140">Alta (128k AAC)</option>
+              <option value="139">Ahorro de datos (48k AAC)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Copia de Seguridad: Exportar e Importar Biblioteca -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3">
+          <div>
+            <p class="font-bold text-sm text-white">Copia de Seguridad de tu Biblioteca</p>
+            <p class="text-xs text-zinc-400">Guarda o restaura tus canciones favoritas, playlists e historial en formato JSON.</p>
+          </div>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="btnExportBackup" class="py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-white flex items-center justify-center gap-1.5 press">
+              <span>Exportar JSON</span>
+            </button>
+            <button id="btnImportBackup" class="py-2.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-bold text-emerald-400 flex items-center justify-center gap-1.5 press">
+              <span>Importar JSON</span>
+            </button>
+            <input id="importBackupFileInput" type="file" accept=".json" class="hidden" />
           </div>
         </div>
 
         <!-- Info Card -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
-          <p>Reproductor web de música libre para uso personal. Diseñado especialmente para iPhone (iOS) con soporte completo para pantalla de bloqueo, Dynamic Island, controles Bluetooth y segundo plano continuo.</p>
-          <p class="text-[11px] text-zinc-500 pt-2">Versión 2.0.0 Web PWA</p>
+          <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 2.5.0 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -360,9 +450,12 @@
 
       <!-- Vista 4: Canciones Similares / Relacionadas -->
       <div id="sheetSimilarView" class="hidden flex-1 overflow-y-auto px-1 py-3 space-y-3 no-scrollbar">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Canciones parecidas y recomendadas</h3>
+        <div class="flex items-center justify-between px-1">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Canciones parecidas y recomendadas</h3>
+          <button id="similarReloadBtn" class="text-[11px] font-bold text-emerald-400 hover:underline press">Actualizar</button>
+        </div>
         <div id="similarList" class="space-y-1.5">
-          <p class="text-zinc-500 text-xs py-8 text-center">Cargando canciones recomendadas...</p>
+          <p class="text-zinc-500 text-xs py-8 text-center animate-pulse">Cargando canciones recomendadas...</p>
         </div>
       </div>
 
@@ -379,8 +472,9 @@
 
         <!-- Botones de reproducción -->
         <div class="flex items-center justify-between">
-          <button id="playerShuffleBtn" aria-label="Aleatorio" class="p-2 text-zinc-400 hover:text-white press">
+          <button id="playerShuffleBtn" aria-label="Aleatorio" class="relative p-2 text-zinc-400 hover:text-white press">
             <svg class="w-5 h-5"><use href="#i-shuffle"/></svg>
+            <span id="playerShuffleBadge" class="hidden smart-shuffle-badge text-emerald-400 font-bold">✨</span>
           </button>
           <button id="playerPrevBtn" aria-label="Canción anterior" class="p-2 text-white press">
             <svg class="w-8 h-8"><use href="#i-prev"/></svg>
@@ -393,6 +487,65 @@
           </button>
           <button id="playerRepeatBtn" aria-label="Repetir" class="p-2 text-zinc-400 hover:text-white press">
             <svg class="w-5 h-5"><use href="#i-repeat"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Menú de Canción Completo (Estilo Spotify Bottom Sheet) -->
+    <div id="songMenuModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end justify-center p-0">
+      <div class="sheet-slide-up bg-zinc-900 border-t border-zinc-800 rounded-t-3xl p-5 w-full max-w-md space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto" style="padding-bottom: max(24px, env(safe-area-inset-bottom));">
+        <!-- Cabecera de la canción en el menú -->
+        <div class="flex items-center gap-3.5 pb-3 border-b border-zinc-800/80">
+          <img id="songMenuCover" src="icons/icon-192.png" alt="" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
+          <div class="min-w-0 flex-1">
+            <h4 id="songMenuTitle" class="text-sm font-bold text-white truncate">Canción</h4>
+            <p id="songMenuArtist" class="text-xs text-zinc-400 truncate">Artista</p>
+          </div>
+          <button id="songMenuCloseBtn" class="p-2 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+        </div>
+
+        <!-- Velocidad y Vibe (Playback Rate) -->
+        <div class="space-y-2 py-1">
+          <p class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Velocidad y Vibe</p>
+          <div class="grid grid-cols-3 gap-2">
+            <button data-speed="0.85" class="speed-opt-btn py-2 px-2 rounded-xl bg-zinc-800/80 border border-zinc-700/60 text-xs font-semibold text-zinc-300 hover:text-white press text-center">
+              0.85x <span class="text-[10px] text-zinc-500 block">Slowed</span>
+            </button>
+            <button data-speed="1.0" class="speed-opt-btn py-2 px-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-xs font-bold text-emerald-400 hover:text-white press text-center">
+              1.0x <span class="text-[10px] text-emerald-400/80 block">Normal</span>
+            </button>
+            <button data-speed="1.15" class="speed-opt-btn py-2 px-2 rounded-xl bg-zinc-800/80 border border-zinc-700/60 text-xs font-semibold text-zinc-300 hover:text-white press text-center">
+              1.15x <span class="text-[10px] text-zinc-500 block">Sped Up</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Opciones de lista estilo Spotify -->
+        <div class="space-y-1 text-sm font-medium text-zinc-200">
+          <button id="menuPlayNextBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-zinc-400"><use href="#i-queue"/></svg>
+            <span>Reproducir a continuación</span>
+          </button>
+          <button id="menuAddQueueBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-zinc-400"><use href="#i-plus"/></svg>
+            <span>Añadir al final de la cola</span>
+          </button>
+          <button id="menuAddPlaylistBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-zinc-400"><use href="#i-playlist-add"/></svg>
+            <span>Agregar a Playlist</span>
+          </button>
+          <button id="menuArtistRadioBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-radio"/></svg>
+            <span>Ir a la Radio del Artista (20 canciones)</span>
+          </button>
+          <button id="menuSleepTimerBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-zinc-400"><use href="#i-timer"/></svg>
+            <span>Temporizador de apagado</span>
+          </button>
+          <button id="menuShareBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-zinc-400"><use href="#i-share"/></svg>
+            <span>Compartir canción</span>
           </button>
         </div>
       </div>
@@ -456,6 +609,11 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Notificación Toast flotante -->
+    <div id="toastNotification" class="fixed top-5 left-1/2 -translate-x-1/2 z-[60] bg-zinc-900/95 border border-emerald-500/40 text-emerald-300 text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl backdrop-blur-md flex items-center gap-2 transition-all duration-300 opacity-0 pointer-events-none translate-y-[-10px]">
+      <span id="toastText">Mensaje</span>
     </div>
 
   <!-- Motor de audio HTML5 nativo de doble deck para Crossfade continuo -->
