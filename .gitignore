@@ -8,8 +8,8 @@ android/app/src/main/assets/public/
 *.keystore
 .DS_Store
 .claude/
-.vscode/
-android/app/src/main/assets/capacitor.config.json
-android/app/src/main/assets/capacitor.plugins.json
 android/
 original/
+ios/App/build/
+*.ipa
+Payload/
