@@ -9,21 +9,6 @@
     return document.visibilityState === 'hidden';
   }
 
-  // --- Mantenedor de sesión de audio en móviles (iOS Safari / Android) ---
-  // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit
-  const silentLoop = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
-  silentLoop.loop = true;
-  silentLoop.volume = 0.01;
-  function keepAudioAlive() {
-    if (silentLoop.paused) {
-      silentLoop.play().catch(() => {});
-    }
-  }
-
-  // Despertar la sesión de audio al primer toque físico en la pantalla
-  window.addEventListener('touchstart', keepAudioAlive, { passive: true });
-  window.addEventListener('click', keepAudioAlive);
-
   // Manejo de cambio de visibilidad (bloqueo de pantalla / cambio de app)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
@@ -32,7 +17,7 @@
         if (fadeInterval) clearInterval(fadeInterval);
         isCrossfading = false;
         const activeP = getActivePlayer();
-        if (activeP && activeP.setVolume) activeP.setVolume(100);
+        if (activeP) activeP.volume = 1;
       }
     }
   });
@@ -42,7 +27,7 @@
     queue: [],
     currentIndex: -1,
     isPlaying: false,
-    crossfade: !isIOS, // Desactivado por defecto en iOS para evitar que Safari corte la música al bloquear la pantalla
+    crossfade: !isIOS, // Desactivado por defecto en iOS para máxima estabilidad
     crossfadeDuration: 6, // 6 segundos de fundido como Spotify
     shuffle: false,
     repeat: 'all', // 'off', 'all', 'one'
@@ -63,23 +48,28 @@
   const $ = (id) => document.getElementById(id);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  // --- Motor de Reproducción de Doble Deck (Deck A y Deck B) ---
-  const ytPlayers = [null, null];
+  // --- Motor de Reproducción de Audio HTML5 Nativo (Doble Deck para Crossfade) ---
+  const audioDecks = [
+    $('audioA') || new Audio(),
+    $('audioB') || new Audio()
+  ];
+  audioDecks.forEach((a) => {
+    a.preload = 'auto';
+    a.playsInline = true;
+  });
+
   let activeDeckIdx = 0;
   let isCrossfading = false;
   let fadeInterval = null;
-  let timeMonitorInterval = null;
-  let readyCount = 0;
-  let isEngineReady = false;
   let userIntentionalPause = false;
   let isScrubbing = false;
 
   function getActivePlayer() {
-    return ytPlayers[activeDeckIdx];
+    return audioDecks[activeDeckIdx];
   }
 
   function getInactivePlayer() {
-    return ytPlayers[1 - activeDeckIdx];
+    return audioDecks[1 - activeDeckIdx];
   }
 
   function formatTime(secs) {
@@ -89,88 +79,72 @@
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
-  // --- Inicialización de los dos Decks de YouTube ---
-  function initYouTubePlayers() {
-    const commonVars = {
-      autoplay: 0,
-      controls: 0,
-      disablekb: 1,
-      fs: 0,
-      rel: 0,
-      playsinline: 1,
-      enablejsapi: 1,
-      modestbranding: 1,
-      origin: window.location.origin
-    };
-
-    ytPlayers[0] = new YT.Player('deckA', {
-      height: '200',
-      width: '200',
-      videoId: '',
-      playerVars: commonVars,
-      events: {
-        onReady: () => onDeckReady(0),
-        onStateChange: (e) => onDeckStateChange(0, e)
+  // --- Eventos Nativos del Reproductor HTML5 ---
+  audioDecks.forEach((deck, idx) => {
+    deck.addEventListener('play', () => {
+      if (idx === activeDeckIdx) {
+        S.isPlaying = true;
+        userIntentionalPause = false;
+        updatePlayPauseIcons(true);
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       }
     });
 
-    ytPlayers[1] = new YT.Player('deckB', {
-      height: '200',
-      width: '200',
-      videoId: '',
-      playerVars: commonVars,
-      events: {
-        onReady: () => onDeckReady(1),
-        onStateChange: (e) => onDeckStateChange(1, e)
+    deck.addEventListener('pause', () => {
+      if (idx === activeDeckIdx && !isCrossfading) {
+        S.isPlaying = false;
+        updatePlayPauseIcons(false);
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
       }
     });
-  }
 
-  function onDeckReady(deckIdx) {
-    readyCount++;
-    if (readyCount >= 2) {
-      isEngineReady = true;
-      startTimeMonitor();
-    }
-  }
+    deck.addEventListener('ended', () => {
+      if (idx === activeDeckIdx) {
+        playNext(true);
+      }
+    });
 
-  function onDeckStateChange(deckIdx, event) {
-    if (deckIdx !== activeDeckIdx) return;
+    deck.addEventListener('timeupdate', () => {
+      if (idx !== activeDeckIdx) return;
+      const cur = deck.currentTime || 0;
+      const dur = deck.duration || 0;
 
-    // YT.PlayerState: PLAYING = 1, PAUSED = 2, ENDED = 0, BUFFERING = 3
-    if (event.data === 1) {
-      S.isPlaying = true;
-      userIntentionalPause = false;
-      updatePlayPauseIcons(true);
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    } else if (event.data === 2) {
-      // Si la pausa NO fue iniciada intencionalmente por el usuario (ej: pantalla apagada o suspensión de pestaña)
-      if (!userIntentionalPause && S.isPlaying) {
-        try {
-          const p = getActivePlayer();
-          if (p && p.playVideo) p.playVideo();
-        } catch {}
-        return;
+      if (dur > 0) {
+        $('playerCurTime').textContent = formatTime(cur);
+        $('playerDurTime').textContent = formatTime(dur);
+        const pct = (cur / dur) * 100;
+        if (!isScrubbing) {
+          $('playerSeek').value = pct;
+        }
+        $('miniProgress').style.width = `${pct}%`;
+
+        // Detección automática de Crossfade (solo con pantalla encendida y activa)
+        const timeLeft = dur - cur;
+        if (
+          S.crossfade &&
+          !isBackground() &&
+          !isCrossfading &&
+          timeLeft <= S.crossfadeDuration &&
+          timeLeft > 0.8 &&
+          S.queue.length > 1
+        ) {
+          playNext(false);
+        }
       }
 
-      S.isPlaying = false;
-      updatePlayPauseIcons(false);
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-    } else if (event.data === 0) {
-      // Fin natural de pista: pasar síncronamente a la siguiente reutilizando el mismo reproductor (sin crossfade)
-      playNext(true);
-    }
-  }
+      if (S.syncedLyrics.length > 0 && !isBackground()) {
+        syncLyricsWithTime(cur);
+      }
+    });
 
-  window.onYouTubeIframeAPIReady = () => {
-    initYouTubePlayers();
-  };
+    deck.addEventListener('error', () => {
+      if (idx === activeDeckIdx) {
+        console.error('Error cargando audio en deck', idx);
+      }
+    });
+  });
 
-  if (window.YT && window.YT.Player) {
-    initYouTubePlayers();
-  }
-
-  // --- Controles de Pantalla de Bloqueo / Control Center en iOS (MediaSession) ---
+  // --- Controles de Pantalla de Bloqueo y Dynamic Island en iOS (MediaSession) ---
   function updateMediaSession(track) {
     if (!('mediaSession' in navigator) || !track) return;
     try {
@@ -180,8 +154,8 @@
         album: 'FreeSong Premium',
         artwork: [
           { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' },
-          { src: track.thumbnail, sizes: '192x192', type: 'image/jpeg' },
-          { src: track.thumbnail, sizes: '96x96', type: 'image/jpeg' }
+          { src: track.thumbnail, sizes: '256x256', type: 'image/jpeg' },
+          { src: track.thumbnail, sizes: '128x128', type: 'image/jpeg' }
         ]
       });
 
@@ -192,7 +166,7 @@
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime != null) {
           const p = getActivePlayer();
-          if (p && p.seekTo) p.seekTo(details.seekTime, true);
+          if (p) p.currentTime = details.seekTime;
         }
       });
     } catch {}
@@ -205,7 +179,6 @@
     const track = S.queue[index];
 
     userIntentionalPause = false;
-    keepAudioAlive();
 
     // Actualizar UI
     updatePlayerUI(track);
@@ -213,29 +186,19 @@
     loadLyrics(track);
     updateMediaSession(track);
 
-    if (!isEngineReady) {
-      setTimeout(() => playTrack(index, immediate), 300);
-      return;
-    }
+    const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}`;
 
     const isBg = isBackground();
-    // En segundo plano, bloqueo de pantalla, cambio inmediato o crossfade apagado:
-    // REGLA CRÍTICA PARA iOS: Usar SIEMPRE el mismo reproductor activo. Nunca intentar activar el deck secundario
-    // porque iOS bloquea cualquier nuevo elemento <audio>/iframe sin interacción física directa.
     const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isBg;
     const outPlayer = getActivePlayer();
     const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
 
     try {
       if (shouldCrossfade) {
-        inPlayer.setVolume(0);
-        inPlayer.loadVideoById({
-          videoId: track.id,
-          startSeconds: 0
-        });
-        inPlayer.playVideo();
+        inPlayer.volume = 0;
+        inPlayer.src = streamUrl;
+        inPlayer.play().catch(() => {});
 
-        // Iniciar Crossfade igual que Spotify Premium
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
       } else {
         if (isCrossfading) {
@@ -243,14 +206,14 @@
           isCrossfading = false;
         }
         if (outPlayer && outPlayer !== inPlayer) {
-          try { outPlayer.stopVideo(); } catch {}
+          try {
+            outPlayer.pause();
+            outPlayer.currentTime = 0;
+          } catch {}
         }
-        inPlayer.setVolume(100);
-        inPlayer.loadVideoById({
-          videoId: track.id,
-          startSeconds: 0
-        });
-        inPlayer.playVideo();
+        inPlayer.volume = 1;
+        inPlayer.src = streamUrl;
+        inPlayer.play().catch(() => {});
       }
 
       S.isPlaying = true;
@@ -274,20 +237,21 @@
       const progress = currentStep / steps; // 0.0 -> 1.0
 
       // Curva trigonométrica de potencia constante
-      const outVol = Math.cos((progress * Math.PI) / 2) * 100;
-      const inVol = Math.sin((progress * Math.PI) / 2) * 100;
+      const outVol = Math.cos((progress * Math.PI) / 2);
+      const inVol = Math.sin((progress * Math.PI) / 2);
 
       try {
-        outP.setVolume(Math.max(0, Math.min(100, Math.round(outVol))));
-        inP.setVolume(Math.max(0, Math.min(100, Math.round(inVol))));
+        outP.volume = Math.max(0, Math.min(1, outVol));
+        inP.volume = Math.max(0, Math.min(1, inVol));
       } catch {}
 
       if (currentStep >= steps) {
         clearInterval(fadeInterval);
         try {
-          outP.stopVideo();
-          outP.setVolume(100);
-          inP.setVolume(100);
+          outP.pause();
+          outP.currentTime = 0;
+          outP.volume = 1;
+          inP.volume = 1;
         } catch {}
         activeDeckIdx = 1 - activeDeckIdx; // El nuevo deck es ahora el activo
         isCrossfading = false;
@@ -298,9 +262,9 @@
   function pausePlayback() {
     userIntentionalPause = true;
     const p = getActivePlayer();
-    if (p && p.pauseVideo) p.pauseVideo();
+    if (p) p.pause();
     const inact = getInactivePlayer();
-    if (inact && inact.pauseVideo) inact.pauseVideo();
+    if (inact) inact.pause();
     S.isPlaying = false;
     updatePlayPauseIcons(false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
@@ -308,14 +272,13 @@
 
   function resumePlayback() {
     userIntentionalPause = false;
-    keepAudioAlive();
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
       return;
     }
     const p = getActivePlayer();
-    if (p && p.playVideo) {
-      p.playVideo();
+    if (p) {
+      p.play().catch(() => {});
       S.isPlaying = true;
       updatePlayPauseIcons(true);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -332,7 +295,10 @@
     if (S.queue.length === 0) return;
     if (S.repeat === 'one') {
       const p = getActivePlayer();
-      if (p && p.seekTo) p.seekTo(0, true);
+      if (p) {
+        p.currentTime = 0;
+        p.play().catch(() => {});
+      }
       return;
     }
     let nextIdx = S.currentIndex + 1;
@@ -350,55 +316,13 @@
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
     const p = getActivePlayer();
-    if (p && p.getCurrentTime && p.getCurrentTime() > 3) {
-      p.seekTo(0, true);
+    if (p && p.currentTime > 3) {
+      p.currentTime = 0;
       return;
     }
     let prevIdx = S.currentIndex - 1;
     if (prevIdx < 0) prevIdx = S.queue.length - 1;
     playTrack(prevIdx, true);
-  }
-
-  // --- Monitoreo de tiempo, progreso, letras y Auto-Crossfade ---
-  function startTimeMonitor() {
-    if (timeMonitorInterval) clearInterval(timeMonitorInterval);
-    timeMonitorInterval = setInterval(() => {
-      const p = getActivePlayer();
-      if (!p || !p.getCurrentTime || !p.getDuration) return;
-
-      try {
-        const cur = p.getCurrentTime() || 0;
-        const dur = p.getDuration() || 0;
-
-        if (dur > 0) {
-          $('playerCurTime').textContent = formatTime(cur);
-          $('playerDurTime').textContent = formatTime(dur);
-          const pct = (cur / dur) * 100;
-          if (!isScrubbing) {
-            $('playerSeek').value = pct;
-          }
-          $('miniProgress').style.width = `${pct}%`;
-
-          // Detección automática de inicio de Crossfade (SOLO con pantalla activa y visible)
-          const timeLeft = dur - cur;
-          if (
-            S.crossfade &&
-            !isBackground() &&
-            !isCrossfading &&
-            timeLeft <= S.crossfadeDuration &&
-            timeLeft > 0.8 &&
-            S.queue.length > 1
-          ) {
-            playNext(false);
-          }
-        }
-
-        // Sincronizar letra activa si la pantalla está visible
-        if (S.syncedLyrics.length > 0 && !isBackground()) {
-          syncLyricsWithTime(cur);
-        }
-      } catch {}
-    }, 250);
   }
 
   // --- Letras Sincronizadas (LRCLIB) ---
@@ -455,7 +379,7 @@
     $$('.lyric-line').forEach((el, idx) => {
       el.addEventListener('click', () => {
         const p = getActivePlayer();
-        if (p && p.seekTo) p.seekTo(lyricsList[idx].time, true);
+        if (p) p.currentTime = lyricsList[idx].time;
       });
     });
   }
@@ -786,11 +710,8 @@
     seekEl.addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value);
       const p = getActivePlayer();
-      if (p && p.getDuration) {
-        const dur = p.getDuration();
-        if (dur > 0) {
-          p.seekTo((pct / 100) * dur, true);
-        }
+      if (p && p.duration > 0) {
+        p.currentTime = (pct / 100) * p.duration;
       }
     });
 

@@ -1,33 +1,33 @@
-// api/stream.js - Streaming de audio nativo con soporte HTTP 206 (Range requests) para iOS Safari y Android
+// api/stream.js - Streaming de audio puro con soporte completo HTTP 206 (Range) para iPhone (iOS Safari)
 import { Ytdl, Client } from '@distube/ytdl-core';
-import { Readable } from 'stream';
 
-const ytdl = new Ytdl({ clients: [Client.VisionOS, Client.Tv] });
-const urlCache = new Map();
+// Cliente TV y WebEmbedded para evitar bloqueos por IP de datacenter en Vercel
+const ytdl = new Ytdl({ clients: [Client.Tv, Client.WebEmbedded] });
+const formatCache = new Map();
 
-async function getMediaStreamUrl(videoId) {
-  const cached = urlCache.get(videoId);
+async function getAudioFormat(videoId) {
+  const cached = formatCache.get(videoId);
   if (cached && Date.now() < cached.exp) {
-    return cached.url;
+    return cached.format;
   }
 
   const info = await ytdl.getInfo(videoId);
-  const audioFormats = info.formats.filter((f) => f.hasAudio && f.url);
-  // Priorizar formato AAC / mp4 para decodificación nativa sin consumo excesivo de batería en iPhone
-  const bestMp4 = audioFormats.find((f) => f.mimeType && f.mimeType.includes('mp4') && !f.hasVideo);
-  const chosen = bestMp4 || audioFormats.find((f) => !f.hasVideo) || audioFormats[0];
+  const audioFormats = info.formats.filter((f) => f.hasAudio && !f.hasVideo);
 
-  if (!chosen || !chosen.url) {
-    throw new Error('No se encontró URL de audio disponible');
+  // Priorizar formato AAC / mp4 para reproducción eficiente y bajo consumo en iOS
+  const bestMp4 = audioFormats.find((f) => f.mimeType && f.mimeType.includes('mp4'));
+  const chosen = bestMp4 || audioFormats[0];
+
+  if (!chosen) {
+    throw new Error('No se encontró formato de audio disponible');
   }
 
-  // Guardar en caché por 1 hora
-  urlCache.set(videoId, {
-    url: chosen.url,
-    exp: Date.now() + 3600 * 1000
+  formatCache.set(videoId, {
+    format: chosen,
+    exp: Date.now() + 3600 * 1000 // 1 hora de caché
   });
 
-  return chosen.url;
+  return chosen;
 }
 
 export default async function handler(req, res) {
@@ -35,61 +35,94 @@ export default async function handler(req, res) {
   const videoId = (req.query && req.query.id) || urlObj.searchParams.get('id');
 
   if (!videoId) {
-    return res.status(400).json({ error: 'Falta el id del video' });
+    return res.status(400).json({ error: 'Falta el id de la canción' });
+  }
+
+  // Preflight CORS
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    return res.status(204).end();
   }
 
   try {
-    const streamUrl = await getMediaStreamUrl(videoId);
+    const format = await getAudioFormat(videoId);
+    const totalSize = parseInt(format.contentLength, 10) || 0;
+    const mimeType = format.mimeType ? format.mimeType.split(';')[0] : 'audio/mp4';
 
-    // Preparar headers para el upstream de Google Video
-    const forwardHeaders = {
-      'User-Agent':
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-    };
+    const rangeHeader = req.headers.range;
 
-    if (req.headers && req.headers.range) {
-      forwardHeaders['Range'] = req.headers.range;
-    }
+    if (rangeHeader && totalSize > 0) {
+      // Manejo de peticiones de rango (Range: bytes=start-end)
+      const parts = rangeHeader.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
 
-    const upstream = await fetch(streamUrl, {
-      headers: forwardHeaders
-    });
+      if (start >= totalSize || end >= totalSize) {
+        res.setHeader('Content-Range', `bytes */${totalSize}`);
+        return res.status(416).end();
+      }
 
-    const responseHeaders = {
-      'Content-Type': upstream.headers.get('content-type') || 'audio/mp4',
-      'Accept-Ranges': 'bytes',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Range',
-      'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
-      'Cache-Control': 'public, max-age=3600'
-    };
+      const chunkSize = end - start + 1;
 
-    if (upstream.headers.has('content-range')) {
-      responseHeaders['Content-Range'] = upstream.headers.get('content-range');
-    }
-    if (upstream.headers.has('content-length')) {
-      responseHeaders['Content-Length'] = upstream.headers.get('content-length');
-    }
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': mimeType,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+        'Cache-Control': 'public, max-age=3600'
+      });
 
-    res.writeHead(upstream.status, responseHeaders);
+      const stream = ytdl.download(videoId, {
+        format,
+        range: { start, end }
+      });
 
-    // Pipe del stream de audio hacia el navegador del usuario
-    if (upstream.body) {
-      const nodeStream = Readable.fromWeb(upstream.body);
-      nodeStream.pipe(res);
+      stream.pipe(res);
+
       req.on('close', () => {
-        try {
-          nodeStream.destroy();
-        } catch {}
+        try { stream.destroy(); } catch {}
+      });
+
+      stream.on('error', (err) => {
+        console.error('Error en stream de rango:', err);
+        try { res.end(); } catch {}
       });
     } else {
-      res.end();
+      // Petición estándar completa o si no se especificó tamaño previo
+      const headers = {
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+        'Cache-Control': 'public, max-age=3600'
+      };
+      if (totalSize > 0) {
+        headers['Content-Length'] = totalSize;
+      }
+
+      res.writeHead(200, headers);
+
+      const stream = ytdl.download(videoId, { format });
+      stream.pipe(res);
+
+      req.on('close', () => {
+        try { stream.destroy(); } catch {}
+      });
+
+      stream.on('error', (err) => {
+        console.error('Error en stream completo:', err);
+        try { res.end(); } catch {}
+      });
     }
   } catch (err) {
-    console.error('Error al transmitir audio:', err);
-    urlCache.delete(videoId);
+    console.error('Error en /api/stream:', err);
+    formatCache.delete(videoId);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message || 'Error al obtener audio' });
     }
   }
 }
