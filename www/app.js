@@ -2,31 +2,47 @@
 (() => {
   'use strict';
 
-  // --- Protección Anti-Pausa al salir de la pestaña / minimizar ---
-  try {
-    Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
-    Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
-  } catch {}
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-  window.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
-  document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
-  window.addEventListener('blur', (e) => e.stopImmediatePropagation(), true);
+  // Detección de pantalla bloqueada o pestaña en segundo plano
+  function isBackground() {
+    return document.visibilityState === 'hidden';
+  }
 
   // --- Mantenedor de sesión de audio en móviles (iOS Safari / Android) ---
+  // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit
   const silentLoop = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
   silentLoop.loop = true;
+  silentLoop.volume = 0.01;
   function keepAudioAlive() {
     if (silentLoop.paused) {
       silentLoop.play().catch(() => {});
     }
   }
 
+  // Despertar la sesión de audio al primer toque físico en la pantalla
+  window.addEventListener('touchstart', keepAudioAlive, { passive: true });
+  window.addEventListener('click', keepAudioAlive);
+
+  // Manejo de cambio de visibilidad (bloqueo de pantalla / cambio de app)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      // Si la pantalla se apaga mientras transiciona un crossfade, cancelar timers y estabilizar volumen
+      if (isCrossfading) {
+        if (fadeInterval) clearInterval(fadeInterval);
+        isCrossfading = false;
+        const activeP = getActivePlayer();
+        if (activeP && activeP.setVolume) activeP.setVolume(100);
+      }
+    }
+  });
+
   // --- Estado de la aplicación ---
   const S = {
     queue: [],
     currentIndex: -1,
     isPlaying: false,
-    crossfade: true,
+    crossfade: !isIOS, // Desactivado por defecto en iOS para evitar que Safari corte la música al bloquear la pantalla
     crossfadeDuration: 6, // 6 segundos de fundido como Spotify
     shuffle: false,
     repeat: 'all', // 'off', 'all', 'one'
@@ -128,12 +144,12 @@
       updatePlayPauseIcons(true);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     } else if (event.data === 2) {
-      // Si la pausa NO fue iniciada intencionalmente por el usuario (ocurrió por cambio de pestaña o bloqueo)
+      // Si la pausa NO fue iniciada intencionalmente por el usuario (ej: pantalla apagada o suspensión de pestaña)
       if (!userIntentionalPause && S.isPlaying) {
-        setTimeout(() => {
+        try {
           const p = getActivePlayer();
           if (p && p.playVideo) p.playVideo();
-        }, 50);
+        } catch {}
         return;
       }
 
@@ -141,10 +157,8 @@
       updatePlayPauseIcons(false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     } else if (event.data === 0) {
-      // Fin natural de pista si no se activó el crossfade
-      if (!isCrossfading) {
-        playNext();
-      }
+      // Fin natural de pista: pasar síncronamente a la siguiente reutilizando el mismo reproductor (sin crossfade)
+      playNext(true);
     }
   }
 
@@ -174,7 +188,7 @@
       navigator.mediaSession.setActionHandler('play', () => resumePlayback());
       navigator.mediaSession.setActionHandler('pause', () => pausePlayback());
       navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
-      navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+      navigator.mediaSession.setActionHandler('nexttrack', () => playNext(true));
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime != null) {
           const p = getActivePlayer();
@@ -204,7 +218,11 @@
       return;
     }
 
-    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate;
+    const isBg = isBackground();
+    // En segundo plano, bloqueo de pantalla, cambio inmediato o crossfade apagado:
+    // REGLA CRÍTICA PARA iOS: Usar SIEMPRE el mismo reproductor activo. Nunca intentar activar el deck secundario
+    // porque iOS bloquea cualquier nuevo elemento <audio>/iframe sin interacción física directa.
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isBg;
     const outPlayer = getActivePlayer();
     const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
 
@@ -221,11 +239,11 @@
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
       } else {
         if (isCrossfading) {
-          clearInterval(fadeInterval);
+          if (fadeInterval) clearInterval(fadeInterval);
           isCrossfading = false;
         }
         if (outPlayer && outPlayer !== inPlayer) {
-          outPlayer.stopVideo();
+          try { outPlayer.stopVideo(); } catch {}
         }
         inPlayer.setVolume(100);
         inPlayer.loadVideoById({
@@ -309,7 +327,7 @@
     else resumePlayback();
   }
 
-  function playNext() {
+  function playNext(immediate = false) {
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
     if (S.repeat === 'one') {
@@ -325,7 +343,7 @@
       if (S.repeat === 'all') nextIdx = 0;
       else return;
     }
-    playTrack(nextIdx, !S.crossfade);
+    playTrack(nextIdx, immediate || isBackground() || !S.crossfade);
   }
 
   function playPrev() {
@@ -361,21 +379,22 @@
           }
           $('miniProgress').style.width = `${pct}%`;
 
-          // Detección automática de inicio de Crossfade antes del fin de pista
+          // Detección automática de inicio de Crossfade (SOLO con pantalla activa y visible)
           const timeLeft = dur - cur;
           if (
             S.crossfade &&
+            !isBackground() &&
             !isCrossfading &&
             timeLeft <= S.crossfadeDuration &&
             timeLeft > 0.8 &&
             S.queue.length > 1
           ) {
-            playNext();
+            playNext(false);
           }
         }
 
-        // Sincronizar letra activa
-        if (S.syncedLyrics.length > 0) {
+        // Sincronizar letra activa si la pantalla está visible
+        if (S.syncedLyrics.length > 0 && !isBackground()) {
           syncLyricsWithTime(cur);
         }
       } catch {}
@@ -869,6 +888,21 @@
         playTrack(0, true);
       }
     });
+
+    // Banner PWA para iPhone / Safari
+    const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    const pwaDismissed = localStorage.getItem('fs_pwa_dismissed') === 'true';
+    const pwaBanner = $('pwaBanner');
+    if (pwaBanner && isIOS && !isStandalone && !pwaDismissed) {
+      pwaBanner.classList.remove('hidden');
+    }
+    const pwaClose = $('pwaBannerClose');
+    if (pwaClose) {
+      pwaClose.addEventListener('click', () => {
+        if (pwaBanner) pwaBanner.classList.add('hidden');
+        localStorage.setItem('fs_pwa_dismissed', 'true');
+      });
+    }
   }
 
   // --- Inicialización ---

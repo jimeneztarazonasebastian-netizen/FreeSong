@@ -61,11 +61,25 @@
 
       <!-- PESTAÑA: INICIO -->
       <section id="viewHome" class="space-y-6 pt-2">
+        <!-- Banner PWA para iPhone / Safari -->
+        <div id="pwaBanner" class="hidden rounded-2xl p-4 bg-zinc-900/90 border border-emerald-500/30 shadow-lg flex items-start gap-3 text-xs text-zinc-300">
+          <div class="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+            <svg class="w-4 h-4"><use href="#i-sparkle"/></svg>
+          </div>
+          <div class="flex-1 space-y-1">
+            <p class="font-bold text-white text-sm">¿Quieres escuchar con la pantalla apagada?</p>
+            <p class="text-zinc-400 leading-relaxed">
+              En Safari, toca el botón <strong>Compartir</strong> <span class="text-white">⎋</span> y luego <strong>«Agregar a la pantalla de inicio»</strong> para que iOS mantenga la música sonando sin pausas en segundo plano.
+            </p>
+          </div>
+          <button id="pwaBannerClose" class="text-zinc-400 hover:text-white p-1 -mr-1 -mt-1" aria-label="Cerrar"><svg class="w-4 h-4"><use href="#i-close"/></svg></button>
+        </div>
+
         <div class="rounded-2xl p-5 bg-gradient-to-br from-emerald-950/60 via-zinc-900/60 to-zinc-950 border border-emerald-500/20 shadow-lg relative overflow-hidden">
           <div class="relative z-10 space-y-1.5">
             <span class="text-[10px] font-bold tracking-widest uppercase text-emerald-400">Spotify Experience</span>
             <h1 class="text-2xl font-extrabold text-white tracking-tight">Tu música sin límites</h1>
-            <p class="text-xs text-zinc-300 max-w-sm">Canciones completas, sonido fluido con Crossfade automático y letras en tiempo real.</p>
+            <p class="text-xs text-zinc-300 max-w-sm">Canciones completas, sonido continuo y letras en tiempo real.</p>
           </div>
           <div class="absolute -right-6 -bottom-6 w-32 h-32 rounded-full bg-emerald-500/10 blur-2xl pointer-events-none"></div>
         </div>
@@ -124,12 +138,12 @@
         <!-- Crossfade Card -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3.5">
           <div class="flex items-center justify-between">
-            <div>
+            <div class="pr-3">
               <p class="font-bold text-sm text-white">Crossfade (Fundido entre pistas)</p>
-              <p class="text-xs text-zinc-400">Solapamiento sin pausas como en Spotify Premium</p>
+              <p class="text-xs text-zinc-400">Solapamiento fluido estilo Spotify Premium. <span class="text-emerald-400">En iPhone se recomienda desactivar para segundo plano continuo.</span></p>
             </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input id="settingCrossfadeToggle" type="checkbox" checked class="sr-only peer" />
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingCrossfadeToggle" type="checkbox" class="sr-only peer" />
               <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
             </label>
           </div>
