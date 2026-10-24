@@ -4,6 +4,8 @@ import { Readable } from 'stream';
 
 const MAX_CHUNK = 1.5 * 1024 * 1024; // 1.5 MB por chunk para evitar límites de Vercel Hobby
 
+const RESOLVED_STREAM_CACHE = new Map(); // videoId -> { url, itag, expires }
+
 const CANDIDATE_NODES = [
   'https://yt.chocolatemoo53.com',
   'https://invidious.jing.rocks',
@@ -96,35 +98,37 @@ export default async function handler(req, res) {
     candidateUrls.push(`${host}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`);
   }
 
-  // Alternativa itag 139 (AAC 48k) ultraligera si itag 140 tarda
+  // Alternativas itag 139 (AAC 48k) ultraligeras si itag 140 tarda
   candidateUrls.push(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`);
   candidateUrls.push(`https://invidious.jing.rocks/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`);
 
   let verifiedUrl = null;
 
-  // Carrera rápida (máximo 2000ms) entre los primeros nodos
-  try {
-    const winner = await Promise.any(
-      candidateUrls.slice(0, 4).map(async (url) => {
-        const check = await verifyAudioStream(url, 2000);
-        if (check.ok) return check.url;
-        throw new Error('Check failed');
-      })
-    );
-    verifiedUrl = winner;
-  } catch {
-    // Si los primeros 4 fallan o tardan >2000ms, probar rápidamente el fallback liviano itag 139
-    const check139 = await verifyAudioStream(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`, 1800);
-    if (check139.ok) {
-      verifiedUrl = check139.url;
-      itag = '139';
-    } else {
-      for (const url of candidateUrls.slice(4)) {
-        const check = await verifyAudioStream(url, 2000);
-        if (check.ok) {
-          verifiedUrl = check.url;
-          break;
-        }
+  // Comprobar si ya tenemos un nodo verificado en memoria para este videoId
+  const cachedStream = RESOLVED_STREAM_CACHE.get(videoId);
+  if (cachedStream && cachedStream.expires > Date.now() && !backupIndex) {
+    verifiedUrl = cachedStream.url;
+  } else {
+    // Carrera rápida (máximo 2200ms) entre los primeros 8 nodos en paralelo
+    try {
+      const winner = await Promise.any(
+        candidateUrls.slice(0, 8).map(async (url) => {
+          const check = await verifyAudioStream(url, 2200);
+          if (check.ok) return check.url;
+          throw new Error('Check failed');
+        })
+      );
+      verifiedUrl = winner;
+      RESOLVED_STREAM_CACHE.set(videoId, { url: verifiedUrl, expires: Date.now() + 15 * 60 * 1000 });
+    } catch {
+      // Fallback inmediato a itag 139 rápido
+      const check139 = await verifyAudioStream(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`, 1800);
+      if (check139.ok) {
+        verifiedUrl = check139.url;
+        itag = '139';
+        RESOLVED_STREAM_CACHE.set(videoId, { url: verifiedUrl, expires: Date.now() + 15 * 60 * 1000 });
+      } else {
+        verifiedUrl = `https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`;
       }
     }
   }
