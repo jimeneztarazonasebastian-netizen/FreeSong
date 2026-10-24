@@ -27,7 +27,8 @@ export default async function handler(req, res) {
             hl: 'es'
           }
         },
-        query: query
+        query: query,
+        params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D' // Filtro estricto exclusivo de canciones ("Songs")
       })
     });
 
@@ -38,25 +39,6 @@ export default async function handler(req, res) {
     const seen = new Set();
 
     for (const s of secList) {
-      // Top card
-      if (s.musicCardShelfRenderer) {
-        const card = s.musicCardShelfRenderer;
-        const videoId = card.onTap?.watchEndpoint?.videoId;
-        const title = card.title?.runs?.[0]?.text;
-        const sub = card.subtitle?.runs || [];
-        const artist = sub.map(x => x.text).join('').replace(/^[^\w\s]+/, '').trim();
-        const thumb = card.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)[0]?.url;
-        if (videoId && title && !seen.has(videoId)) {
-          seen.add(videoId);
-          tracks.push({
-            id: videoId,
-            title: title,
-            artist: artist || 'Artista',
-            thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-          });
-        }
-      }
-
       // Shelf / itemSection items
       const list = s.musicShelfRenderer?.contents || s.itemSectionRenderer?.contents || [];
       for (const item of list) {
@@ -71,14 +53,26 @@ export default async function handler(req, res) {
 
         const subRuns = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
         const fullSub = subRuns.map(x => x.text).join('');
-        // e.g. "Canción • Coldplay" or "Vídeo • Coldplay • 700 M"
         const parts = fullSub.split('•').map(p => p.trim());
         let artist = 'Artista';
-        if (parts.length > 1) {
-          artist = parts[1];
-        } else if (parts.length === 1 && !parts[0].includes('Canción') && !parts[0].includes('Vídeo')) {
+        let durationText = '';
+        let durationSeconds = 0;
+
+        if (parts.length >= 1) {
           artist = parts[0];
+          const lastPart = parts[parts.length - 1];
+          const durMatch = lastPart.match(/(?:(\d+):)?(\d+):(\d{2})$/);
+          if (durMatch) {
+            durationText = durMatch[0];
+            const hrs = durMatch[1] ? parseInt(durMatch[1], 10) : 0;
+            const mins = parseInt(durMatch[2], 10);
+            const secs = parseInt(durMatch[3], 10);
+            durationSeconds = hrs * 3600 + mins * 60 + secs;
+          }
         }
+
+        // Descartar mixes, compilaciones o videos largos > 420 segundos (7 min)
+        if (durationSeconds > 420) continue;
 
         const thumb = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)[0]?.url;
 
@@ -87,6 +81,9 @@ export default async function handler(req, res) {
           id: videoId,
           title: title,
           artist: artist,
+          duration: durationSeconds,
+          durationSeconds: durationSeconds,
+          durationText: durationText,
           thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
         });
       }

@@ -4,20 +4,36 @@
 
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
+  // Bloquear gestos de zoom y doble-tap en iPhone / iOS
+  if (isIOS) {
+    document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
+    document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
+    document.addEventListener('gestureend', (e) => e.preventDefault(), { passive: false });
+    document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+  }
+
   // Detección de pantalla bloqueada o pestaña en segundo plano
   function isBackground() {
     return document.visibilityState === 'hidden';
   }
 
-  // Manejo de cambio de visibilidad (bloqueo de pantalla / cambio de app)
+  // Manejo de cambio de visibilidad (bloqueo de pantalla / cambio a otra app: WhatsApp, Instagram, etc.)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      // Si la pantalla se apaga mientras transiciona un crossfade, cancelar timers y estabilizar volumen
+      // Si la pantalla se apaga mientras transiciona un crossfade, estabilizar volumen inmediatamente
       if (isCrossfading) {
         if (fadeInterval) clearInterval(fadeInterval);
         isCrossfading = false;
         const activeP = getActivePlayer();
         if (activeP) activeP.volume = 1;
+      }
+      // Salvaguarda iOS: si la app pasa a background mientras suena y el usuario no pulsó pausa,
+      // asegurar que el audio continúe activo en segundo plano
+      if (S.isPlaying && !userIntentionalPause) {
+        const activeP = getActivePlayer();
+        if (activeP && activeP.paused) {
+          activeP.play().catch(() => {});
+        }
       }
     }
   });
@@ -27,8 +43,8 @@
     queue: [],
     currentIndex: -1,
     isPlaying: false,
-    crossfade: !isIOS, // Desactivado por defecto en iOS para máxima estabilidad
-    crossfadeDuration: 6, // 6 segundos de fundido como Spotify
+    crossfade: false, // Desactivado por defecto para garantizar reproducción continua en segundo plano en iOS
+    crossfadeDuration: 6, // 6 segundos de fundido estilo Spotify
     shuffle: false,
     repeat: 'all', // 'off', 'all', 'one'
     favorites: JSON.parse(localStorage.getItem('fs_favorites') || '[]'),
@@ -92,6 +108,16 @@
 
     deck.addEventListener('pause', () => {
       if (idx === activeDeckIdx && !isCrossfading) {
+        // En iOS Safari, al pasar a otra app (hidden), WebKit intenta pausar el audio accidentalmente.
+        // Si no fue una pausa intencional del usuario, reanudar inmediatamente.
+        if (document.visibilityState === 'hidden' && S.isPlaying && !userIntentionalPause) {
+          setTimeout(() => {
+            if (S.isPlaying && !userIntentionalPause && deck.paused) {
+              deck.play().catch(() => {});
+            }
+          }, 30);
+          return;
+        }
         S.isPlaying = false;
         updatePlayPauseIcons(false);
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
@@ -107,21 +133,57 @@
     deck.addEventListener('timeupdate', () => {
       if (idx !== activeDeckIdx) return;
       const cur = deck.currentTime || 0;
-      const dur = deck.duration || 0;
+      let dur = deck.duration || 0;
+      const track = S.queue[S.currentIndex];
+      const officialDur = (track && (track.duration || track.durationSeconds)) ? (track.duration || track.durationSeconds) : 0;
+
+      // Corrección de duración en iOS: en Safari los streams DASH MP4 itag 140 calculan mal el bitrate y
+      // reportan el doble o triple de tiempo (ej. 9:22 en lugar de 4:42).
+      // Usar la duración oficial si la del audio difiere en más del 20% o es inválida.
+      if (officialDur > 0) {
+        if (!dur || isNaN(dur) || dur <= 0 || Math.abs(dur - officialDur) / officialDur > 0.2) {
+          dur = officialDur;
+        }
+      }
 
       if (dur > 0) {
-        $('playerCurTime').textContent = formatTime(cur);
+        const clampedCur = Math.min(cur, dur);
+        $('playerCurTime').textContent = formatTime(clampedCur);
         $('playerDurTime').textContent = formatTime(dur);
-        const pct = (cur / dur) * 100;
+        const pct = Math.min(100, (clampedCur / dur) * 100);
         if (!isScrubbing) {
           $('playerSeek').value = pct;
         }
         $('miniProgress').style.width = `${pct}%`;
 
-        // Detección automática de Crossfade (solo con pantalla encendida y activa)
+        // Reportar posición precisa a iOS (Dynamic Island y pantalla de bloqueo)
+        if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession) {
+          try {
+            navigator.mediaSession.setPositionState({
+              duration: dur,
+              playbackRate: deck.playbackRate || 1,
+              position: clampedCur
+            });
+          } catch {}
+        }
+
+        // Pre-resolver (prefetch) la URL de la siguiente canción al llegar al 70% de progreso
+        if (pct >= 70 && !deck.dataset.prefetched) {
+          deck.dataset.prefetched = 'true';
+          prefetchNextTrack();
+        }
+
+        // Fin de pista automático si la duración real ya concluyó
+        if (officialDur > 0 && cur >= officialDur - 0.4) {
+          playNext(true);
+          return;
+        }
+
+        // Detección de Crossfade (solo en desktop con pantalla visible)
         const timeLeft = dur - cur;
         if (
           S.crossfade &&
+          !isIOS &&
           !isBackground() &&
           !isCrossfading &&
           timeLeft <= S.crossfadeDuration &&
@@ -142,8 +204,12 @@
         const track = S.queue[S.currentIndex];
         console.warn('Reintentando audio con servidor de respaldo para:', track.title);
         if (!deck.dataset.retried) {
-          deck.dataset.retried = 'true';
+          deck.dataset.retried = '1';
           deck.src = `https://invidious.slipfox.xyz/latest_version?id=${encodeURIComponent(track.id)}&itag=140&local=true`;
+          deck.play().catch(() => {});
+        } else if (deck.dataset.retried === '1') {
+          deck.dataset.retried = '2';
+          deck.src = `https://yewtu.be/latest_version?id=${encodeURIComponent(track.id)}&itag=140&local=true`;
           deck.play().catch(() => {});
         }
       }
@@ -207,8 +273,52 @@
     }
   }
 
+  // --- Pre-resolución y Precarga Inteligente de Siguiente Canción ---
+  function getNextIndex() {
+    if (S.queue.length === 0) return -1;
+    if (S.repeat === 'one') return S.currentIndex;
+    let next = S.currentIndex + 1;
+    if (S.shuffle) {
+      next = Math.floor(Math.random() * S.queue.length);
+    }
+    if (next >= S.queue.length) {
+      next = 0;
+    }
+    return next;
+  }
+
+  function prefetchNextTrack() {
+    const nextIdx = getNextIndex();
+    if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
+    const nextTrack = S.queue[nextIdx];
+    if (!nextTrack || nextTrack.streamUrl) return;
+
+    const targetUrl = `/api/stream?id=${encodeURIComponent(nextTrack.id)}`;
+    nextTrack.streamUrl = targetUrl;
+
+    // Precargar URL mediante tag <link> en el head
+    try {
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'fetch';
+      link.href = targetUrl;
+      link.crossOrigin = 'anonymous';
+      document.head.appendChild(link);
+    } catch {}
+
+    // Si estamos con pantalla encendida y no en iOS, precargar buffer en el deck inactivo
+    if (!isBackground() && !isIOS) {
+      const inact = getInactivePlayer();
+      if (inact && inact.paused) {
+        inact.src = targetUrl;
+        inact.preload = 'auto';
+        inact.muted = true;
+      }
+    }
+  }
+
   // --- Reproducción y Cambio de Pista ---
-  async function playTrack(index, immediate = false) {
+  function playTrack(index, immediate = false) {
     if (index < 0 || index >= S.queue.length) return;
     S.currentIndex = index;
     const track = S.queue[index];
@@ -222,21 +332,22 @@
     updateMediaSession(track);
     ensureUpcomingTracks(track);
 
-    const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}`;
+    const streamUrl = track.streamUrl || `/api/stream?id=${encodeURIComponent(track.id)}`;
 
     const isBg = isBackground();
-    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isBg;
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
     const outPlayer = getActivePlayer();
     const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
 
+    // Limpiar banderas temporales del elemento de audio
+    delete inPlayer.dataset.retried;
+    delete inPlayer.dataset.prefetched;
+
     try {
       if (shouldCrossfade) {
-        inPlayer.pause();
-        inPlayer.currentTime = 0;
+        inPlayer.muted = false;
         inPlayer.volume = 0;
-        delete inPlayer.dataset.retried;
         inPlayer.src = streamUrl;
-        inPlayer.load();
         inPlayer.play().catch(() => {});
 
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
@@ -251,13 +362,16 @@
             outPlayer.currentTime = 0;
           } catch {}
         }
+        inPlayer.muted = false;
         inPlayer.volume = 1;
-        inPlayer.pause();
-        inPlayer.currentTime = 0;
-        delete inPlayer.dataset.retried;
+        // ¡CRÍTICO EN iOS!: NUNCA llamar a inPlayer.pause() ni inPlayer.load().
+        // En iOS WebKit, llamar a .pause() con la app en segundo plano revoca de inmediato la sesión AVAudioSession.
+        // Asignar .src directamente y llamar .play() de forma 100% síncrona.
         inPlayer.src = streamUrl;
-        inPlayer.load();
-        inPlayer.play().catch((err) => console.warn('inPlayer play error:', err));
+        const playPromise = inPlayer.play();
+        if (playPromise && playPromise.catch) {
+          playPromise.catch((err) => console.warn('inPlayer play error:', err));
+        }
       }
 
       S.isPlaying = true;
@@ -520,10 +634,10 @@
           <img src="${t.thumbnail}" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
           <div class="min-w-0">
             <p class="text-xs font-bold ${idx === S.currentIndex ? 'text-emerald-400' : 'text-white'} truncate">${t.title}</p>
-            <p class="text-[10px] text-zinc-400 truncate">${t.artist}</p>
+            <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
           </div>
         </div>
-        ${idx === S.currentIndex ? '<span class="text-[9px] uppercase font-bold text-emerald-400 shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20">Sonando</span>' : ''}
+        ${idx === S.currentIndex ? '<span class="text-[9px] uppercase font-bold text-emerald-400 shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20">Sonando</span>' : (t.durationText ? `<span class="text-[10px] text-zinc-500 shrink-0">${t.durationText}</span>` : '')}
       </div>
     `).join('');
 
@@ -634,7 +748,7 @@
             <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0">
               <p class="text-sm font-bold text-white truncate">${t.title}</p>
-              <p class="text-xs text-zinc-400 truncate mt-0.5">${t.artist}</p>
+              <p class="text-xs text-zinc-400 truncate mt-0.5">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
             </div>
           </div>
           <button class="w-9 h-9 rounded-full bg-zinc-800 text-emerald-400 hover:bg-emerald-500 hover:text-black flex items-center justify-center shrink-0 ml-2 shadow-sm transition">
@@ -753,8 +867,16 @@
     seekEl.addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value);
       const p = getActivePlayer();
-      if (p && p.duration > 0) {
-        p.currentTime = (pct / 100) * p.duration;
+      const track = S.queue[S.currentIndex];
+      let dur = p ? (p.duration || 0) : 0;
+      const officialDur = (track && (track.duration || track.durationSeconds)) ? (track.duration || track.durationSeconds) : 0;
+      if (officialDur > 0) {
+        if (!dur || isNaN(dur) || dur <= 0 || Math.abs(dur - officialDur) / officialDur > 0.2) {
+          dur = officialDur;
+        }
+      }
+      if (p && dur > 0) {
+        p.currentTime = (pct / 100) * dur;
       }
     });
 
