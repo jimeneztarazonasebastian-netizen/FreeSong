@@ -1,5 +1,5 @@
-// FreeSong Web Music Player v2.5 - Experiencia Spotify Premium Master para iPhone (iOS) y Web
-// Motores: Anti-Pausa iOS, Watchdog 3.5s, Smart Shuffle ✨, Bottom Sheet •••, Dynamic Glow, Gestos Swipe, Cápsula Sonora y Backup JSON
+// FreeSong Web Music Player v3.0.0 Ultra Spotify Premium para iPhone (iOS) y Web
+// Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
 
@@ -53,7 +53,7 @@
     }, duration);
   }
 
-  // --- Estado Global de la Aplicación ---
+  // --- Estado Global de la Aplicación (v3.0.0 Ultra) ---
   const S = {
     queue: [],
     currentIndex: -1,
@@ -63,6 +63,11 @@
     shuffleMode: 0, // 0: Desactivado, 1: Aleatorio Normal, 2: Smart Shuffle ✨
     repeat: 'all', // 'off', 'all', 'one'
     favorites: JSON.parse(localStorage.getItem('fs_favorites') || '[]'),
+    downloads: JSON.parse(localStorage.getItem('fs_downloads') || '[]'),
+    offlineBlobUrls: {},
+    isDownloadingMap: {},
+    recentSearches: JSON.parse(localStorage.getItem('fs_recent_searches') || '[]'),
+    djVibeIndex: 0,
     history: JSON.parse(localStorage.getItem('fs_history') || '[]'),
     playlists: JSON.parse(localStorage.getItem('fs_playlists') || '[]'),
     stats: JSON.parse(localStorage.getItem('fs_stats') || '{"totalPlays":0,"songs":{},"artists":{}}'),
@@ -76,7 +81,7 @@
     activeTab: 'home',
     activeChip: 'todo',
     activePlayerSubTab: 'track', // 'track', 'queue', 'lyrics', 'similar'
-    libFilter: 'likes', // 'likes', 'playlists', 'history', 'stats'
+    libFilter: 'likes', // 'likes', 'downloads', 'playlists', 'history', 'stats'
     libSort: 'recent',
     menuTargetTrack: null,
     sleepTimerMinutes: null,
@@ -489,6 +494,165 @@
     }
   }
 
+  // --- Motor de Descargas Offline Reales (Cache API + Modo Avión en iPhone) ---
+  function isDownloaded(trackId) {
+    if (!trackId) return false;
+    return S.downloads.some((d) => d.id === trackId);
+  }
+
+  async function initOfflineBlobs() {
+    if (!('caches' in window) || !S.downloads || S.downloads.length === 0) return;
+    try {
+      const cache = await caches.open('freesong-offline-audio-v1');
+      for (const item of S.downloads) {
+        if (!item || !item.id || S.offlineBlobUrls[item.id]) continue;
+        const match = await cache.match('/offline-audio/' + item.id);
+        if (match) {
+          const blob = await match.blob();
+          if (blob && blob.size > 1000) {
+            S.offlineBlobUrls[item.id] = URL.createObjectURL(blob);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('initOfflineBlobs error:', e);
+    }
+  }
+
+  async function downloadTrack(track) {
+    if (!track || !track.id) return;
+    if (S.isDownloadingMap[track.id]) {
+      showToast('Ya se está descargando esta canción');
+      return;
+    }
+    S.isDownloadingMap[track.id] = true;
+    showToast(`Descargando "${track.title}"...`, 3000);
+
+    try {
+      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
+      const res = await fetch(streamUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob = await res.blob();
+      if (!blob || blob.size < 1000) throw new Error('Blob de audio inválido');
+
+      if ('caches' in window) {
+        const cache = await caches.open('freesong-offline-audio-v1');
+        await cache.put(
+          '/offline-audio/' + track.id,
+          new Response(blob, {
+            headers: {
+              'Content-Type': 'audio/mp4',
+              'Content-Length': blob.size.toString()
+            }
+          })
+        );
+      }
+
+      if (S.offlineBlobUrls[track.id]) {
+        URL.revokeObjectURL(S.offlineBlobUrls[track.id]);
+      }
+      S.offlineBlobUrls[track.id] = URL.createObjectURL(blob);
+
+      const entry = {
+        id: track.id,
+        title: track.title,
+        artist: track.artist || 'Artista',
+        thumbnail: track.thumbnail,
+        duration: track.duration || 0,
+        durationText: track.durationText || '',
+        downloadedAt: Date.now(),
+        size: blob.size
+      };
+
+      const existingIdx = S.downloads.findIndex((d) => d.id === track.id);
+      if (existingIdx >= 0) {
+        S.downloads[existingIdx] = entry;
+      } else {
+        S.downloads.unshift(entry);
+      }
+      localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
+
+      const cur = S.queue[S.currentIndex];
+      if (cur && cur.id === track.id) {
+        updateDownloadButton(cur);
+      }
+      if (S.libFilter === 'downloads') {
+        renderLibrary();
+      }
+      showToast(`✓ "${track.title}" descargada para escuchar offline`, 2800);
+    } catch (err) {
+      console.error('Error al descargar:', err);
+      showToast(`Error al descargar "${track.title}"`);
+    } finally {
+      delete S.isDownloadingMap[track.id];
+    }
+  }
+
+  async function deleteDownload(trackId) {
+    if (!trackId) return;
+    try {
+      if ('caches' in window) {
+        const cache = await caches.open('freesong-offline-audio-v1');
+        await cache.delete('/offline-audio/' + trackId);
+      }
+      if (S.offlineBlobUrls[trackId]) {
+        URL.revokeObjectURL(S.offlineBlobUrls[trackId]);
+        delete S.offlineBlobUrls[trackId];
+      }
+    } catch (e) {
+      console.warn('deleteDownload cache error:', e);
+    }
+
+    S.downloads = S.downloads.filter((d) => d.id !== trackId);
+    localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
+
+    const cur = S.queue[S.currentIndex];
+    if (cur && cur.id === trackId) {
+      updateDownloadButton(cur);
+    }
+    if (S.libFilter === 'downloads') {
+      renderLibrary();
+    }
+    showToast('Canción eliminada de descargas');
+  }
+
+  function toggleDownload(track) {
+    if (!track || !track.id) return;
+    if (isDownloaded(track.id)) {
+      deleteDownload(track.id);
+    } else {
+      downloadTrack(track);
+    }
+  }
+
+  async function downloadAllFavorites() {
+    if (!S.favorites || S.favorites.length === 0) {
+      showToast('No tienes canciones favoritas para descargar');
+      return;
+    }
+    const pending = S.favorites.filter((f) => !isDownloaded(f.id));
+    if (pending.length === 0) {
+      showToast('✓ Todas tus canciones favoritas ya están descargadas');
+      return;
+    }
+    showToast(`Descargando ${pending.length} canciones favoritas...`, 3000);
+    for (const t of pending) {
+      await downloadTrack(t);
+    }
+    showToast(`✓ Todas tus favoritas (${pending.length}) descargadas`);
+  }
+
+  function updateDownloadButton(track) {
+    const btn = $('playerDownloadBtn');
+    if (!btn) return;
+    const isDown = track && isDownloaded(track.id);
+    btn.innerHTML = isDown
+      ? '<svg class="w-6 h-6 text-emerald-400"><use href="#i-download-done"/></svg>'
+      : '<svg class="w-6 h-6 text-zinc-300"><use href="#i-download"/></svg>';
+    btn.title = isDown ? 'Descargada (Toca para eliminar)' : 'Descargar para escuchar offline';
+  }
+
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false) {
     if (index < 0 || index >= S.queue.length) return;
@@ -509,7 +673,27 @@
     ensureUpcomingTracks(track);
     enrichTrackDuration(track);
 
-    const streamUrl = track.streamUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
+    // Si la pista está en caché offline, usar el Blob ObjectURL para reproducción instantánea 0ms
+    let streamUrl = track.streamUrl;
+    if (!streamUrl) {
+      if (S.offlineBlobUrls && S.offlineBlobUrls[track.id]) {
+        streamUrl = S.offlineBlobUrls[track.id];
+      } else {
+        streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
+      }
+    }
+
+    // Si está en la lista de descargadas pero aún no se había montado el Blob URL, resolverlo en background
+    if ('caches' in window && isDownloaded(track.id) && !S.offlineBlobUrls[track.id]) {
+      caches.open('freesong-offline-audio-v1').then(async (c) => {
+        const res = await c.match('/offline-audio/' + track.id);
+        if (res) {
+          const blob = await res.blob();
+          const u = URL.createObjectURL(blob);
+          S.offlineBlobUrls[track.id] = u;
+        }
+      }).catch(() => {});
+    }
 
     const isBg = isBackground();
     const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
@@ -756,6 +940,208 @@
     }
   }
 
+  // --- Compartir Verso de Letra en Imagen (Canvas 2D para Historias de Instagram / WhatsApp) ---
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = text.split(' ');
+    let line = '';
+    let curY = y;
+    for (let n = 0; n < words.length; n++) {
+      const testLine = line + words[n] + ' ';
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth && n > 0) {
+        ctx.fillText(line, x, curY);
+        line = words[n] + ' ';
+        curY += lineHeight;
+        if (curY > y + lineHeight * 3) break;
+      } else {
+        line = testLine;
+      }
+    }
+    ctx.fillText(line, x, curY);
+  }
+
+  function downloadBlob(blob, filename) {
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = u;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+  }
+
+  async function shareLyricsCard() {
+    const track = S.currentIndex >= 0 ? S.queue[S.currentIndex] : null;
+    if (!track) {
+      showToast('No hay ninguna canción sonando');
+      return;
+    }
+
+    let line1 = '';
+    let line2 = '';
+    if (S.syncedLyrics && S.syncedLyrics.length > 0 && S.currentLyricIdx >= 0) {
+      line1 = S.syncedLyrics[S.currentLyricIdx]?.text || '';
+      line2 = S.syncedLyrics[S.currentLyricIdx + 1]?.text || '';
+    }
+    if (!line1) {
+      line1 = track.title;
+      line2 = track.artist || '';
+    }
+
+    showToast('Generando tarjeta de historia...', 1800);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1080;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Fondo degradado profundo Spotify
+    const bgGrad = ctx.createLinearGradient(0, 0, 1080, 1080);
+    bgGrad.addColorStop(0, '#091c14');
+    bgGrad.addColorStop(0.5, '#050c09');
+    bgGrad.addColorStop(1, '#020403');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, 1080, 1080);
+
+    // Resplandor esmeralda central
+    const glow = ctx.createRadialGradient(540, 480, 50, 540, 480, 500);
+    glow.addColorStop(0, 'rgba(16, 185, 129, 0.22)');
+    glow.addColorStop(0.6, 'rgba(16, 185, 129, 0.05)');
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, 1080, 1080);
+
+    // Tarjeta Glassmorphic
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 2;
+    roundRect(ctx, 80, 80, 920, 920, 48);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Portada de la canción
+    let coverLoaded = false;
+    const coverImg = new Image();
+    coverImg.crossOrigin = 'anonymous';
+    coverImg.src = track.thumbnail;
+    try {
+      await new Promise((res) => {
+        coverImg.onload = () => res();
+        coverImg.onerror = () => res();
+        setTimeout(res, 1200);
+      });
+      coverLoaded = coverImg.naturalWidth > 0;
+    } catch {}
+
+    // Encabezado Marca FreeSong
+    ctx.save();
+    ctx.font = 'bold 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#10b981';
+    ctx.fillText('FreeSong 🎵', 140, 160);
+
+    ctx.font = '500 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.fillText('LETRAS EN VIVO', 140, 195);
+    ctx.restore();
+
+    // Miniatura de Portada
+    const coverX = 140;
+    const coverY = 240;
+    const coverSize = 130;
+    if (coverLoaded) {
+      ctx.save();
+      roundRect(ctx, coverX, coverY, coverSize, coverSize, 24);
+      ctx.clip();
+      ctx.drawImage(coverImg, coverX, coverY, coverSize, coverSize);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = '#18181b';
+      roundRect(ctx, coverX, coverY, coverSize, coverSize, 24);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Título y Artista
+    ctx.save();
+    ctx.font = 'bold 38px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    const cleanTitle = track.title.length > 28 ? track.title.slice(0, 26) + '...' : track.title;
+    ctx.fillText(cleanTitle, 300, 300);
+
+    ctx.font = '500 26px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#a1a1aa';
+    const cleanArtist = (track.artist || 'Artista').length > 34 ? (track.artist || '').slice(0, 32) + '...' : (track.artist || '');
+    ctx.fillText(cleanArtist, 300, 345);
+    ctx.restore();
+
+    // Comillas decorativas
+    ctx.save();
+    ctx.font = 'bold 110px Georgia, serif';
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+    ctx.fillText('“', 140, 480);
+    ctx.restore();
+
+    // Verso principal
+    ctx.save();
+    ctx.font = 'bold 50px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#f4f4f5';
+    wrapText(ctx, line1, 140, 560, 800, 68);
+
+    if (line2 && line2 !== line1) {
+      ctx.font = '600 38px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = '#34d399';
+      wrapText(ctx, line2, 140, 720, 800, 54);
+    }
+    ctx.restore();
+
+    // Marca de agua pie
+    ctx.save();
+    ctx.font = '500 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.textAlign = 'right';
+    ctx.fillText('Escuchando en freesong.app', 940, 930);
+    ctx.restore();
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        showToast('Error al generar la imagen');
+        return;
+      }
+      const file = new File([blob], `freesong-${track.id}-verso.png`, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: `${track.title} - FreeSong`,
+            text: `"${line1}" — ${track.title} de ${track.artist}`
+          });
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            downloadBlob(blob, file.name);
+          }
+        }
+      } else {
+        downloadBlob(blob, file.name);
+        showToast('✓ Imagen descargada para compartir');
+      }
+    }, 'image/png');
+  }
+
   // --- Subpestaña "Similares" Robusta ---
   async function loadSimilarTracks(track) {
     const container = $('similarList');
@@ -887,6 +1273,13 @@
     $('songMenuTitle').textContent = target.title;
     $('songMenuArtist').textContent = target.artist || 'Artista';
 
+    // Actualizar texto e icono de descarga en el menú
+    const isDown = isDownloaded(target.id);
+    const downTextEl = $('menuDownloadText');
+    if (downTextEl) {
+      downTextEl.textContent = isDown ? 'Eliminar de descargas' : 'Descargar canción offline';
+    }
+
     // Actualizar botones de velocidad
     $$('.speed-opt-btn').forEach((btn) => {
       const spd = parseFloat(btn.getAttribute('data-speed'));
@@ -953,6 +1346,128 @@
     }
   }
 
+  // --- Vista / Perfil del Artista Completo (Estilo Spotify) ---
+  let currentArtistTracks = [];
+  async function openArtistPage(artistName, artistThumb = '') {
+    if (!artistName) return;
+    const cleanArtist = artistName.replace(/\s*-\s*Topic$/i, '').trim();
+    if (!cleanArtist || cleanArtist === 'Artista' || cleanArtist === 'FreeSong Music') return;
+
+    const modal = $('artistViewModal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+
+    $('artistTopBarTitle').textContent = cleanArtist;
+    $('artistHeroName').textContent = cleanArtist;
+    if (artistThumb) {
+      $('artistHeroImg').src = artistThumb;
+    } else {
+      $('artistHeroImg').src = 'icons/icon-512.png';
+    }
+
+    const topListEl = $('artistTopTracksList');
+    topListEl.innerHTML = `<div class="py-10 text-center text-zinc-500 text-xs animate-pulse">Cargando éxitos de ${cleanArtist}...</div>`;
+    const simListEl = $('artistSimilarList');
+    simListEl.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(cleanArtist + ' exitos')}`);
+      const data = await res.json();
+      const tracks = (data.tracks || []).slice(0, 10);
+      currentArtistTracks = tracks;
+
+      if (tracks.length === 0) {
+        topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${cleanArtist}</p>`;
+        return;
+      }
+
+      if (!artistThumb && tracks[0]?.thumbnail) {
+        $('artistHeroImg').src = tracks[0].thumbnail;
+      }
+
+      topListEl.innerHTML = tracks.map((t, idx) => `
+        <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-artist-track-idx="${idx}">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
+            <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold text-white truncate">${t.title}</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+                <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1 shrink-0 ml-2">
+            <button data-artist-download="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+              <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
+            </button>
+            <button data-artist-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
+              <svg class="w-4 h-4"><use href="#i-more"/></svg>
+            </button>
+            <div class="w-8 h-8 rounded-full bg-zinc-800 group-hover:bg-emerald-500 group-hover:text-black text-emerald-400 flex items-center justify-center transition shadow-sm">
+              <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      $$('[data-artist-track-idx]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          if (e.target.closest('[data-artist-more]') || e.target.closest('[data-artist-download]')) return;
+          const i = parseInt(el.getAttribute('data-artist-track-idx'), 10);
+          S.queue = [...tracks];
+          playTrack(i, true);
+        });
+      });
+
+      $$('[data-artist-more]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = parseInt(btn.getAttribute('data-artist-more'), 10);
+          openSongMenu(tracks[i]);
+        });
+      });
+
+      $$('[data-artist-download]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = parseInt(btn.getAttribute('data-artist-download'), 10);
+          toggleDownload(tracks[i]);
+        });
+      });
+
+      // Fans también escuchan
+      const LATIN_STARS = ['Feid', 'Karol G', 'Bad Bunny', 'Rauw Alejandro', 'Quevedo', 'Mora', 'Manuel Turizo', 'Myke Towers', 'Ozuna', 'J Balvin'];
+      const simArtists = LATIN_STARS.filter((a) => a.toLowerCase() !== cleanArtist.toLowerCase()).slice(0, 5);
+
+      simListEl.innerHTML = simArtists.map((artName) => `
+        <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${artName}">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-black font-black text-xs shadow-md">
+              ${artName.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <p class="text-xs font-bold text-white group-hover:text-emerald-400 transition">${artName}</p>
+              <p class="text-[10px] text-zinc-400">Artista similar</p>
+            </div>
+          </div>
+          <svg class="w-4 h-4 text-zinc-500 group-hover:text-white transition"><use href="#i-down" style="transform: rotate(-90deg);"/></svg>
+        </div>
+      `).join('');
+
+      $$('[data-similar-artist]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const name = el.getAttribute('data-similar-artist');
+          openArtistPage(name);
+        });
+      });
+
+    } catch (err) {
+      topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">Error al cargar canciones del artista</p>`;
+    }
+  }
+
   // --- Actualizaciones de Interfaz y Like ---
   function updatePlayerUI(track) {
     $('miniPlayer').classList.remove('hidden');
@@ -965,6 +1480,7 @@
     $('playerCover').src = track.thumbnail;
 
     updateLikeButton(track);
+    updateDownloadButton(track);
     renderQueue();
   }
 
@@ -1106,7 +1622,10 @@
           <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-emerald-400 truncate">${t.title}</p>
-            <p class="text-[11px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold" title="Descargada">✓</span>' : ''}
+              <p class="text-[11px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
             <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -1136,11 +1655,20 @@
           <img src="${t.thumbnail}" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${t.title}</p>
-            <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+              <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            </div>
           </div>
         </div>
-        <div class="flex items-center gap-2 shrink-0 ml-2">
-          ${t.durationText ? `<span class="text-[10px] font-mono text-zinc-500">${t.durationText}</span>` : ''}
+        <div class="flex items-center gap-1 shrink-0 ml-2">
+          ${t.durationText ? `<span class="text-[10px] font-mono text-zinc-500 mr-1">${t.durationText}</span>` : ''}
+          <button data-queue-up="${idx}" class="p-1 text-zinc-400 hover:text-emerald-400 press" title="Subir en cola">
+            <svg class="w-3.5 h-3.5"><use href="#i-arrow-up"/></svg>
+          </button>
+          <button data-queue-down="${idx}" class="p-1 text-zinc-400 hover:text-emerald-400 press" title="Bajar en cola">
+            <svg class="w-3.5 h-3.5"><use href="#i-arrow-down"/></svg>
+          </button>
           <button data-queue-more="${idx}" class="p-1 text-zinc-400 hover:text-white press" aria-label="Opciones">
             <svg class="w-4 h-4"><use href="#i-more"/></svg>
           </button>
@@ -1153,9 +1681,35 @@
 
     $$('[data-queue-idx]').forEach((el) => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('[data-queue-del]') || e.target.closest('[data-queue-more]')) return;
+        if (e.target.closest('[data-queue-del]') || e.target.closest('[data-queue-more]') || e.target.closest('[data-queue-up]') || e.target.closest('[data-queue-down]')) return;
         const i = parseInt(el.getAttribute('data-queue-idx'), 10);
         playTrack(i, true);
+      });
+    });
+
+    $$('[data-queue-up]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = parseInt(btn.getAttribute('data-queue-up'), 10);
+        if (i > S.currentIndex + 1) {
+          const temp = S.queue[i];
+          S.queue[i] = S.queue[i - 1];
+          S.queue[i - 1] = temp;
+          renderQueue();
+        }
+      });
+    });
+
+    $$('[data-queue-down]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = parseInt(btn.getAttribute('data-queue-down'), 10);
+        if (i < S.queue.length - 1) {
+          const temp = S.queue[i];
+          S.queue[i] = S.queue[i + 1];
+          S.queue[i + 1] = temp;
+          renderQueue();
+        }
       });
     });
 
@@ -1181,7 +1735,14 @@
 
   // --- Biblioteca Avanzada: Filtros, Ordenación y Playlists ---
   function getFilteredLibraryTracks() {
-    let list = S.libFilter === 'history' ? [...S.history] : [...S.favorites];
+    let list = [];
+    if (S.libFilter === 'history') {
+      list = [...S.history];
+    } else if (S.libFilter === 'downloads') {
+      list = [...S.downloads];
+    } else {
+      list = [...S.favorites];
+    }
 
     if (S.libSort === 'title') {
       list.sort((a, b) => a.title.localeCompare(b.title));
@@ -1193,6 +1754,7 @@
 
   function renderLibrary() {
     $('libLikedList').classList.toggle('hidden', S.libFilter !== 'likes');
+    $('libDownloadsList')?.classList.toggle('hidden', S.libFilter !== 'downloads');
     $('libHistoryList').classList.toggle('hidden', S.libFilter !== 'history');
     $('libPlaylistsWrap').classList.toggle('hidden', S.libFilter !== 'playlists');
     $('libStatsWrap').classList.toggle('hidden', S.libFilter !== 'stats');
@@ -1201,6 +1763,7 @@
     // Actualizar botones de filtro
     const filterMap = [
       { id: 'libFilterLikes', key: 'likes' },
+      { id: 'libFilterDownloads', key: 'downloads' },
       { id: 'libFilterPlaylists', key: 'playlists' },
       { id: 'libFilterHistory', key: 'history' },
       { id: 'libFilterStats', key: 'stats' }
@@ -1212,6 +1775,8 @@
 
     if (S.libFilter === 'likes') {
       renderTrackList($('libLikedList'), getFilteredLibraryTracks(), 'Aún no tienes canciones favoritas. Toca el corazón en cualquier canción.');
+    } else if (S.libFilter === 'downloads') {
+      renderTrackList($('libDownloadsList'), getFilteredLibraryTracks(), 'No tienes canciones descargadas. Toca ⬇️ en cualquier canción o "Descargar favoritas" para escuchar offline.');
     } else if (S.libFilter === 'history') {
       renderTrackList($('libHistoryList'), getFilteredLibraryTracks(), 'El historial de reproducción está vacío.');
     } else if (S.libFilter === 'playlists') {
@@ -1234,10 +1799,16 @@
           <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${t.title}</p>
-            <p class="text-[10px] text-zinc-400 truncate mt-0.5">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold" title="Descargada">✓</span>' : ''}
+              <p class="text-[10px] text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${t.artist}">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            </div>
           </div>
         </div>
         <div class="flex items-center gap-1 shrink-0 ml-2">
+          <button data-lib-track-down="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+            <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
+          </button>
           <button data-lib-track-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
             <svg class="w-4 h-4"><use href="#i-more"/></svg>
           </button>
@@ -1250,10 +1821,18 @@
 
     $$('[data-lib-track-idx]').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('[data-lib-track-more]') || e.target.closest('[data-lib-track-like]')) return;
+        if (e.target.closest('[data-lib-track-more]') || e.target.closest('[data-lib-track-like]') || e.target.closest('[data-lib-track-down]') || e.target.closest('.artist-link')) return;
         const idx = parseInt(card.getAttribute('data-lib-track-idx'), 10);
         S.queue = [...tracks];
         playTrack(idx, true);
+      });
+    });
+
+    $$('[data-lib-track-down]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.getAttribute('data-lib-track-down'), 10);
+        toggleDownload(tracks[idx]);
       });
     });
 
@@ -1376,12 +1955,13 @@
   function exportLibraryBackup() {
     const backupData = {
       favorites: S.favorites,
+      downloads: S.downloads,
       playlists: S.playlists,
       history: S.history,
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '2.5.0'
+      version: '3.0.0'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1391,7 +1971,7 @@
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
     showToast('Copia de seguridad descargada');
   }
 
@@ -1402,10 +1982,14 @@
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
-        if (parsed.favorites || parsed.playlists) {
+        if (parsed.favorites || parsed.playlists || parsed.downloads) {
           if (Array.isArray(parsed.favorites)) {
             S.favorites = parsed.favorites;
             localStorage.setItem('fs_favorites', JSON.stringify(S.favorites));
+          }
+          if (Array.isArray(parsed.downloads)) {
+            S.downloads = parsed.downloads;
+            localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
           }
           if (Array.isArray(parsed.playlists)) {
             S.playlists = parsed.playlists;
@@ -1430,6 +2014,69 @@
     };
     reader.readAsText(file);
     e.target.value = '';
+  }
+
+  // --- Modo "Tu DJ IA ✨" (Estilo Spotify AI DJ) ---
+  const DJ_VIBES = [
+    { name: 'Urbano & Reggaetón', query: 'reggaeton 2024 exitos perreo' },
+    { name: 'Fiesta & Perreo', query: 'perreo fiesta hits latin dance' },
+    { name: 'Chill & Relax', query: 'chill acoustic lo-fi relax en espanol' },
+    { name: 'Éxitos Globales', query: 'top hits global exitos mundiales' }
+  ];
+
+  async function startDjSession() {
+    const btnVibe = $('btnDjVibe');
+    if (btnVibe) btnVibe.classList.remove('hidden');
+    showToast('✨ Tu DJ IA: Analizando tus canciones favoritas...', 2000);
+
+    let djQueue = [];
+    if (S.favorites.length > 0) {
+      const favSample = [...S.favorites].sort(() => Math.random() - 0.5).slice(0, 2);
+      djQueue.push(...favSample);
+    }
+
+    try {
+      const vibe = DJ_VIBES[S.djVibeIndex];
+      const res = await fetch(`/api/search?q=${encodeURIComponent(vibe.query)}`);
+      const data = await res.json();
+      if (data.tracks && data.tracks.length > 0) {
+        const fresh = data.tracks.filter((t) => !djQueue.some((d) => d.id === t.id)).slice(0, 5);
+        djQueue.push(...fresh);
+      }
+    } catch {}
+
+    if (djQueue.length === 0) {
+      showToast('DJ IA: Buscando éxitos recomendados...');
+      return;
+    }
+
+    S.queue = djQueue;
+    playTrack(0, true);
+    showToast(`🎧 DJ IA: ¡Arrancamos tu sesión (${DJ_VIBES[S.djVibeIndex].name})!`, 3200);
+  }
+
+  async function cycleDjVibe() {
+    S.djVibeIndex = (S.djVibeIndex + 1) % DJ_VIBES.length;
+    const vibe = DJ_VIBES[S.djVibeIndex];
+    const textEl = $('djVibeText');
+    if (textEl) {
+      textEl.textContent = vibe.name.split(' ')[0] || 'Vibe';
+    }
+
+    showToast(`🎧 DJ IA cambiando a: ${vibe.name}...`, 2000);
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(vibe.query)}`);
+      const data = await res.json();
+      if (data.tracks && data.tracks.length > 0) {
+        const fresh = data.tracks.slice(0, 5);
+        S.queue.splice(S.currentIndex + 1, 0, ...fresh);
+        renderQueue();
+        showToast(`🎧 DJ IA: Ahora en vibe ${vibe.name}`);
+        playNext(true);
+      }
+    } catch {
+      showToast('Error al cambiar de vibe');
+    }
   }
 
   // --- Carga de Inicio (Home con Chips) ---
@@ -1593,12 +2240,55 @@
     });
   }
 
-  // --- Búsqueda en Vivo ---
+  // --- Búsqueda en Vivo con Búsquedas Recientes y Exploración de Géneros ---
   let searchTimer = null;
+
+  function renderRecentSearches() {
+    const wrap = $('searchRecentWrap');
+    const container = $('searchRecentChips');
+    if (!wrap || !container) return;
+
+    if (!S.recentSearches || S.recentSearches.length === 0) {
+      wrap.classList.add('hidden');
+      return;
+    }
+
+    wrap.classList.remove('hidden');
+    container.innerHTML = S.recentSearches.map((term, i) => `
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white transition cursor-pointer press group shadow-sm">
+        <span data-search-chip="${term}">${term}</span>
+        <button data-recent-del="${i}" class="text-zinc-500 hover:text-red-400 p-0.5 ml-0.5 text-sm leading-none" title="Eliminar">×</button>
+      </span>
+    `).join('');
+
+    $$('[data-search-chip]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const term = el.getAttribute('data-search-chip');
+        const input = $('searchInput');
+        input.value = term;
+        $('searchClearBtn').classList.remove('hidden');
+        executeSearch(term);
+      });
+    });
+
+    $$('[data-recent-del]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = parseInt(btn.getAttribute('data-recent-del'), 10);
+        S.recentSearches.splice(i, 1);
+        localStorage.setItem('fs_recent_searches', JSON.stringify(S.recentSearches));
+        renderRecentSearches();
+      });
+    });
+  }
+
   function setupSearch() {
     const input = $('searchInput');
     const clearBtn = $('searchClearBtn');
     const results = $('searchResults');
+    const genresWrap = $('searchGenresWrap');
+
+    renderRecentSearches();
 
     input.addEventListener('input', () => {
       const q = input.value.trim();
@@ -1606,7 +2296,10 @@
       clearTimeout(searchTimer);
 
       if (!q) {
-        results.innerHTML = '<div class="text-center py-16 text-zinc-500 text-xs">Escribe para buscar canciones</div>';
+        results.classList.add('hidden');
+        results.innerHTML = '';
+        if (genresWrap) genresWrap.classList.remove('hidden');
+        renderRecentSearches();
         return;
       }
       searchTimer = setTimeout(() => executeSearch(q), 350);
@@ -1615,14 +2308,46 @@
     clearBtn.addEventListener('click', () => {
       input.value = '';
       clearBtn.classList.add('hidden');
-      results.innerHTML = '<div class="text-center py-16 text-zinc-500 text-xs">Escribe para buscar canciones</div>';
+      results.classList.add('hidden');
+      results.innerHTML = '';
+      if (genresWrap) genresWrap.classList.remove('hidden');
+      renderRecentSearches();
       input.focus();
+    });
+
+    $('btnRecentClear')?.addEventListener('click', () => {
+      S.recentSearches = [];
+      localStorage.removeItem('fs_recent_searches');
+      renderRecentSearches();
+      showToast('Historial de búsquedas eliminado');
+    });
+
+    $$('[data-genre-q]').forEach((card) => {
+      card.addEventListener('click', () => {
+        const q = card.getAttribute('data-genre-q');
+        input.value = q;
+        clearBtn.classList.remove('hidden');
+        executeSearch(q);
+      });
     });
   }
 
   async function executeSearch(query) {
     const results = $('searchResults');
+    const genresWrap = $('searchGenresWrap');
+    const recentWrap = $('searchRecentWrap');
+
+    if (genresWrap) genresWrap.classList.add('hidden');
+    if (recentWrap) recentWrap.classList.add('hidden');
+    results.classList.remove('hidden');
     results.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando en YouTube Music...</div>';
+
+    // Guardar en búsquedas recientes
+    if (query && query.trim().length > 1) {
+      const cleanQ = query.trim();
+      S.recentSearches = [cleanQ, ...S.recentSearches.filter((s) => s.toLowerCase() !== cleanQ.toLowerCase())].slice(0, 8);
+      localStorage.setItem('fs_recent_searches', JSON.stringify(S.recentSearches));
+    }
 
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
@@ -1634,15 +2359,21 @@
       }
 
       results.innerHTML = data.tracks.map((t, idx) => `
-        <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press" data-search-idx="${idx}">
+        <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
               <p class="text-sm font-bold text-white truncate">${t.title}</p>
-              <p class="text-xs text-zinc-400 truncate mt-0.5">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+                <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${t.artist}">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              </div>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0 ml-2">
+            <button data-search-down="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+              <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
+            </button>
             <button data-search-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
               <svg class="w-4 h-4"><use href="#i-more"/></svg>
             </button>
@@ -1655,10 +2386,18 @@
 
       $$('[data-search-idx]').forEach((el) => {
         el.addEventListener('click', (e) => {
-          if (e.target.closest('[data-search-more]')) return;
+          if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
           const idx = parseInt(el.getAttribute('data-search-idx'), 10);
           S.queue = [...data.tracks];
           playTrack(idx, true);
+        });
+      });
+
+      $$('[data-search-down]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.getAttribute('data-search-down'), 10);
+          toggleDownload(data.tracks[idx]);
         });
       });
 
@@ -1869,11 +2608,28 @@
     $('playerNextBtn').addEventListener('click', () => playNext());
     $('playerPrevBtn').addEventListener('click', playPrev);
 
-    // Like y Playlist en Full Player
+    // Like, Descarga y Playlist en Full Player
     $('playerLikeBtn').addEventListener('click', () => {
       if (S.currentIndex >= 0) toggleLike(S.queue[S.currentIndex]);
     });
+    $('playerDownloadBtn')?.addEventListener('click', () => {
+      if (S.currentIndex >= 0) toggleDownload(S.queue[S.currentIndex]);
+    });
     $('playerAddPlaylistBtn').addEventListener('click', () => openPlaylistModal());
+
+    // Botón Compartir Verso en Historia (Canvas)
+    $('btnShareLyrics')?.addEventListener('click', shareLyricsCard);
+
+    // Botón Limpiar Cola
+    $('queueClearBtn')?.addEventListener('click', () => {
+      if (S.queue.length > S.currentIndex + 1) {
+        S.queue = S.queue.slice(0, S.currentIndex + 1);
+        renderQueue();
+        showToast('Cola de reproducción limpiada');
+      } else {
+        showToast('La cola ya está vacía');
+      }
+    });
 
     // Menú de 3 puntos ••• del Full Player (abre Bottom Sheet estilo Spotify)
     $('playerMenuBtn').addEventListener('click', () => openSongMenu());
@@ -1882,6 +2638,20 @@
     $('songMenuCloseBtn').addEventListener('click', closeSongMenu);
     $('songMenuModal').addEventListener('click', (e) => {
       if (e.target.id === 'songMenuModal') closeSongMenu();
+    });
+
+    $('menuDownloadBtn')?.addEventListener('click', () => {
+      if (S.menuTargetTrack) toggleDownload(S.menuTargetTrack);
+      closeSongMenu();
+    });
+
+    $('menuViewArtistBtn')?.addEventListener('click', () => {
+      if (S.menuTargetTrack) {
+        const a = S.menuTargetTrack.artist;
+        const th = S.menuTargetTrack.thumbnail;
+        closeSongMenu();
+        openArtistPage(a, th);
+      }
     });
 
     $$('.speed-opt-btn').forEach((btn) => {
@@ -1996,9 +2766,88 @@
 
     // Filtros de Biblioteca
     $('libFilterLikes').addEventListener('click', () => { S.libFilter = 'likes'; renderLibrary(); });
+    $('libFilterDownloads')?.addEventListener('click', () => { S.libFilter = 'downloads'; renderLibrary(); });
     $('libFilterPlaylists').addEventListener('click', () => { S.libFilter = 'playlists'; renderLibrary(); });
     $('libFilterHistory').addEventListener('click', () => { S.libFilter = 'history'; renderLibrary(); });
     $('libFilterStats').addEventListener('click', () => { S.libFilter = 'stats'; renderLibrary(); });
+    $('libDownloadAllBtn')?.addEventListener('click', downloadAllFavorites);
+
+    // Modo "Tu DJ IA ✨"
+    $('btnDjVibe')?.addEventListener('click', cycleDjVibe);
+    $('homeDjCard')?.addEventListener('click', startDjSession);
+
+    // Modal: Perfil del Artista Completo
+    $('artistBackBtn')?.addEventListener('click', () => {
+      $('artistViewModal')?.classList.add('hidden');
+    });
+
+    $('artistPlayBtn')?.addEventListener('click', () => {
+      if (currentArtistTracks.length > 0) {
+        S.queue = [...currentArtistTracks];
+        playTrack(0, true);
+      }
+    });
+
+    $('artistShuffleBtn')?.addEventListener('click', () => {
+      if (currentArtistTracks.length > 0) {
+        S.queue = [...currentArtistTracks].sort(() => Math.random() - 0.5);
+        playTrack(0, true);
+        showToast('Reproduciendo canciones del artista en aleatorio');
+      }
+    });
+
+    $('artistRadioBtn')?.addEventListener('click', () => {
+      const name = $('artistHeroName')?.textContent;
+      if (name) startArtistRadio(name);
+    });
+
+    $('artistShareBtn')?.addEventListener('click', () => {
+      const name = $('artistHeroName')?.textContent;
+      if (navigator.share) {
+        navigator.share({
+          title: `${name} en FreeSong`,
+          text: `Escucha los mejores temas de ${name} en FreeSong`,
+          url: window.location.origin
+        }).catch(() => {});
+      } else {
+        navigator.clipboard?.writeText(window.location.origin);
+        showToast(`Enlace de ${name} copiado`);
+      }
+    });
+
+    // Delegación global para enlaces de Artista (.artist-link)
+    document.addEventListener('click', (e) => {
+      const link = e.target.closest('.artist-link');
+      if (link) {
+        e.stopPropagation();
+        const a = link.getAttribute('data-artist') || link.textContent.trim();
+        const th = link.getAttribute('data-thumb') || '';
+        openArtistPage(a, th);
+      }
+    });
+
+    // Clicks en nombres de artista en reproductores
+    $('miniArtist')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cur = S.queue[S.currentIndex];
+      if (cur) openArtistPage(cur.artist, cur.thumbnail);
+    });
+
+    $('playerArtist')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cur = S.queue[S.currentIndex];
+      if (cur) openArtistPage(cur.artist, cur.thumbnail);
+    });
+
+    $('songMenuArtist')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (S.menuTargetTrack) {
+        const a = S.menuTargetTrack.artist;
+        const th = S.menuTargetTrack.thumbnail;
+        closeSongMenu();
+        openArtistPage(a, th);
+      }
+    });
 
     // Ordenación de Biblioteca
     $('libSortSelect').addEventListener('change', (e) => {
@@ -2166,6 +3015,7 @@
     setupSearch();
     renderLibrary();
     loadHomeContent('todo');
+    initOfflineBlobs();
 
     // Reproducción directa por URL (?track=VIDEO_ID)
     const params = new URLSearchParams(window.location.search);

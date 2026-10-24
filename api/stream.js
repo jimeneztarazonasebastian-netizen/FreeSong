@@ -1,5 +1,8 @@
-// api/stream.js - Proxy y streaming de audio de alta velocidad con verificación estricta de tipo MIME y Range
+// api/stream.js - Proxy y streaming de audio de alta velocidad optimizado para Vercel Edge CDN y Safari iOS
+// Cero cortes: Fragmentación de rangos a 1.5MB máx, caché Edge (86400s) y rotación de 10 nodos con fallback a itag 139
 import { Readable } from 'stream';
+
+const MAX_CHUNK = 1.5 * 1024 * 1024; // 1.5 MB por chunk para evitar límites de Vercel Hobby
 
 const CANDIDATE_NODES = [
   'https://yt.chocolatemoo53.com',
@@ -8,10 +11,13 @@ const CANDIDATE_NODES = [
   'https://invidious.nerdvpn.de',
   'https://invidious.protokolla.fi',
   'https://iv.ggtyler.dev',
-  'https://invidious.lunar.icu'
+  'https://invidious.lunar.icu',
+  'https://invidious.private.coffee',
+  'https://inv.tux.pizza',
+  'https://invidious.perennialte.ch'
 ];
 
-async function verifyAudioStream(url) {
+async function verifyAudioStream(url, timeoutMs = 2000) {
   try {
     const res = await fetch(url, {
       method: 'GET',
@@ -19,7 +25,7 @@ async function verifyAudioStream(url) {
         'Range': 'bytes=0-1024',
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15'
       },
-      signal: AbortSignal.timeout(2200)
+      signal: AbortSignal.timeout(timeoutMs)
     });
 
     const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -36,7 +42,7 @@ export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const videoId = (req.query && req.query.id) || urlObj.searchParams.get('id');
   const backupIndex = parseInt((req.query && req.query.backup) || urlObj.searchParams.get('backup') || '0', 10);
-  const itag = (req.query && req.query.itag) || urlObj.searchParams.get('itag') || '140';
+  let itag = (req.query && req.query.itag) || urlObj.searchParams.get('itag') || '140';
   const directMode = (req.query && (req.query.direct === '1' || req.query.direct === 'true')) || urlObj.searchParams.get('direct') === '1';
 
   if (!videoId) {
@@ -62,6 +68,26 @@ export default async function handler(req, res) {
     });
   }
 
+  // Parsear Range del cliente (iOS Safari envía típicamente 'bytes=START-' o 'bytes=START-END')
+  const clientRange = req.headers && req.headers.range ? req.headers.range : 'bytes=0-';
+  let startByte = 0;
+  let requestedEnd = null;
+
+  const matchRange = /bytes=(\d+)-(\d*)/.exec(clientRange);
+  if (matchRange) {
+    startByte = parseInt(matchRange[1], 10) || 0;
+    if (matchRange[2]) {
+      requestedEnd = parseInt(matchRange[2], 10);
+    }
+  }
+
+  // Limitar chunk a máximo MAX_CHUNK (1.5MB) para evitar límites de Vercel y permitir caché Edge rápida
+  let endByte = requestedEnd != null
+    ? Math.min(requestedEnd, startByte + MAX_CHUNK - 1)
+    : startByte + MAX_CHUNK - 1;
+
+  const upstreamRangeHeader = `bytes=${startByte}-${endByte}`;
+
   // Preparar lista de candidatos rotando según backupIndex
   const rotatedNodes = [...CANDIDATE_NODES.slice(backupIndex % CANDIDATE_NODES.length), ...CANDIDATE_NODES.slice(0, backupIndex % CANDIDATE_NODES.length)];
   const candidateUrls = [];
@@ -69,66 +95,72 @@ export default async function handler(req, res) {
   for (const host of rotatedNodes) {
     candidateUrls.push(`${host}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`);
   }
-  // Añadir itag 139 (AAC 48kbps) como alternativa si itag era 140
-  if (itag === '140') {
-    candidateUrls.push(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`);
-  }
+
+  // Alternativa itag 139 (AAC 48k) ultraligera si itag 140 tarda
+  candidateUrls.push(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`);
+  candidateUrls.push(`https://invidious.jing.rocks/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`);
 
   let verifiedUrl = null;
 
-  // Carrera entre los primeros nodos rápidos
+  // Carrera rápida (máximo 2000ms) entre los primeros nodos
   try {
     const winner = await Promise.any(
       candidateUrls.slice(0, 4).map(async (url) => {
-        const check = await verifyAudioStream(url);
+        const check = await verifyAudioStream(url, 2000);
         if (check.ok) return check.url;
         throw new Error('Check failed');
       })
     );
     verifiedUrl = winner;
   } catch {
-    // Si los primeros 4 fallan en paralelo, probar secuencialmente los restantes
-    for (const url of candidateUrls.slice(4)) {
-      const check = await verifyAudioStream(url);
-      if (check.ok) {
-        verifiedUrl = check.url;
-        break;
+    // Si los primeros 4 fallan o tardan >2000ms, probar rápidamente el fallback liviano itag 139
+    const check139 = await verifyAudioStream(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`, 1800);
+    if (check139.ok) {
+      verifiedUrl = check139.url;
+      itag = '139';
+    } else {
+      for (const url of candidateUrls.slice(4)) {
+        const check = await verifyAudioStream(url, 2000);
+        if (check.ok) {
+          verifiedUrl = check.url;
+          break;
+        }
       }
     }
   }
 
-  // Fallback garantizado por defecto
+  // Fallback garantizado
   if (!verifiedUrl) {
     verifiedUrl = `https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`;
   }
 
-  // Si se pide redirección directa con 302
+  // Si se pide redirección directa
   if (directMode) {
     if (res && res.setHeader) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
       return res.redirect(302, verifiedUrl);
     }
     return Response.redirect(verifiedUrl, 302);
   }
 
-  // MODO PROXY STREAMING: reenviar Range y pipe de bytes directos desde freesong-pied.vercel.app
+  // MODO PROXY STREAMING: Solicitud de fragmento exacto <= 1.5MB
   try {
-    const rangeHeader = req.headers && req.headers.range ? req.headers.range : 'bytes=0-';
     const upstreamRes = await fetch(verifiedUrl, {
       headers: {
-        'Range': rangeHeader,
-        'User-Agent': req.headers && req.headers['user-agent'] ? req.headers['user-agent'] : 'Mozilla/5.0'
+        'Range': upstreamRangeHeader,
+        'User-Agent': req.headers && req.headers['user-agent'] ? req.headers['user-agent'] : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)'
       }
     });
 
     const ct = upstreamRes.headers.get('content-type') || 'audio/mp4';
 
-    // Si el nodo devuelve HTML en el proxy, saltar a redirección
+    // Si el nodo devolvió HTML, saltar a nodo de respaldo garantizado
     if (ct.includes('html') || ct.includes('text')) {
-      if (res && res.setHeader) return res.redirect(302, `https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`);
-      return Response.redirect(`https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`, 302);
+      const safeUrl = `https://yt.chocolatemoo53.com/latest_version?id=${encodeURIComponent(videoId)}&itag=139&local=true`;
+      if (res && res.setHeader) return res.redirect(302, safeUrl);
+      return Response.redirect(safeUrl, 302);
     }
 
     if (res && res.setHeader) {
@@ -137,7 +169,8 @@ export default async function handler(req, res) {
       res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
       res.setHeader('Content-Type', ct);
       res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
+      // Cachear en Edge CDN de Vercel por 24 horas para respuesta de 20ms en reproducciones y seeks
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400');
 
       const contentRange = upstreamRes.headers.get('content-range');
       if (contentRange) res.setHeader('Content-Range', contentRange);
@@ -157,7 +190,7 @@ export default async function handler(req, res) {
     headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
     headers.set('Content-Type', ct);
     headers.set('Accept-Ranges', 'bytes');
-    headers.set('Cache-Control', 'public, max-age=3600');
+    headers.set('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400');
 
     const contentRange = upstreamRes.headers.get('content-range');
     if (contentRange) headers.set('Content-Range', contentRange);
@@ -170,7 +203,7 @@ export default async function handler(req, res) {
       headers
     });
   } catch (proxyErr) {
-    console.error('Error en proxy stream, recurriendo a 302:', proxyErr.message);
+    console.error('Error en proxy stream chunk, recurriendo a 302:', proxyErr.message);
     if (res && res.setHeader) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       return res.redirect(302, verifiedUrl);

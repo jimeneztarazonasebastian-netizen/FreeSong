@@ -1,6 +1,6 @@
-// Service worker de FreeSong: guarda la app para abrirla sin internet.
-// El audio y las APIs externas no se interceptan (las descargas viven en IndexedDB).
-const VERSION = 'freesong-v2.0.0';
+// Service worker de FreeSong v3.0.0: guarda el app shell para abrirla sin internet.
+// Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
+const VERSION = 'freesong-v3.0.0';
 const SHELL = [
   './',
   'index.html',
@@ -22,7 +22,11 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(
+        keys
+          .filter((k) => k !== VERSION && !k.startsWith('freesong-offline-'))
+          .map((k) => caches.delete(k))
+      ))
       .then(() => self.clients.claim())
   );
 });
@@ -31,6 +35,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  // No interceptar llamadas de API ni audio offline
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/offline-audio/')) return;
 
   // Páginas: primero la red (para recibir actualizaciones), si falla la copia guardada.
   if (req.mode === 'navigate') {

@@ -46,6 +46,12 @@
     <symbol id="i-radio" viewBox="0 0 24 24"><path fill="currentColor" d="M3.24 6.15C2.51 7.43 2 8.9 2 10.5c0 3.31 2.69 6 6 6s6-2.69 6-6c0-1.6-.51-3.07-1.24-4.35L11.3 7.6c.44.87.7 1.86.7 2.9 0 2.21-1.79 4-4 4s-4-1.79-4-4c0-1.04.26-2.03.7-2.9L3.24 6.15zM8 8c-1.38 0-2.5 1.12-2.5 2.5S6.62 13 8 13s2.5-1.12 2.5-2.5S9.38 8 8 8zm12.5-6.5L12 8.5v3.42l6.5-5.5V20c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-1h-2v1c0 2.21 1.79 4 4 4h10.5c2.21 0 4-1.79 4-4V3.5c0-1.1-.9-2-2-2z"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></symbol>
     <symbol id="i-stats" viewBox="0 0 24 24"><path fill="currentColor" d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></symbol>
+    <symbol id="i-download-done" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></symbol>
+    <symbol id="i-dj" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></symbol>
   </svg>
 
   <div class="flex flex-col h-screen w-screen overflow-hidden">
@@ -59,6 +65,11 @@
         <span id="headerGreeting" class="font-extrabold text-lg tracking-tight text-white">FreeSong</span>
       </div>
       <div class="flex items-center gap-2">
+        <!-- Botón Vibe de DJ IA -->
+        <button id="btnDjVibe" class="hidden text-[11px] font-bold px-2.5 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1.5 press shadow-[0_0_10px_rgba(6,182,212,0.3)] animate-pulse" aria-label="Cambiar Vibe del DJ">
+          <svg class="w-3.5 h-3.5"><use href="#i-dj"/></svg>
+          <span id="djVibeText">Urbano</span>
+        </button>
         <!-- Indicador de Sleep Timer activo -->
         <button id="sleepTimerBadge" class="hidden text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5 press shadow-[0_0_10px_rgba(16,185,129,0.3)]" aria-label="Temporizador de apagado activo">
           <svg class="w-3.5 h-3.5"><use href="#i-timer"/></svg>
@@ -74,7 +85,7 @@
     <main id="mainContainer" class="flex-1 overflow-y-auto px-4 pb-32 no-scrollbar">
 
       <!-- PESTAÑA: INICIO -->
-      <section id="viewHome" class="space-y-5 pt-1">
+      <section id="viewHome" class="space-y-4 pt-1">
         <!-- Chips de filtro rápido (estilo Spotify / YouTube Music) -->
         <div id="homeChipsBar" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-2 -mx-4 px-4 sticky top-0 bg-zinc-950/95 backdrop-blur-md z-10 border-b border-zinc-900/60">
           <button class="chip-btn active" data-chip="todo">Todo</button>
@@ -84,6 +95,26 @@
           <button class="chip-btn" data-chip="pop">Pop</button>
           <button class="chip-btn" data-chip="workout">Workout</button>
           <button class="chip-btn" data-chip="relax">Relax</button>
+        </div>
+
+        <!-- Tarjeta Interactiva: Tu DJ IA ✨ (Estilo Spotify AI DJ) -->
+        <div id="homeDjCard" class="relative overflow-hidden rounded-3xl p-4 bg-gradient-to-r from-emerald-600/30 via-cyan-600/25 to-indigo-600/35 border border-emerald-500/30 shadow-[0_10px_30px_-10px_rgba(16,185,129,0.25)] cursor-pointer press group">
+          <div class="flex items-center gap-3.5 relative z-10">
+            <div class="w-12 h-12 rounded-full bg-gradient-to-tr from-emerald-400 to-cyan-400 flex items-center justify-center text-black font-black text-sm shrink-0 dj-orb">
+              <svg class="w-6 h-6"><use href="#i-dj"/></svg>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-black uppercase tracking-wider text-emerald-400">DJ IA DE FREESONG ✨</span>
+                <span class="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-bold">Smart Mix</span>
+              </div>
+              <h3 class="text-sm font-black text-white truncate mt-0.5">Tu Sesión Inteligente</h3>
+              <p class="text-[11px] text-zinc-300 truncate">Toca para mezclar tus gustos con joyas nuevas</p>
+            </div>
+            <div class="w-10 h-10 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg shrink-0 group-hover:scale-105 transition">
+              <svg class="w-5 h-5"><use href="#i-play"/></svg>
+            </div>
+          </div>
         </div>
 
         <!-- Banner PWA para iPhone / Safari -->
@@ -138,7 +169,63 @@
           <button id="searchClearBtn" class="hidden absolute right-3 top-3 text-zinc-400 hover:text-white p-0.5"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
         </div>
 
-        <div id="searchResults" class="space-y-1.5">
+        <!-- Búsquedas Recientes (cuando el input está vacío) -->
+        <div id="searchRecentWrap" class="hidden space-y-2 pt-1">
+          <div class="flex items-center justify-between px-1">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Búsquedas recientes</h3>
+            <button id="searchClearRecentBtn" class="text-[11px] text-zinc-500 hover:text-zinc-300">Borrar todo</button>
+          </div>
+          <div id="searchRecentChips" class="flex flex-wrap gap-2"></div>
+        </div>
+
+        <!-- Explorar Todo: Géneros y Vibes estilo Spotify -->
+        <div id="searchGenresWrap" class="space-y-2.5 pt-1">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Explorar todo</h3>
+          <div class="grid grid-cols-2 gap-2.5">
+            <div class="genre-card bg-gradient-to-br from-emerald-600 to-teal-950 border border-emerald-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Reggaeton exitos">
+              <span class="text-sm font-black text-white">Reggaetón</span>
+              <span class="text-[10px] text-emerald-200/80">Flow & Perreo</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-pink-600 to-rose-950 border border-pink-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Pop Latino exitos">
+              <span class="text-sm font-black text-white">Pop Latino</span>
+              <span class="text-[10px] text-pink-200/80">Éxitos radiantes</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-purple-600 to-violet-950 border border-purple-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Trap Latino canciones">
+              <span class="text-sm font-black text-white">Trap Latino</span>
+              <span class="text-[10px] text-purple-200/80">Bajos pesados</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-green-500 to-emerald-950 border border-green-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Feid Karol G exitos">
+              <span class="text-sm font-black text-white">Feid & Karol G</span>
+              <span class="text-[10px] text-green-200/80">Mix Medellín</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-amber-600 to-yellow-950 border border-amber-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Cumbia Vallenato exitos">
+              <span class="text-sm font-black text-white">Cumbia & Vallenato</span>
+              <span class="text-[10px] text-amber-200/80">Sabor tropical</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-cyan-600 to-blue-950 border border-cyan-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Electronica EDM festival">
+              <span class="text-sm font-black text-white">Electrónica</span>
+              <span class="text-[10px] text-cyan-200/80">Festival & Dance</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-red-600 to-zinc-950 border border-red-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Rock en espanol clasicos">
+              <span class="text-sm font-black text-white">Rock en Español</span>
+              <span class="text-[10px] text-red-200/80">Clásicos eternos</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-fuchsia-600 to-purple-950 border border-fuchsia-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Baladas Romanticas">
+              <span class="text-sm font-black text-white">Románticas</span>
+              <span class="text-[10px] text-fuchsia-200/80">Para el corazón</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-orange-600 to-red-950 border border-orange-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Workout motivation music">
+              <span class="text-sm font-black text-white">Gym & Training</span>
+              <span class="text-[10px] text-orange-200/80">Máxima energía</span>
+            </div>
+            <div class="genre-card bg-gradient-to-br from-teal-500 to-blue-950 border border-teal-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Top 50 canciones virales">
+              <span class="text-sm font-black text-white">Éxitos Virales</span>
+              <span class="text-[10px] text-teal-200/80">Tendencias TikTok</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="searchResults" class="hidden space-y-1.5">
           <div class="text-center py-16 text-zinc-500 text-xs">
             Escribe el nombre de una canción, artista o álbum para buscar
           </div>
@@ -159,6 +246,7 @@
         <!-- Filtros Rápidos de Biblioteca (Pills estilo Spotify) -->
         <div class="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
           <button id="libFilterLikes" class="chip-btn active">Me Gusta ❤️</button>
+          <button id="libFilterDownloads" class="chip-btn">Descargadas ⬇️</button>
           <button id="libFilterPlaylists" class="chip-btn">Playlists 📂</button>
           <button id="libFilterHistory" class="chip-btn">Historial 🕒</button>
           <button id="libFilterStats" class="chip-btn">Cápsula Sonora 📊</button>
@@ -175,6 +263,9 @@
               <svg class="w-4 h-4"><use href="#i-shuffle"/></svg>
               <span>Aleatorio</span>
             </button>
+            <button id="libDownloadAllBtn" class="p-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-emerald-400 press" aria-label="Descargar todas">
+              <svg class="w-4 h-4"><use href="#i-download"/></svg>
+            </button>
           </div>
           <!-- Selector de Orden -->
           <div class="flex items-center gap-1 text-[11px] text-zinc-400">
@@ -187,9 +278,10 @@
           </div>
         </div>
 
-        <!-- Vista 1 de Biblioteca: Lista de Canciones (Me Gusta / Historial) -->
+        <!-- Vista 1 de Biblioteca: Lista de Canciones (Me Gusta / Historial / Descargadas) -->
         <div id="libTrackListWrap" class="space-y-1.5">
           <div id="libLikedList" class="space-y-1.5"></div>
+          <div id="libDownloadsList" class="hidden space-y-1.5"></div>
           <div id="libHistoryList" class="hidden space-y-1.5"></div>
         </div>
 
@@ -413,9 +505,12 @@
         <div class="w-full max-w-sm flex items-center justify-between gap-3 px-1">
           <div class="min-w-0 flex-1 text-left">
             <h2 id="playerTitle" class="text-xl sm:text-2xl font-black text-white truncate tracking-tight">Sin reproducción</h2>
-            <p id="playerArtist" class="text-sm sm:text-base text-zinc-400 truncate mt-0.5">FreeSong Music</p>
+            <p id="playerArtist" class="text-sm sm:text-base text-zinc-400 truncate mt-0.5 cursor-pointer hover:text-emerald-400 transition artist-link">FreeSong Music</p>
           </div>
           <div class="flex items-center gap-1 shrink-0">
+            <button id="playerDownloadBtn" class="p-2 text-zinc-300 hover:text-emerald-400 press" aria-label="Descargar canción">
+              <svg class="w-6 h-6"><use href="#i-download"/></svg>
+            </button>
             <button id="playerLikeBtn" class="p-2 text-zinc-300 hover:text-emerald-400 press" aria-label="Me gusta">
               <svg class="w-6 h-6"><use href="#i-heart"/></svg>
             </button>
@@ -436,14 +531,23 @@
         </div>
         <div class="flex items-center justify-between px-1">
           <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">A continuación</h3>
-          <span id="queueTotalCount" class="text-[11px] text-zinc-500">0 canciones</span>
+          <div class="flex items-center gap-2">
+            <span id="queueTotalCount" class="text-[11px] text-zinc-500">0 canciones</span>
+            <button id="queueClearBtn" class="text-[10px] font-bold text-red-400 hover:text-red-300 press">Limpiar cola</button>
+          </div>
         </div>
         <div id="queueList" class="space-y-1.5"></div>
       </div>
 
       <!-- Vista 3: Letras sincronizadas -->
-      <div id="sheetLyricsView" class="hidden flex-1 overflow-y-auto px-4 py-6 space-y-4 text-center no-scrollbar">
-        <div id="lyricsContainer" class="space-y-4 py-8">
+      <div id="sheetLyricsView" class="hidden flex-1 overflow-y-auto px-4 py-4 space-y-3 text-center no-scrollbar">
+        <div class="flex items-center justify-center pt-1">
+          <button id="btnShareLyrics" class="px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold hover:bg-emerald-500 hover:text-black transition press flex items-center gap-1.5 shadow-sm">
+            <svg class="w-4 h-4"><use href="#i-share"/></svg>
+            <span>Compartir verso en historia ✨</span>
+          </button>
+        </div>
+        <div id="lyricsContainer" class="space-y-4 py-4">
           <p class="text-zinc-500 text-sm">Buscando letra sincronizada...</p>
         </div>
       </div>
@@ -500,7 +604,7 @@
           <img id="songMenuCover" src="icons/icon-192.png" alt="" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
           <div class="min-w-0 flex-1">
             <h4 id="songMenuTitle" class="text-sm font-bold text-white truncate">Canción</h4>
-            <p id="songMenuArtist" class="text-xs text-zinc-400 truncate">Artista</p>
+            <p id="songMenuArtist" class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link">Artista</p>
           </div>
           <button id="songMenuCloseBtn" class="p-2 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
         </div>
@@ -523,6 +627,14 @@
 
         <!-- Opciones de lista estilo Spotify -->
         <div class="space-y-1 text-sm font-medium text-zinc-200">
+          <button id="menuDownloadBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-download"/></svg>
+            <span id="menuDownloadText">Descargar canción offline</span>
+          </button>
+          <button id="menuViewArtistBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
+            <svg class="w-5 h-5 text-sky-400"><use href="#i-check"/></svg>
+            <span>Ver perfil del Artista</span>
+          </button>
           <button id="menuPlayNextBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
             <svg class="w-5 h-5 text-zinc-400"><use href="#i-queue"/></svg>
             <span>Reproducir a continuación</span>
@@ -547,6 +659,64 @@
             <svg class="w-5 h-5 text-zinc-400"><use href="#i-share"/></svg>
             <span>Compartir canción</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Página / Perfil del Artista (Estilo Spotify) -->
+    <div id="artistViewModal" class="hidden fixed inset-0 z-50 bg-zinc-950 overflow-y-auto no-scrollbar">
+      <!-- Barra superior fija con botón atrás -->
+      <div class="sticky top-0 z-20 flex items-center justify-between px-4 py-3 bg-zinc-950/80 backdrop-blur-md" style="padding-top: max(12px, env(safe-area-inset-top));">
+        <button id="artistBackBtn" class="p-2 -ml-2 text-zinc-300 hover:text-white press" aria-label="Volver">
+          <svg class="w-6 h-6"><use href="#i-down" style="transform: rotate(90deg);"/></svg>
+        </button>
+        <h3 id="artistTopBarTitle" class="text-sm font-bold text-white truncate max-w-[200px]">Artista</h3>
+        <button id="artistShareBtn" class="p-2 -mr-2 text-zinc-300 hover:text-white press" aria-label="Compartir artista">
+          <svg class="w-5 h-5"><use href="#i-share"/></svg>
+        </button>
+      </div>
+
+      <!-- Hero del Artista -->
+      <div class="relative px-5 pt-2 pb-6 space-y-4">
+        <div class="w-full aspect-[16/10] max-h-64 rounded-3xl overflow-hidden bg-zinc-900 relative shadow-2xl">
+          <img id="artistHeroImg" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
+          <div class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"></div>
+          <div class="absolute bottom-4 left-4 right-4 space-y-1">
+            <span class="inline-flex items-center gap-1 text-[11px] font-bold text-sky-400 bg-sky-500/20 border border-sky-500/30 px-2 py-0.5 rounded-full backdrop-blur-sm">
+              <svg class="w-3 h-3"><use href="#i-check"/></svg> Artista Verificado
+            </span>
+            <h1 id="artistHeroName" class="text-2xl sm:text-4xl font-black text-white tracking-tight drop-shadow-md">Artista</h1>
+          </div>
+        </div>
+
+        <!-- Botones de Acción del Artista -->
+        <div class="flex items-center justify-between pt-1">
+          <div class="flex items-center gap-3">
+            <button id="artistPlayBtn" class="w-12 h-12 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.4)] press">
+              <svg class="w-6 h-6"><use href="#i-play"/></svg>
+            </button>
+            <button id="artistShuffleBtn" class="w-10 h-10 rounded-full bg-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center press border border-zinc-700">
+              <svg class="w-5 h-5"><use href="#i-shuffle"/></svg>
+            </button>
+          </div>
+          <button id="artistRadioBtn" class="px-3.5 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-xs font-bold text-emerald-400 flex items-center gap-1.5 press">
+            <svg class="w-3.5 h-3.5"><use href="#i-radio"/></svg>
+            <span>Radio</span>
+          </button>
+        </div>
+
+        <!-- Sección Populares (Top 10) -->
+        <div class="space-y-2 pt-2">
+          <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 px-1">Canciones Populares</h2>
+          <div id="artistTopTracksList" class="space-y-1.5">
+            <div class="py-8 text-center text-zinc-500 text-xs animate-pulse">Cargando canciones del artista...</div>
+          </div>
+        </div>
+
+        <!-- Sección Fans también escuchan -->
+        <div class="space-y-2 pt-4 pb-16">
+          <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 px-1">Fans también escuchan</h2>
+          <div id="artistSimilarList" class="space-y-1.5"></div>
         </div>
       </div>
     </div>

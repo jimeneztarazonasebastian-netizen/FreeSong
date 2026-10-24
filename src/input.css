@@ -95,6 +95,39 @@ main, section, .scrollable-y {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* Animación DJ IA Orb */
+@keyframes djPulseOrb {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 25px rgba(16, 185, 129, 0.4), 0 0 50px rgba(6, 182, 212, 0.3);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 40px rgba(16, 185, 129, 0.7), 0 0 80px rgba(6, 182, 212, 0.5);
+  }
+}
+
+.dj-orb {
+  animation: djPulseOrb 3s infinite ease-in-out;
+}
+
+/* Tarjetas de Género / Explorar Todo */
+.genre-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  padding: 1rem;
+  min-height: 5.75rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.genre-card:active {
+  transform: scale(0.97);
+}
+
+#artistViewModal {
+  transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .app-shell {
   height: 100%;
   height: 100dvh;
