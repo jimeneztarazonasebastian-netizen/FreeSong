@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#09090b" />
-  <meta name="description" content="FreeSong: Reproductor de música premium con catálogo completo, letras sincronizadas y crossfade para iPhone y web." />
+  <meta name="description" content="FreeSong: Reproductor de música premium con catálogo completo, letras sincronizadas, cola editable y sonido continuo en iPhone y web." />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -38,20 +38,33 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></symbol>
     <symbol id="i-sparkle" viewBox="0 0 24 24"><path fill="currentColor" d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path fill="currentColor" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><path fill="currentColor" d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0 0 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a8.994 8.994 0 0 0 7.03-14.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
+    <symbol id="i-playlist-add" viewBox="0 0 24 24"><path fill="currentColor" d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><path fill="currentColor" d="M3.24 6.15C2.51 7.43 2 8.9 2 10.5c0 3.31 2.69 6 6 6s6-2.69 6-6c0-1.6-.51-3.07-1.24-4.35L11.3 7.6c.44.87.7 1.86.7 2.9 0 2.21-1.79 4-4 4s-4-1.79-4-4c0-1.04.26-2.03.7-2.9L3.24 6.15zM8 8c-1.38 0-2.5 1.12-2.5 2.5S6.62 13 8 13s2.5-1.12 2.5-2.5S9.38 8 8 8zm12.5-6.5L12 8.5v3.42l6.5-5.5V20c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-1h-2v1c0 2.21 1.79 4 4 4h10.5c2.21 0 4-1.79 4-4V3.5c0-1.1-.9-2-2-2z"/></symbol>
   </svg>
 
   <div class="flex flex-col h-screen w-screen overflow-hidden">
 
     <!-- Encabezado superior -->
-    <header class="flex items-center justify-between px-5 pt-3 pb-2.5 shrink-0 bg-zinc-950/80 backdrop-blur-md z-10" style="padding-top: max(12px, env(safe-area-inset-top));">
+    <header class="flex items-center justify-between px-4 pt-3 pb-2.5 shrink-0 bg-zinc-950/90 backdrop-blur-md z-10" style="padding-top: max(12px, env(safe-area-inset-top));">
       <div class="flex items-center gap-2.5">
-        <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-black text-base shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+        <div class="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-black text-sm shadow-[0_0_15px_rgba(16,185,129,0.3)]">
           FS
         </div>
-        <span class="font-bold text-lg tracking-tight text-white">FreeSong</span>
+        <span id="headerGreeting" class="font-extrabold text-lg tracking-tight text-white">FreeSong</span>
       </div>
-      <div id="headerPill" class="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">
-        Web Premium
+      <div class="flex items-center gap-2">
+        <!-- Indicador de Sleep Timer activo -->
+        <button id="sleepTimerBadge" class="hidden text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5 press shadow-[0_0_10px_rgba(16,185,129,0.3)]" aria-label="Temporizador de apagado activo">
+          <svg class="w-3.5 h-3.5"><use href="#i-timer"/></svg>
+          <span id="sleepTimerText">30m</span>
+        </button>
+        <div id="headerPill" class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">
+          Web Premium
+        </div>
       </div>
     </header>
 
@@ -59,7 +72,18 @@
     <main id="mainContainer" class="flex-1 overflow-y-auto px-4 pb-32 no-scrollbar">
 
       <!-- PESTAÑA: INICIO -->
-      <section id="viewHome" class="space-y-6 pt-2">
+      <section id="viewHome" class="space-y-5 pt-1">
+        <!-- Chips de filtro rápido (estilo Spotify / YouTube Music) -->
+        <div id="homeChipsBar" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-2 -mx-4 px-4 sticky top-0 bg-zinc-950/95 backdrop-blur-md z-10 border-b border-zinc-900/60">
+          <button class="chip-btn active" data-chip="todo">Todo</button>
+          <button class="chip-btn" data-chip="parati">Para ti</button>
+          <button class="chip-btn" data-chip="tendencias">Tendencias</button>
+          <button class="chip-btn" data-chip="reggaeton">Reggaetón</button>
+          <button class="chip-btn" data-chip="pop">Pop</button>
+          <button class="chip-btn" data-chip="workout">Workout</button>
+          <button class="chip-btn" data-chip="relax">Relax</button>
+        </div>
+
         <!-- Banner PWA para iPhone / Safari -->
         <div id="pwaBanner" class="hidden rounded-2xl p-4 bg-zinc-900/90 border border-emerald-500/30 shadow-lg flex items-start gap-3 text-xs text-zinc-300">
           <div class="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -68,23 +92,35 @@
           <div class="flex-1 space-y-1">
             <p class="font-bold text-white text-sm">¿Quieres escuchar con la pantalla apagada?</p>
             <p class="text-zinc-400 leading-relaxed">
-              En Safari, toca el botón <strong>Compartir</strong> <span class="text-white">⎋</span> y luego <strong>«Agregar a la pantalla de inicio»</strong> para que iOS mantenga la música sonando sin pausas en segundo plano.
+              En Safari, toca el botón <strong>Compartir</strong> <span class="text-white">⎋</span> y luego <strong>«Agregar a la pantalla de inicio»</strong> para sonido continuo sin interrupciones.
             </p>
           </div>
           <button id="pwaBannerClose" class="text-zinc-400 hover:text-white p-1 -mr-1 -mt-1" aria-label="Cerrar"><svg class="w-4 h-4"><use href="#i-close"/></svg></button>
         </div>
 
-        <div class="rounded-2xl p-5 bg-gradient-to-br from-emerald-950/60 via-zinc-900/60 to-zinc-950 border border-emerald-500/20 shadow-lg relative overflow-hidden">
-          <div class="relative z-10 space-y-1.5">
-            <span class="text-[10px] font-bold tracking-widest uppercase text-emerald-400">Spotify Experience</span>
-            <h1 class="text-2xl font-extrabold text-white tracking-tight">Tu música sin límites</h1>
-            <p class="text-xs text-zinc-300 max-w-sm">Canciones completas, sonido continuo y letras en tiempo real.</p>
+        <!-- Acceso Rápido / Recientes (2 columnas compactas estilo Spotify) -->
+        <div id="quickAccessSection" class="space-y-2.5">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-0.5">Acceso Rápido</h2>
+          <div id="quickAccessGrid" class="grid grid-cols-2 gap-2">
+            <!-- Rellenado por app.js -->
           </div>
-          <div class="absolute -right-6 -bottom-6 w-32 h-32 rounded-full bg-emerald-500/10 blur-2xl pointer-events-none"></div>
         </div>
 
-        <!-- Secciones dinámicas de YouTube Music -->
-        <div id="homeShelves" class="space-y-6">
+        <!-- Tendencias Hoy (Lista numerada 1..5) -->
+        <div id="trendingSection" class="space-y-3 pt-1">
+          <div class="flex items-center justify-between px-0.5">
+            <h2 class="text-base font-bold text-white tracking-tight flex items-center gap-2">
+              <span>Tendencias Hoy</span>
+              <span class="text-[9px] uppercase font-extrabold text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/20">Top 5</span>
+            </h2>
+          </div>
+          <div id="trendingList" class="space-y-1.5">
+            <!-- Rellenado por app.js -->
+          </div>
+        </div>
+
+        <!-- Secciones dinámicas / Carruseles -->
+        <div id="homeShelves" class="space-y-6 pt-1">
           <div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">
             Cargando recomendaciones de música...
           </div>
@@ -96,7 +132,7 @@
         <div class="relative">
           <svg class="w-5 h-5 absolute left-3.5 top-3 text-zinc-400 pointer-events-none"><use href="#i-search"/></svg>
           <input id="searchInput" type="search" placeholder="¿Qué quieres escuchar hoy?" autocomplete="off"
-            class="w-full pl-11 pr-10 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition shadow-inner" />
+            class="w-full pl-11 pr-10 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-base text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition shadow-inner" />
           <button id="searchClearBtn" class="hidden absolute right-3 top-3 text-zinc-400 hover:text-white p-0.5"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
         </div>
 
@@ -109,9 +145,16 @@
 
       <!-- PESTAÑA: BIBLIOTECA -->
       <section id="viewLibrary" class="hidden space-y-5 pt-2">
-        <h2 class="text-xl font-bold text-white tracking-tight">Tu biblioteca</h2>
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-bold text-white tracking-tight">Tu biblioteca</h2>
+          <button id="libNewPlaylistBtn" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full press">
+            <svg class="w-4 h-4"><use href="#i-plus"/></svg>
+            <span>Nueva playlist</span>
+          </button>
+        </div>
+
         <div class="grid grid-cols-2 gap-3">
-          <button id="libLikedBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-gradient-to-br from-emerald-600/30 to-zinc-900 border border-emerald-500/20 text-left h-28 press">
+          <button id="libLikedBtn" class="flex flex-col justify-between p-4 rounded-2xl bg-gradient-to-br from-emerald-600/30 to-zinc-900 border border-emerald-500/20 text-left h-28 press shadow-md">
             <div class="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-md"><svg class="w-5 h-5"><use href="#i-heart-fill"/></svg></div>
             <div>
               <p class="font-bold text-sm text-white">Tus Me Gusta</p>
@@ -127,6 +170,14 @@
           </button>
         </div>
 
+        <!-- Sección de Playlists del Usuario -->
+        <div class="space-y-2 pt-2">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Tus Playlists</h3>
+          <div id="userPlaylistsList" class="space-y-1.5">
+            <!-- Rellenado por app.js -->
+          </div>
+        </div>
+
         <div id="libPlaylistContent" class="space-y-2 pt-2"></div>
       </section>
 
@@ -134,12 +185,25 @@
       <section id="viewSettings" class="hidden space-y-5 pt-2 max-w-lg mx-auto">
         <h2 class="text-xl font-bold text-white tracking-tight">Ajustes</h2>
 
+        <!-- Sleep Timer en Ajustes -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-bold text-sm text-white">Temporizador de apagado (Sleep Timer)</p>
+              <p class="text-xs text-zinc-400">Detén la música automáticamente para dormir.</p>
+            </div>
+            <button id="settingSleepTimerBtn" class="px-3 py-1.5 rounded-xl bg-zinc-800 text-xs font-bold text-emerald-400 border border-zinc-700 press">
+              Configurar
+            </button>
+          </div>
+        </div>
+
         <!-- Crossfade Card -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3.5">
           <div class="flex items-center justify-between">
             <div class="pr-3">
               <p class="font-bold text-sm text-white">Crossfade (Fundido entre pistas)</p>
-              <p class="text-xs text-zinc-400">Solapamiento fluido estilo Spotify Premium. <span class="text-emerald-400">En iPhone se recomienda desactivar para segundo plano continuo.</span></p>
+              <p class="text-xs text-zinc-400">Solapamiento fluido estilo Spotify Premium. <span class="text-emerald-400">En iOS se recomienda mantener desactivado para segundo plano.</span></p>
             </div>
             <label class="relative inline-flex items-center cursor-pointer shrink-0">
               <input id="settingCrossfadeToggle" type="checkbox" class="sr-only peer" />
@@ -156,11 +220,24 @@
           </div>
         </div>
 
+        <!-- Calidad de Audio / Ahorro de Datos -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-bold text-sm text-white">Calidad de audio</p>
+              <p class="text-xs text-zinc-400">AAC 128 kbps (itag 140) optimizado para iPhone.</p>
+            </div>
+            <span class="text-[11px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 rounded-full">
+              Alta (AAC)
+            </span>
+          </div>
+        </div>
+
         <!-- Info Card -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
-          <p>Reproductor web de música libre para uso personal. Diseñado especialmente para iPhone (iOS) con soporte completo para pantalla de bloqueo, controles Bluetooth y segundo plano.</p>
-          <p class="text-[11px] text-zinc-500 pt-2">Versión 1.0.0 Web PWA</p>
+          <p>Reproductor web de música libre para uso personal. Diseñado especialmente para iPhone (iOS) con soporte completo para pantalla de bloqueo, Dynamic Island, controles Bluetooth y segundo plano continuo.</p>
+          <p class="text-[11px] text-zinc-500 pt-2">Versión 2.0.0 Web PWA</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -171,8 +248,8 @@
 
     <!-- Mini reproductor flotante -->
     <div id="miniPlayer" class="hidden fixed bottom-[64px] left-3 right-3 z-30 rounded-2xl bg-zinc-900/95 border border-zinc-800/80 backdrop-blur-xl shadow-2xl p-2.5 transition-all duration-300 flex items-center justify-between cursor-pointer" style="margin-bottom: max(0px, env(safe-area-inset-bottom));">
-      <!-- Barra delgada de progreso -->
-      <div class="absolute -top-[1px] left-3 right-3 h-[2px] bg-zinc-800 rounded-full overflow-hidden">
+      <!-- Barra delgada de progreso en el borde inferior -->
+      <div class="absolute bottom-0 left-3 right-3 h-[2px] bg-zinc-800 rounded-full overflow-hidden">
         <div id="miniProgress" class="h-full bg-emerald-500 transition-all duration-200" style="width: 0%;"></div>
       </div>
 
@@ -185,6 +262,9 @@
       </div>
 
       <div class="flex items-center gap-1 shrink-0 ml-2">
+        <button id="miniLikeBtn" aria-label="Me gusta" class="p-2 text-zinc-400 hover:text-emerald-400 press">
+          <svg class="w-5 h-5"><use href="#i-heart"/></svg>
+        </button>
         <button id="miniPlayBtn" aria-label="Reproducir o pausar" class="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center press shadow-md">
           <svg class="w-5 h-5"><use href="#i-play"/></svg>
         </button>
@@ -211,52 +291,87 @@
     </nav>
 
     <!-- Reproductor a pantalla completa -->
-    <div id="fullPlayerSheet" class="fixed inset-0 z-50 bg-zinc-950 flex flex-col justify-between p-6 transition-transform duration-300 translate-y-full" style="padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(20px, env(safe-area-inset-bottom));">
+    <div id="fullPlayerSheet" class="fixed inset-0 z-50 bg-zinc-950 flex flex-col justify-between p-5 transition-transform duration-300 translate-y-full" style="padding-top: max(16px, env(safe-area-inset-top)); padding-bottom: max(16px, env(safe-area-inset-bottom));">
       <!-- Cabecera del reproductor -->
       <div class="flex items-center justify-between shrink-0">
         <button id="playerCloseBtn" class="p-2 -ml-2 text-zinc-300 hover:text-white press" aria-label="Cerrar reproductor">
           <svg class="w-7 h-7"><use href="#i-down"/></svg>
         </button>
-        <div class="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-full border border-zinc-800 text-xs">
-          <button id="tabTrackBtn" class="px-3 py-1 rounded-full bg-emerald-500 text-black font-bold transition">Canción</button>
-          <button id="tabLyricsBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Letras</button>
-          <button id="tabQueueBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Cola</button>
+        <div class="text-center">
+          <p class="text-[10px] uppercase font-bold tracking-widest text-zinc-400">Reproduciendo desde tu cola</p>
         </div>
-        <button id="playerLikeBtn" class="p-2 -mr-2 text-zinc-300 hover:text-emerald-400 press" aria-label="Me gusta">
-          <svg class="w-6 h-6"><use href="#i-heart"/></svg>
+        <button id="playerMenuBtn" class="p-2 -mr-2 text-zinc-300 hover:text-white press" aria-label="Menú y temporizador">
+          <svg class="w-6 h-6"><use href="#i-more"/></svg>
         </button>
       </div>
 
-      <!-- Vista 1: Carátula y detalles de canción -->
-      <div id="sheetTrackView" class="flex-1 flex flex-col justify-center items-center my-auto min-h-0 py-4 space-y-6">
-        <div class="w-full max-w-[min(80vw,36vh)] aspect-square rounded-3xl overflow-hidden shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] bg-zinc-900 relative">
-          <img id="playerCover" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
-        </div>
-        <div class="w-full max-w-sm text-left">
-          <h2 id="playerTitle" class="text-xl sm:text-2xl font-extrabold text-white truncate tracking-tight">Sin reproducción</h2>
-          <p id="playerArtist" class="text-sm sm:text-base text-zinc-400 truncate mt-0.5">FreeSong Music</p>
+      <!-- Barra de 3 pestañas estilo YouTube Music -->
+      <div class="flex items-center justify-center shrink-0 pt-2 pb-1">
+        <div class="flex items-center gap-1 bg-zinc-900/90 p-1 rounded-full border border-zinc-800 text-xs">
+          <button id="tabTrackBtn" class="px-3 py-1 rounded-full bg-emerald-500 text-black font-bold transition">Canción</button>
+          <button id="tabQueueBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Siguiente</button>
+          <button id="tabLyricsBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Letras</button>
+          <button id="tabSimilarBtn" class="px-3 py-1 rounded-full text-zinc-400 hover:text-white font-medium transition">Similares</button>
         </div>
       </div>
 
-      <!-- Vista 2: Letras sincronizadas -->
+      <!-- Vista 1: Carátula y detalles de canción -->
+      <div id="sheetTrackView" class="flex-1 flex flex-col justify-center items-center my-auto min-h-0 py-2 space-y-5">
+        <div class="w-full max-w-[min(76vw,34vh)] aspect-square rounded-3xl overflow-hidden shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] bg-zinc-900 relative">
+          <img id="playerCover" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
+        </div>
+        <div class="w-full max-w-sm flex items-center justify-between gap-3 px-1">
+          <div class="min-w-0 flex-1 text-left">
+            <h2 id="playerTitle" class="text-xl sm:text-2xl font-black text-white truncate tracking-tight">Sin reproducción</h2>
+            <p id="playerArtist" class="text-sm sm:text-base text-zinc-400 truncate mt-0.5">FreeSong Music</p>
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            <button id="playerLikeBtn" class="p-2 text-zinc-300 hover:text-emerald-400 press" aria-label="Me gusta">
+              <svg class="w-6 h-6"><use href="#i-heart"/></svg>
+            </button>
+            <button id="playerAddPlaylistBtn" class="p-2 text-zinc-300 hover:text-white press" aria-label="Añadir a playlist">
+              <svg class="w-6 h-6"><use href="#i-playlist-add"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Vista 2: Cola de reproducción (Siguiente) -->
+      <div id="sheetQueueView" class="hidden flex-1 overflow-y-auto px-1 py-3 space-y-3 no-scrollbar">
+        <div class="rounded-2xl p-3 bg-zinc-900/60 border border-zinc-800/60 space-y-2">
+          <p class="text-[10px] uppercase font-bold tracking-wider text-emerald-400">Sonando ahora</p>
+          <div id="queueNowPlaying" class="flex items-center gap-3">
+            <!-- Rellenado por app.js -->
+          </div>
+        </div>
+        <div class="flex items-center justify-between px-1">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">A continuación</h3>
+          <span id="queueTotalCount" class="text-[11px] text-zinc-500">0 canciones</span>
+        </div>
+        <div id="queueList" class="space-y-1.5"></div>
+      </div>
+
+      <!-- Vista 3: Letras sincronizadas -->
       <div id="sheetLyricsView" class="hidden flex-1 overflow-y-auto px-4 py-6 space-y-4 text-center no-scrollbar">
         <div id="lyricsContainer" class="space-y-4 py-8">
           <p class="text-zinc-500 text-sm">Buscando letra sincronizada...</p>
         </div>
       </div>
 
-      <!-- Vista 3: Cola de reproducción -->
-      <div id="sheetQueueView" class="hidden flex-1 overflow-y-auto px-2 py-4 space-y-2 no-scrollbar">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-500 px-2 mb-2">A continuación</h3>
-        <div id="queueList" class="space-y-1.5"></div>
+      <!-- Vista 4: Canciones Similares / Relacionadas -->
+      <div id="sheetSimilarView" class="hidden flex-1 overflow-y-auto px-1 py-3 space-y-3 no-scrollbar">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Canciones parecidas y recomendadas</h3>
+        <div id="similarList" class="space-y-1.5">
+          <p class="text-zinc-500 text-xs py-8 text-center">Cargando canciones recomendadas...</p>
+        </div>
       </div>
 
       <!-- Barra de progreso y controles (fijos abajo del sheet) -->
-      <div class="shrink-0 space-y-4 w-full max-w-sm mx-auto pt-2">
+      <div class="shrink-0 space-y-3.5 w-full max-w-sm mx-auto pt-2">
         <!-- Seekbar -->
         <div>
-          <input id="playerSeek" type="range" min="0" max="100" step="0.1" value="0" class="w-full accent-emerald-500 cursor-pointer h-1.5" />
-          <div class="flex justify-between text-[11px] font-mono text-zinc-400 mt-1">
+          <input id="playerSeek" type="range" min="0" max="100" step="0.1" value="0" class="w-full accent-emerald-500 cursor-pointer h-2" />
+          <div class="flex justify-between text-xs font-mono text-zinc-400 mt-1">
             <span id="playerCurTime">0:00</span>
             <span id="playerDurTime">0:00</span>
           </div>
@@ -279,6 +394,66 @@
           <button id="playerRepeatBtn" aria-label="Repetir" class="p-2 text-zinc-400 hover:text-white press">
             <svg class="w-5 h-5"><use href="#i-repeat"/></svg>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Temporizador de Apagado (Sleep Timer) -->
+    <div id="sleepTimerModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-timer"/></svg>
+            <h3 class="font-bold text-white text-base">Temporizador de apagado</h3>
+          </div>
+          <button id="sleepTimerCloseBtn" class="p-1 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+        </div>
+        <p class="text-xs text-zinc-400">Detén la música automáticamente cuando te vayas a dormir.</p>
+        <div class="space-y-2">
+          <button data-sleep="15" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-zinc-800/80 hover:bg-zinc-700 font-semibold text-sm text-zinc-200 flex justify-between items-center press">
+            <span>15 minutos</span>
+          </button>
+          <button data-sleep="30" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-zinc-800/80 hover:bg-zinc-700 font-semibold text-sm text-zinc-200 flex justify-between items-center press">
+            <span>30 minutos</span>
+          </button>
+          <button data-sleep="45" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-zinc-800/80 hover:bg-zinc-700 font-semibold text-sm text-zinc-200 flex justify-between items-center press">
+            <span>45 minutos</span>
+          </button>
+          <button data-sleep="60" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-zinc-800/80 hover:bg-zinc-700 font-semibold text-sm text-zinc-200 flex justify-between items-center press">
+            <span>1 hora</span>
+          </button>
+          <button data-sleep="end_track" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-zinc-800/80 hover:bg-zinc-700 font-semibold text-sm text-zinc-200 flex justify-between items-center press">
+            <span>Al terminar esta canción</span>
+          </button>
+          <button data-sleep="0" class="sleep-opt-btn w-full text-left px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 font-semibold text-sm text-red-400 flex justify-between items-center press">
+            <span>Desactivar temporizador</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Guardar en Playlist -->
+    <div id="playlistModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-playlist-add"/></svg>
+            <h3 class="font-bold text-white text-base">Guardar en playlist</h3>
+          </div>
+          <button id="playlistModalCloseBtn" class="p-1 text-zinc-400 hover:text-white press"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+        </div>
+
+        <!-- Crear nueva playlist -->
+        <div class="flex items-center gap-2">
+          <input id="newPlaylistInput" type="text" placeholder="Nombre de la nueva playlist..." class="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500" />
+          <button id="createPlaylistConfirmBtn" class="px-3.5 py-2.5 rounded-xl bg-emerald-500 text-black font-bold text-xs press">Crear</button>
+        </div>
+
+        <div class="space-y-1.5 max-h-48 overflow-y-auto no-scrollbar pt-1">
+          <p class="text-[11px] font-bold uppercase text-zinc-500">Tus playlists</p>
+          <div id="modalPlaylistsList" class="space-y-1">
+            <!-- Rellenado por app.js -->
+          </div>
         </div>
       </div>
     </div>
