@@ -15,10 +15,14 @@ const TYPES = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml'
 };
-
 createServer(async (req, res) => {
   try {
     const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    if (urlPath.startsWith('/api/')) {
+      const apiName = urlPath.replace('/api/', '').split('?')[0];
+      const apiModule = await import(`../api/${apiName}.js`);
+      return apiModule.default(req, res);
+    }
     let file = normalize(join(ROOT, urlPath));
     if (!file.startsWith(ROOT)) throw new Error('forbidden');
     if ((await stat(file).catch(() => null))?.isDirectory()) file = join(file, 'index.html');

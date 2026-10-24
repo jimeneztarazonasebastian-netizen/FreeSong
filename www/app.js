@@ -238,6 +238,9 @@
   });
 
   // --- Eventos del Reproductor HTML5 ---
+  let isTransitioningTrack = false;
+  let trackTransitionTimeout = null;
+
   audioDecks.forEach((deck, idx) => {
     deck.addEventListener('play', () => {
       if (idx === activeDeckIdx) {
@@ -249,6 +252,11 @@
     });
 
     deck.addEventListener('playing', () => {
+      isTransitioningTrack = false;
+      if (trackTransitionTimeout) {
+        clearTimeout(trackTransitionTimeout);
+        trackTransitionTimeout = null;
+      }
       if (streamWatchdogTimer) {
         clearTimeout(streamWatchdogTimer);
         streamWatchdogTimer = null;
@@ -256,13 +264,19 @@
       if (S.queue[S.currentIndex]) {
         S.queue[S.currentIndex]._fallbackStep = 0;
       }
+      S.isPlaying = true;
+      updatePlayPauseIcons(true);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
     deck.addEventListener('pause', () => {
+      // Ignorar el evento 'pause' interno que el navegador emite automáticamente al cambiar deck.src
+      if (isTransitioningTrack) return;
+
       if (idx === activeDeckIdx && !isCrossfading) {
         if (document.visibilityState === 'hidden' && S.isPlaying && !userIntentionalPause) {
           setTimeout(() => {
-            if (S.isPlaying && !userIntentionalPause && deck.paused) {
+            if (S.isPlaying && !userIntentionalPause && deck.paused && !isTransitioningTrack) {
               deck.play().catch(() => {});
             }
           }, 30);
@@ -275,13 +289,13 @@
     });
 
     deck.addEventListener('ended', () => {
-      if (idx === activeDeckIdx && !isCrossfading) {
+      if (idx === activeDeckIdx && !isCrossfading && !isTransitioningTrack) {
         handleTrackFinished();
       }
     });
 
     deck.addEventListener('timeupdate', () => {
-      if (idx !== activeDeckIdx) return;
+      if (idx !== activeDeckIdx || isTransitioningTrack) return;
       const cur = deck.currentTime || 0;
 
       // Si ya avanzó más de 0.5s, desactivar watchdog
@@ -320,8 +334,8 @@
           prefetchNextTrack();
         }
 
-        // Corte exacto al final (evitar silencio de 3 minutos de DASH)
-        if (cur >= dur - 0.8) {
+        // Corte exacto al final (evitar silencio de 3 minutos de DASH) con guardia de transición
+        if (cur >= dur - 0.8 && dur > 5 && !isTransitioningTrack) {
           handleTrackFinished();
           return;
         }
@@ -333,6 +347,7 @@
           !isIOS &&
           !isBackground() &&
           !isCrossfading &&
+          !isTransitioningTrack &&
           timeLeft <= S.crossfadeDuration &&
           timeLeft > 0.8 &&
           S.queue.length > 1
@@ -348,22 +363,30 @@
 
     // Errores o bloqueos en la conexión
     deck.addEventListener('error', (e) => {
-      if (idx === activeDeckIdx && S.currentIndex >= 0 && S.isPlaying && !userIntentionalPause) {
+      if (idx === activeDeckIdx && S.currentIndex >= 0 && S.isPlaying && !userIntentionalPause && !isTransitioningTrack) {
         console.warn('Error en deck de audio:', e);
         handleStreamFailure(S.queue[S.currentIndex], deck);
       }
     });
 
     deck.addEventListener('stalled', () => {
-      // Aviso transitorio de red móvil durante buffering normal
-      console.log('Buffering de audio (stalled)...');
+      // Buffering de audio
     });
   });
 
   function handleTrackFinished() {
+    if (isTransitioningTrack) return;
+    isTransitioningTrack = true;
+
+    if (trackTransitionTimeout) clearTimeout(trackTransitionTimeout);
+    trackTransitionTimeout = setTimeout(() => {
+      isTransitioningTrack = false;
+    }, 8000);
+
     if (S.sleepTimerEndTrack) {
       clearSleepTimer();
       pausePlayback();
+      isTransitioningTrack = false;
       return;
     }
 
@@ -663,12 +686,20 @@
 
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false) {
-    if (index < 0 || index >= S.queue.length) return;
+    if (index < 0 || index >= S.queue.length) {
+      isTransitioningTrack = false;
+      return;
+    }
     S.currentIndex = index;
     const track = S.queue[index];
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
+
+    // Reset inmediato de posición visual en la interfaz para la nueva pista
+    if ($('playerCurTime')) $('playerCurTime').textContent = '0:00';
+    if ($('playerSeek')) $('playerSeek').value = 0;
+    if ($('miniProgress')) $('miniProgress').style.width = '0%';
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -737,29 +768,37 @@
         inPlayer.volume = targetVolume;
         inPlayer.playbackRate = S.playbackRate;
 
+        // Reset de posición
+        try { inPlayer.currentTime = 0; } catch {}
+
         // Asignación directa y síncrona en iOS Safari
         inPlayer.src = streamUrl;
         const playPromise = inPlayer.play();
         if (playPromise && playPromise.catch) {
-          playPromise.catch((err) => console.warn('inPlayer play error:', err));
+          playPromise.catch((err) => {
+            if (err.name !== 'AbortError') {
+              console.warn('inPlayer play error:', err);
+            }
+          });
         }
       }
 
       S.isPlaying = true;
       updatePlayPauseIcons(true);
 
-      // Iniciar Watchdog calibrado de 6 segundos contra canciones trabadas en 0:00 / 0:00
+      // Iniciar Watchdog calibrado de 7 segundos contra canciones trabadas en 0:00 / 0:00
       if (streamWatchdogTimer) clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = setTimeout(() => {
         const p = getActivePlayer();
-        if (S.isPlaying && !userIntentionalPause && p && (p.currentTime === 0 || p.readyState < 2)) {
-          console.warn('Watchdog de 6s disparado: Audio trabado en 0:00, ejecutando fallback...');
+        if (!isTransitioningTrack && S.isPlaying && !userIntentionalPause && p && (p.currentTime === 0 || p.readyState < 2)) {
+          console.warn('Watchdog de 7s disparado: Audio trabado en 0:00, ejecutando fallback...');
           handleStreamFailure(track, p);
         }
-      }, 6000);
+      }, 7000);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
+      isTransitioningTrack = false;
     }
   }
 
@@ -801,6 +840,11 @@
 
   function pausePlayback() {
     userIntentionalPause = true;
+    isTransitioningTrack = false;
+    if (trackTransitionTimeout) {
+      clearTimeout(trackTransitionTimeout);
+      trackTransitionTimeout = null;
+    }
     if (streamWatchdogTimer) {
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
@@ -837,18 +881,24 @@
 
   function playNext(immediate = false) {
     userIntentionalPause = false;
-    if (S.queue.length === 0) return;
+    if (S.queue.length === 0) {
+      isTransitioningTrack = false;
+      return;
+    }
     if (S.repeat === 'one') {
       const p = getActivePlayer();
       if (p) {
         p.currentTime = 0;
         p.play().catch(() => {});
       }
+      isTransitioningTrack = false;
       return;
     }
     const nextIdx = getNextIndex();
     if (nextIdx >= 0) {
       playTrack(nextIdx, typeof immediate === 'boolean' ? immediate : true);
+    } else {
+      isTransitioningTrack = false;
     }
   }
 
