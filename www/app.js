@@ -601,7 +601,7 @@
     }
   }
 
-  // --- Autoplay Continuo: Recomendaciones Infinitas ---
+  // --- Autoplay Continuo: Recomendaciones Infinitas (SimpMusic Engine via /api/queue) ---
   let isFetchingRelated = false;
   async function ensureUpcomingTracks(track, signal) {
     if (!S.autoplayInfinite || !track || isFetchingRelated) return;
@@ -609,10 +609,7 @@
     if (remaining < 4) {
       isFetchingRelated = true;
       try {
-        const query = track.artist && track.artist !== 'Artista'
-          ? `${track.artist} exitos canciones`
-          : `${track.title} mix`;
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal });
+        const res = await fetch(`/api/queue?id=${encodeURIComponent(track.id)}`, { signal });
         const data = await res.json();
         if (data.tracks && data.tracks.length > 0) {
           const existingIds = new Set(S.queue.map((t) => t.id));
@@ -620,6 +617,7 @@
           if (newTracks.length > 0) {
             S.queue.push(...newTracks);
             renderQueue();
+            showToast('🎵 Cola infinita: pistas similares añadidas', 1800);
           }
         }
       } catch (err) {
@@ -1513,15 +1511,26 @@
     });
   }
 
-  async function startArtistRadio(artist) {
+  async function startArtistRadio(artist, trackId = null) {
     showToast(`Creando Radio de ${artist}...`);
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(artist + ' exitos')}`);
-      const data = await res.json();
-      if (data.tracks && data.tracks.length > 0) {
-        S.queue = [...data.tracks.slice(0, 20)];
+      let tracks = [];
+      if (trackId) {
+        const res = await fetch(`/api/queue?id=${encodeURIComponent(trackId)}`);
+        const data = await res.json();
+        tracks = data.tracks || [];
+      } else {
+        const res = await fetch(`/api/artist?name=${encodeURIComponent(artist)}`);
+        const data = await res.json();
+        tracks = data.topSongs || data.tracks || [];
+      }
+
+      if (tracks.length > 0) {
+        S.queue = [...tracks];
         playTrack(0, true);
         showToast(`Radio de ${artist} iniciada (${S.queue.length} canciones)`);
+      } else {
+        showToast('No se pudieron obtener pistas para la radio');
       }
     } catch {
       showToast('Error al iniciar la radio');
@@ -1627,22 +1636,220 @@
     simListEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(primaryArtist + ' exitos')}`);
+      const isBrowseId = String(rawArtistName).startsWith('UC');
+      const res = await fetch(`/api/artist?${isBrowseId ? 'id=' : 'name='}${encodeURIComponent(rawArtistName)}`);
       const data = await res.json();
-      const tracks = (data.tracks || []).slice(0, 10);
+      const tracks = data.topSongs || data.tracks || [];
+      const albums = [...(data.albums || []), ...(data.singles || [])];
+      const similar = data.similar || [];
       currentArtistTracks = tracks;
+
+      if (data.artist) {
+        if (data.artist.name) {
+          $('artistHeroName').textContent = data.artist.name;
+          $('artistTopBarTitle').textContent = data.artist.name;
+        }
+        if (data.artist.thumbnail) {
+          $('artistHeroImg').src = data.artist.thumbnail;
+        }
+      }
 
       if (tracks.length === 0) {
         topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${primaryArtist}</p>`;
+      } else {
+        if (!artistThumb && !data.artist?.thumbnail && tracks[0]?.thumbnail) {
+          $('artistHeroImg').src = tracks[0].thumbnail;
+        }
+
+        topListEl.innerHTML = tracks.map((t, idx) => `
+          <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-artist-track-idx="${idx}">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
+              <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+                <div class="flex items-center gap-1.5 mt-0.5">
+                  ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+                  <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0 ml-2">
+              <button data-artist-download="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+                <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
+              </button>
+              <button data-artist-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
+                <svg class="w-4 h-4"><use href="#i-more"/></svg>
+              </button>
+              <div class="w-8 h-8 rounded-full bg-zinc-800 group-hover:bg-emerald-500 group-hover:text-black text-emerald-400 flex items-center justify-center transition shadow-sm">
+                <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
+              </div>
+            </div>
+          </div>
+        `).join('');
+
+        $$('[data-artist-track-idx]').forEach((el) => {
+          el.addEventListener('click', (e) => {
+            if (e.target.closest('[data-artist-more]') || e.target.closest('[data-artist-download]')) return;
+            const i = parseInt(el.getAttribute('data-artist-track-idx'), 10);
+            S.queue = [...tracks];
+            playTrack(i, true);
+          });
+        });
+
+        $$('[data-artist-more]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const i = parseInt(btn.getAttribute('data-artist-more'), 10);
+            openSongMenu(tracks[i]);
+          });
+        });
+
+        $$('[data-artist-download]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const i = parseInt(btn.getAttribute('data-artist-download'), 10);
+            toggleDownload(tracks[i]);
+          });
+        });
+      }
+
+      // Renderizar Álbumes y Singles
+      const albumsListEl = $('artistAlbumsList');
+      const albumsSectionEl = $('artistAlbumsSection');
+      if (albumsListEl) {
+        if (albums.length > 0) {
+          if (albumsSectionEl) albumsSectionEl.classList.remove('hidden');
+          albumsListEl.innerHTML = albums.map((alb) => `
+            <div class="p-3 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/90 border border-zinc-800/60 transition cursor-pointer press flex flex-col justify-between group" data-album-id="${alb.id}" data-album-title="${esc(alb.title)}">
+              <div class="aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
+                <img src="${alb.thumbnail || 'icons/icon-192.png'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-bold text-white truncate group-hover:text-emerald-400 transition">${esc(alb.title)}</p>
+                <p class="text-[10px] text-zinc-400 truncate mt-0.5">${esc(alb.year || 'Álbum')}</p>
+              </div>
+            </div>
+          `).join('');
+
+          $$('[data-album-id]').forEach((el) => {
+            el.addEventListener('click', () => {
+              const aId = el.getAttribute('data-album-id');
+              const aTitle = el.getAttribute('data-album-title');
+              openCollection('album', aId, aTitle);
+            });
+          });
+        } else if (albumsSectionEl) {
+          albumsSectionEl.classList.add('hidden');
+        }
+      }
+
+      // Fans también escuchan
+      if (simListEl) {
+        const simToShow = similar.length > 0 ? similar : [
+          { name: 'Feid', subscribers: 'Artista similar' },
+          { name: 'Karol G', subscribers: 'Artista similar' },
+          { name: 'Bad Bunny', subscribers: 'Artista similar' },
+          { name: 'Rauw Alejandro', subscribers: 'Artista similar' },
+          { name: 'Quevedo', subscribers: 'Artista similar' }
+        ].filter(a => a.name.toLowerCase() !== primaryArtist.toLowerCase());
+
+        simListEl.innerHTML = simToShow.map((art) => `
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${art.name}">
+            <div class="flex items-center gap-3">
+              ${art.thumbnail ? `
+                <img src="${art.thumbnail}" class="w-10 h-10 rounded-full object-cover bg-zinc-800 shadow-md" loading="lazy" />
+              ` : `
+                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-black font-black text-xs shadow-md">
+                  ${art.name.slice(0, 2).toUpperCase()}
+                </div>
+              `}
+              <div>
+                <p class="text-xs font-bold text-white group-hover:text-emerald-400 transition">${esc(art.name)}</p>
+                <p class="text-[10px] text-zinc-400">${esc(art.subscribers || 'Artista similar')}</p>
+              </div>
+            </div>
+            <svg class="w-4 h-4 text-zinc-500 group-hover:text-white transition"><use href="#i-down" style="transform: rotate(-90deg);"/></svg>
+          </div>
+        `).join('');
+
+        $$('[data-similar-artist]').forEach((el) => {
+          el.addEventListener('click', () => {
+            const name = el.getAttribute('data-similar-artist');
+            openArtistPage(name);
+          });
+        });
+      }
+
+    } catch (err) {
+      topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">Error al cargar información del artista</p>`;
+    }
+  }
+
+  function openArtistProfile(artistName, artistThumb = '') {
+    return openArtistPage(artistName, artistThumb);
+  }
+  window.openArtistProfile = openArtistProfile;
+  window.openArtistPage = openArtistPage;
+
+  // --- Vista de Colección Completa: Álbumes y Playlists (SimpMusic Engine) ---
+  let currentCollectionTracks = [];
+
+  function closeCollection() {
+    const modal = $('collectionModal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    popModalState();
+  }
+  window.closeCollection = closeCollection;
+
+  async function openCollection(type, browseId, titleFallback = '') {
+    if (!browseId) return;
+    const modal = $('collectionModal');
+    if (!modal) return;
+    if (modal.classList.contains('hidden')) pushModalState('collection');
+    modal.classList.remove('hidden');
+    modal.scrollTop = 0;
+
+    const isAlbum = type === 'album';
+    $('collectionTypeBadge').textContent = isAlbum ? 'Álbum' : 'Playlist';
+    $('collectionTopBarTitle').textContent = titleFallback || (isAlbum ? 'Álbum' : 'Playlist');
+    $('collectionHeroTitle').textContent = titleFallback || (isAlbum ? 'Cargando álbum...' : 'Cargando playlist...');
+    $('collectionHeroSubtitle').textContent = 'YouTube Music';
+    $('collectionTrackCount').textContent = 'Cargando pistas...';
+    $('collectionTracksList').innerHTML = '<div class="py-12 text-center text-zinc-500 text-xs animate-pulse">Obteniendo catálogo completo...</div>';
+
+    try {
+      const endpoint = isAlbum
+        ? `/api/album?id=${encodeURIComponent(browseId)}`
+        : `/api/playlist?id=${encodeURIComponent(browseId)}`;
+      const res = await fetch(endpoint);
+      const data = await res.json();
+
+      const meta = isAlbum ? data.album : data.playlist;
+      const tracks = data.tracks || [];
+      currentCollectionTracks = tracks;
+
+      if (meta) {
+        $('collectionHeroTitle').textContent = meta.title || titleFallback;
+        $('collectionHeroSubtitle').textContent = isAlbum
+          ? `${meta.artist || 'Artista'}${meta.year ? ' • ' + meta.year : ''}`
+          : `${meta.author || 'YouTube Music'}`;
+        $('collectionTrackCount').textContent = `${tracks.length} canciones`;
+        if (meta.thumbnail) {
+          $('collectionHeroImg').src = meta.thumbnail;
+        }
+      }
+
+      if (tracks.length === 0) {
+        $('collectionTracksList').innerHTML = '<div class="py-12 text-center text-zinc-500 text-xs">No se encontraron pistas en esta colección</div>';
         return;
       }
 
-      if (!artistThumb && tracks[0]?.thumbnail) {
-        $('artistHeroImg').src = tracks[0].thumbnail;
-      }
+      prewarmTracks(tracks.slice(0, 2));
 
-      topListEl.innerHTML = tracks.map((t, idx) => `
-        <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-artist-track-idx="${idx}">
+      $('collectionTracksList').innerHTML = tracks.map((t, idx) => `
+        <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-coll-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
             <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
@@ -1655,10 +1862,10 @@
             </div>
           </div>
           <div class="flex items-center gap-1 shrink-0 ml-2">
-            <button data-artist-download="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+            <button data-coll-down="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
               <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
             </button>
-            <button data-artist-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
+            <button data-coll-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
               <svg class="w-4 h-4"><use href="#i-more"/></svg>
             </button>
             <div class="w-8 h-8 rounded-full bg-zinc-800 group-hover:bg-emerald-500 group-hover:text-black text-emerald-400 flex items-center justify-center transition shadow-sm">
@@ -1668,67 +1875,36 @@
         </div>
       `).join('');
 
-      $$('[data-artist-track-idx]').forEach((el) => {
+      $$('[data-coll-idx]').forEach((el) => {
         el.addEventListener('click', (e) => {
-          if (e.target.closest('[data-artist-more]') || e.target.closest('[data-artist-download]')) return;
-          const i = parseInt(el.getAttribute('data-artist-track-idx'), 10);
+          if (e.target.closest('[data-coll-more]') || e.target.closest('[data-coll-down]')) return;
+          const i = parseInt(el.getAttribute('data-coll-idx'), 10);
           S.queue = [...tracks];
           playTrack(i, true);
         });
       });
 
-      $$('[data-artist-more]').forEach((btn) => {
+      $$('[data-coll-more]').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const i = parseInt(btn.getAttribute('data-artist-more'), 10);
+          const i = parseInt(btn.getAttribute('data-coll-more'), 10);
           openSongMenu(tracks[i]);
         });
       });
 
-      $$('[data-artist-download]').forEach((btn) => {
+      $$('[data-coll-down]').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const i = parseInt(btn.getAttribute('data-artist-download'), 10);
+          const i = parseInt(btn.getAttribute('data-coll-down'), 10);
           toggleDownload(tracks[i]);
         });
       });
 
-      // Fans también escuchan
-      const LATIN_STARS = ['Feid', 'Karol G', 'Bad Bunny', 'Rauw Alejandro', 'Quevedo', 'Mora', 'Manuel Turizo', 'Myke Towers', 'Ozuna', 'J Balvin'];
-      const simArtists = LATIN_STARS.filter((a) => a.toLowerCase() !== primaryArtist.toLowerCase()).slice(0, 5);
-
-      simListEl.innerHTML = simArtists.map((artName) => `
-        <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${artName}">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-black font-black text-xs shadow-md">
-              ${artName.slice(0, 2).toUpperCase()}
-            </div>
-            <div>
-              <p class="text-xs font-bold text-white group-hover:text-emerald-400 transition">${artName}</p>
-              <p class="text-[10px] text-zinc-400">Artista similar</p>
-            </div>
-          </div>
-          <svg class="w-4 h-4 text-zinc-500 group-hover:text-white transition"><use href="#i-down" style="transform: rotate(-90deg);"/></svg>
-        </div>
-      `).join('');
-
-      $$('[data-similar-artist]').forEach((el) => {
-        el.addEventListener('click', () => {
-          const name = el.getAttribute('data-similar-artist');
-          openArtistPage(name);
-        });
-      });
-
     } catch (err) {
-      topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">Error al cargar canciones del artista</p>`;
+      $('collectionTracksList').innerHTML = '<div class="py-12 text-center text-zinc-500 text-xs">Error al cargar la colección</div>';
     }
   }
-
-  function openArtistProfile(artistName, artistThumb = '') {
-    return openArtistPage(artistName, artistThumb);
-  }
-  window.openArtistProfile = openArtistProfile;
-  window.openArtistPage = openArtistPage;
+  window.openCollection = openCollection;
 
   // --- Actualizaciones de Interfaz y Like ---
   function showAndSyncMiniPlayer(track, isLoading = false) {
@@ -2783,37 +2959,112 @@
     });
   }
 
+  let suggestionTimer = null;
+  let currentSearchResults = [];
+
   function setupSearch() {
     const input = $('searchInput');
     const clearBtn = $('searchClearBtn');
     const results = $('searchResults');
+    const resultsList = $('searchResultsList');
     const genresWrap = $('searchGenresWrap');
+    const suggestionsDropdown = $('searchSuggestionsDropdown');
+    const suggestionsList = $('suggestionsList');
+    const loadMoreBtn = $('searchLoadMoreBtn');
 
     renderRecentSearches();
 
+    // Filtros de categoría de búsqueda (SimpMusic: Canciones, Artistas, Álbumes, Playlists, Videos)
+    $$('[data-search-type]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        $$('[data-search-type]').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        S.searchType = btn.getAttribute('data-search-type') || 'songs';
+        const q = input.value.trim();
+        if (q) {
+          executeSearch(q, false);
+        }
+      });
+    });
+
+    // Entrada de búsqueda con autocompletado predictivo en tiempo real
     input.addEventListener('input', () => {
       const q = input.value.trim();
       clearBtn.classList.toggle('hidden', !q);
       clearTimeout(searchTimer);
+      clearTimeout(suggestionTimer);
 
       if (!q) {
+        if (suggestionsDropdown) suggestionsDropdown.classList.add('hidden');
         results.classList.add('hidden');
-        results.innerHTML = '';
+        if (resultsList) resultsList.innerHTML = '';
         if (genresWrap) genresWrap.classList.remove('hidden');
         renderRecentSearches();
         return;
       }
-      searchTimer = setTimeout(() => executeSearch(q), 350);
+
+      // Sugerencias instantáneas (SimpMusic Engine)
+      suggestionTimer = setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/suggestions?q=${encodeURIComponent(q)}`);
+          const data = await res.json();
+          const queries = data.queries || [];
+          if (queries.length > 0 && input.value.trim() === q && suggestionsList && suggestionsDropdown) {
+            suggestionsList.innerHTML = queries.slice(0, 5).map((sq) => `
+              <div class="flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-zinc-800/80 transition cursor-pointer suggestion-item press" data-suggest-query="${esc(sq)}">
+                <svg class="w-4 h-4 text-zinc-500 shrink-0"><use href="#i-search"/></svg>
+                <span class="text-xs text-zinc-200 font-medium truncate">${esc(sq)}</span>
+              </div>
+            `).join('');
+
+            $$('[data-suggest-query]').forEach((el) => {
+              el.addEventListener('click', () => {
+                const selectedQ = el.getAttribute('data-suggest-query');
+                input.value = selectedQ;
+                suggestionsDropdown.classList.add('hidden');
+                clearBtn.classList.remove('hidden');
+                executeSearch(selectedQ, false);
+              });
+            });
+
+            suggestionsDropdown.classList.remove('hidden');
+          } else if (suggestionsDropdown) {
+            suggestionsDropdown.classList.add('hidden');
+          }
+        } catch {
+          suggestionsDropdown?.classList.add('hidden');
+        }
+      }, 200);
+
+      searchTimer = setTimeout(() => {
+        suggestionsDropdown?.classList.add('hidden');
+        executeSearch(q, false);
+      }, 450);
+    });
+
+    // Cerrar sugerencias al hacer clic fuera del área de búsqueda
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#viewSearch')) {
+        suggestionsDropdown?.classList.add('hidden');
+      }
     });
 
     clearBtn.addEventListener('click', () => {
       input.value = '';
       clearBtn.classList.add('hidden');
+      suggestionsDropdown?.classList.add('hidden');
       results.classList.add('hidden');
-      results.innerHTML = '';
+      if (resultsList) resultsList.innerHTML = '';
       if (genresWrap) genresWrap.classList.remove('hidden');
       renderRecentSearches();
       input.focus();
+    });
+
+    loadMoreBtn?.addEventListener('click', () => {
+      const q = input.value.trim();
+      if (q && S.searchContinuation) {
+        executeSearch(q, true);
+      }
     });
 
     $('btnRecentClear')?.addEventListener('click', () => {
@@ -2828,91 +3079,234 @@
         const q = card.getAttribute('data-genre-q');
         input.value = q;
         clearBtn.classList.remove('hidden');
-        executeSearch(q);
+        suggestionsDropdown?.classList.add('hidden');
+        executeSearch(q, false);
       });
     });
   }
 
-  async function executeSearch(query) {
+  async function executeSearch(query, isContinuation = false) {
     const results = $('searchResults');
+    const resultsList = $('searchResultsList');
     const genresWrap = $('searchGenresWrap');
     const recentWrap = $('searchRecentWrap');
+    const loadMoreWrap = $('searchLoadMoreWrap');
+    const suggestionsDropdown = $('searchSuggestionsDropdown');
 
+    if (suggestionsDropdown) suggestionsDropdown.classList.add('hidden');
     if (genresWrap) genresWrap.classList.add('hidden');
     if (recentWrap) recentWrap.classList.add('hidden');
     results.classList.remove('hidden');
-    results.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando en YouTube Music...</div>';
+
+    if (!isContinuation) {
+      if (resultsList) resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando en YouTube Music...</div>';
+      if (loadMoreWrap) loadMoreWrap.classList.add('hidden');
+      S.searchContinuation = null;
+      currentSearchResults = [];
+    } else {
+      if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '<div class="text-xs text-zinc-400 font-bold animate-pulse">Cargando más pistas...</div>';
+      }
+    }
 
     // Guardar en búsquedas recientes
-    if (query && query.trim().length > 1) {
+    if (!isContinuation && query && query.trim().length > 1) {
       const cleanQ = query.trim();
       S.recentSearches = [cleanQ, ...S.recentSearches.filter((s) => s.toLowerCase() !== cleanQ.toLowerCase())].slice(0, 8);
       localStorage.setItem('fs_recent_searches', JSON.stringify(S.recentSearches));
     }
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const searchType = S.searchType || 'songs';
+      let url = `/api/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(searchType)}`;
+      if (isContinuation && S.searchContinuation) {
+        url += `&continuation=${encodeURIComponent(S.searchContinuation)}`;
+      }
+
+      const res = await fetch(url);
       const data = await res.json();
 
-      if (!data.tracks || data.tracks.length === 0) {
-        results.innerHTML = '<div class="text-center py-12 text-zinc-400 text-sm">No se encontraron canciones</div>';
+      S.searchContinuation = data.continuation || null;
+
+      const items = data.items || data.tracks || [];
+
+      if (!isContinuation && items.length === 0) {
+        if (resultsList) resultsList.innerHTML = '<div class="text-center py-12 text-zinc-400 text-sm">No se encontraron resultados para esta categoría</div>';
+        if (loadMoreWrap) loadMoreWrap.classList.add('hidden');
         return;
       }
 
-      prewarmTracks(data.tracks.slice(0, 2));
+      const startIdx = currentSearchResults.length;
+      if (isContinuation) {
+        currentSearchResults.push(...items);
+      } else {
+        currentSearchResults = items;
+      }
 
-      results.innerHTML = data.tracks.map((t, idx) => `
-        <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${idx}">
-          <div class="flex items-center gap-3 min-w-0 flex-1">
-            <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
-            <div class="min-w-0 flex-1">
-              <p class="text-sm font-bold text-white truncate">${esc(t.title)}</p>
-              <div class="flex items-center gap-1.5 mt-0.5">
-                ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+      // Renderizado según tipo de contenido (SimpMusic Engine)
+      let html = '';
+      if (searchType === 'artists') {
+        html = items.map((art) => `
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-artist-browse="${art.id}" data-artist-name="${esc(art.name || art.title)}" data-artist-thumb="${esc(art.thumbnail || '')}">
+            <div class="flex items-center gap-3.5 min-w-0 flex-1">
+              <img src="${art.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-full object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <p class="text-sm font-bold text-white truncate">${esc(art.name || art.title)}</p>
+                  <span class="text-[9px] font-bold text-sky-400 bg-sky-500/20 px-1.5 py-0.5 rounded-full">Artista</span>
+                </div>
+                <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(art.subscribers || 'Artista verificado')}</p>
               </div>
             </div>
-          </div>
-          <div class="flex items-center gap-1.5 shrink-0 ml-2">
-            <button data-search-down="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
-              <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
-            </button>
-            <button data-search-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
-              <svg class="w-4 h-4"><use href="#i-more"/></svg>
-            </button>
-            <button class="w-9 h-9 rounded-full bg-zinc-800 text-emerald-400 hover:bg-emerald-500 hover:text-black flex items-center justify-center shadow-sm transition">
-              <svg class="w-4 h-4"><use href="#i-play"/></svg>
+            <button class="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-emerald-400 transition press">
+              Ver perfil
             </button>
           </div>
-        </div>
-      `).join('');
+        `).join('');
+      } else if (searchType === 'albums') {
+        html = items.map((alb) => `
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-album-browse="${alb.id}" data-album-title="${esc(alb.title)}">
+            <div class="flex items-center gap-3.5 min-w-0 flex-1">
+              <img src="${alb.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-bold text-white truncate">${esc(alb.title)}</p>
+                <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(alb.artist)}${alb.year ? ' • ' + esc(alb.year) : ''} • Álbum</p>
+              </div>
+            </div>
+            <button class="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-emerald-400 transition press">
+              Ver álbum
+            </button>
+          </div>
+        `).join('');
+      } else if (searchType === 'playlists') {
+        html = items.map((pl) => `
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-playlist-browse="${pl.id}" data-playlist-title="${esc(pl.title)}">
+            <div class="flex items-center gap-3.5 min-w-0 flex-1">
+              <img src="${pl.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-bold text-white truncate">${esc(pl.title)}</p>
+                <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(pl.author)}${pl.trackCount ? ' • ' + esc(pl.trackCount) : ''}</p>
+              </div>
+            </div>
+            <button class="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-emerald-400 transition press">
+              Ver playlist
+            </button>
+          </div>
+        `).join('');
+      } else {
+        // canciones o videos
+        prewarmTracks(items.slice(0, 2));
+        html = items.map((t, idx) => {
+          const globalIdx = startIdx + idx;
+          return `
+            <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${globalIdx}">
+              <div class="flex items-center gap-3 min-w-0 flex-1">
+                <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-bold text-white truncate">${esc(t.title)}</p>
+                  <div class="flex items-center gap-1.5 mt-0.5">
+                    ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+                    <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0 ml-2">
+                <button data-search-down="${globalIdx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
+                  <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
+                </button>
+                <button data-search-more="${globalIdx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
+                  <svg class="w-4 h-4"><use href="#i-more"/></svg>
+                </button>
+                <button class="w-9 h-9 rounded-full bg-zinc-800 text-emerald-400 hover:bg-emerald-500 hover:text-black flex items-center justify-center shadow-sm transition">
+                  <svg class="w-4 h-4"><use href="#i-play"/></svg>
+                </button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
 
-      $$('[data-search-idx]').forEach((el) => {
-        el.addEventListener('click', (e) => {
-          if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
-          const idx = parseInt(el.getAttribute('data-search-idx'), 10);
-          S.queue = [...data.tracks];
-          playTrack(idx, true);
-        });
-      });
+      if (isContinuation) {
+        resultsList?.insertAdjacentHTML('beforeend', html);
+      } else if (resultsList) {
+        resultsList.innerHTML = html;
+      }
 
-      $$('[data-search-down]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const idx = parseInt(btn.getAttribute('data-search-down'), 10);
-          toggleDownload(data.tracks[idx]);
+      // Conectar eventos según tipo
+      if (searchType === 'artists') {
+        $$('[data-artist-browse]').forEach((el) => {
+          el.addEventListener('click', () => {
+            const id = el.getAttribute('data-artist-browse');
+            const name = el.getAttribute('data-artist-name');
+            const thumb = el.getAttribute('data-artist-thumb');
+            openArtistPage(id || name, thumb);
+          });
         });
-      });
+      } else if (searchType === 'albums') {
+        $$('[data-album-browse]').forEach((el) => {
+          el.addEventListener('click', () => {
+            const id = el.getAttribute('data-album-browse');
+            const title = el.getAttribute('data-album-title');
+            openCollection('album', id, title);
+          });
+        });
+      } else if (searchType === 'playlists') {
+        $$('[data-playlist-browse]').forEach((el) => {
+          el.addEventListener('click', () => {
+            const id = el.getAttribute('data-playlist-browse');
+            const title = el.getAttribute('data-playlist-title');
+            openCollection('playlist', id, title);
+          });
+        });
+      } else {
+        $$('[data-search-idx]').forEach((el) => {
+          el.addEventListener('click', (e) => {
+            if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
+            const idx = parseInt(el.getAttribute('data-search-idx'), 10);
+            S.queue = [...currentSearchResults];
+            playTrack(idx, true);
+          });
+        });
 
-      $$('[data-search-more]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const idx = parseInt(btn.getAttribute('data-search-more'), 10);
-          openSongMenu(data.tracks[idx]);
+        $$('[data-search-down]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(btn.getAttribute('data-search-down'), 10);
+            toggleDownload(currentSearchResults[idx]);
+          });
         });
-      });
+
+        $$('[data-search-more]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(btn.getAttribute('data-search-more'), 10);
+            openSongMenu(currentSearchResults[idx]);
+          });
+        });
+      }
+
+      // Botón Cargar Más
+      if (loadMoreWrap) {
+        if (S.searchContinuation) {
+          loadMoreWrap.classList.remove('hidden');
+          loadMoreWrap.innerHTML = `
+            <button id="searchLoadMoreBtn" class="px-5 py-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-emerald-400 hover:border-emerald-500/50 press">
+              Cargar más resultados
+            </button>
+          `;
+          $('searchLoadMoreBtn')?.addEventListener('click', () => {
+            executeSearch(query, true);
+          });
+        } else {
+          loadMoreWrap.classList.add('hidden');
+        }
+      }
+
     } catch {
-      results.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm">Error al realizar la búsqueda</div>';
+      if (!isContinuation && resultsList) {
+        resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm">Error al realizar la búsqueda</div>';
+      }
+      if (loadMoreWrap) loadMoreWrap.classList.add('hidden');
     }
   }
 
@@ -3076,6 +3470,29 @@
 
         if (isSwipeRight || isSwipeDownFromTop) {
           closeArtistProfile();
+        }
+      }, { passive: true });
+    }
+
+    const collModal = $('collectionModal');
+    if (collModal) {
+      let collTouchStartX = 0;
+      let collTouchStartY = 0;
+
+      collModal.addEventListener('touchstart', (e) => {
+        collTouchStartX = e.touches[0].clientX;
+        collTouchStartY = e.touches[0].clientY;
+      }, { passive: true });
+
+      collModal.addEventListener('touchend', (e) => {
+        const dx = e.changedTouches[0].clientX - collTouchStartX;
+        const dy = e.changedTouches[0].clientY - collTouchStartY;
+
+        const isSwipeRight = collTouchStartX < 75 && dx > 60 && Math.abs(dx) > Math.abs(dy) * 1.3;
+        const isSwipeDownFromTop = collModal.scrollTop <= 5 && dy > 80 && Math.abs(dy) > Math.abs(dx) * 1.4;
+
+        if (isSwipeRight || isSwipeDownFromTop) {
+          closeCollection();
         }
       }, { passive: true });
     }
@@ -3317,6 +3734,39 @@
     // Modal: Perfil del Artista Completo
     $('artistCloseBtn')?.addEventListener('click', closeArtistProfile);
     $('artistBackBtn')?.addEventListener('click', closeArtistProfile);
+
+    // Modal: Vista de Álbum / Playlist Colección (SimpMusic Engine)
+    $('collectionCloseBtn')?.addEventListener('click', closeCollection);
+    $('collectionPlayAllBtn')?.addEventListener('click', () => {
+      if (currentCollectionTracks.length > 0) {
+        S.queue = [...currentCollectionTracks];
+        playTrack(0, true);
+      } else {
+        showToast('No hay canciones en la colección');
+      }
+    });
+    $('collectionShuffleAllBtn')?.addEventListener('click', () => {
+      if (currentCollectionTracks.length > 0) {
+        S.queue = shuffled(currentCollectionTracks);
+        playTrack(0, true);
+        showToast('Reproduciendo en aleatorio');
+      } else {
+        showToast('No hay canciones en la colección');
+      }
+    });
+    $('collectionShareBtn')?.addEventListener('click', () => {
+      const title = $('collectionHeroTitle')?.textContent || 'Colección';
+      if (navigator.share) {
+        navigator.share({
+          title: `${title} en FreeSong`,
+          text: `Escucha "${title}" en FreeSong`,
+          url: window.location.origin
+        }).catch(() => {});
+      } else {
+        navigator.clipboard?.writeText(window.location.origin);
+        showToast(`Enlace de ${title} copiado`);
+      }
+    });
 
     $('artistPlayBtn')?.addEventListener('click', () => {
       if (currentArtistTracks.length > 0) {
@@ -3570,6 +4020,11 @@
     const artistModal = $('artistViewModal');
     if (artistModal && !artistModal.classList.contains('hidden')) {
       closeArtistProfile();
+      return true;
+    }
+    const collModal = $('collectionModal');
+    if (collModal && !collModal.classList.contains('hidden')) {
+      closeCollection();
       return true;
     }
     return false;
