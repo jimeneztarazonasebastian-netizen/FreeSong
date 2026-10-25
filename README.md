@@ -31,3 +31,7 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 ## 🔊 Cómo funciona el streaming
 
 `api/stream.js` obtiene la URL directa del audio (AAC/MP4) desde YouTube con los clientes `ANDROID_VR`, `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. Si YouTube bloquea los tres, usa instancias públicas de Invidious como último recurso. Si todo falla responde `502`.
+
+### ⚠️ Limitación conocida
+
+YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso algunas canciones pueden no reproducirse desde el despliegue en la nube (en pruebas, 4 de 6). Cuando pasa, la app reintenta, avisa con un mensaje y salta a la siguiente (máximo 3 saltos seguidos). Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable. La solución definitiva requiere resolver el audio desde el propio dispositivo o usar un proxy con IP residencial.

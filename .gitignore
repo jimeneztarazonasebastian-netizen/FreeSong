@@ -13,3 +13,5 @@ original/
 ios/App/build/
 *.ipa
 Payload/
+.vercel
+.env*

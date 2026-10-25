@@ -5,8 +5,9 @@ import { Readable } from 'stream';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 20 * 60 * 1000; // las URLs de googlevideo duran ~6 h; renovamos antes
-const RESOLVE_TIMEOUT_MS = 6000;
-const UPSTREAM_TIMEOUT_MS = 8000;
+const RESOLVE_TIMEOUT_MS = 4000;
+const UPSTREAM_TIMEOUT_MS = 6000;
+const FALLBACK_TIMEOUT_MS = 5000; // Invidious cuelga mucho: no esperar más que esto
 
 // Orden de clientes: los que devuelven URLs sin firma ni PO token
 const CLIENTS = [
@@ -92,7 +93,7 @@ async function invidiousFallback(videoId, itag, range) {
   const controllers = INVIDIOUS_NODES.map(() => new AbortController());
   const winner = await Promise.any(
     INVIDIOUS_NODES.map(async (node, i) => {
-      const timer = setTimeout(() => controllers[i].abort(), UPSTREAM_TIMEOUT_MS);
+      const timer = setTimeout(() => controllers[i].abort(), FALLBACK_TIMEOUT_MS);
       try {
         const resp = await fetch(`${node}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`, {
           headers: { Range: range, 'User-Agent': ua },
@@ -124,21 +125,30 @@ async function getUpstream(videoId, itag, range, backupIndex) {
     }
   }
 
-  // 2. Clientes de YouTube, rotando el inicial según `backup` para reintentos del cliente
-  for (let n = 0; n < CLIENTS.length; n++) {
-    const client = CLIENTS[(n + backupIndex) % CLIENTS.length];
-    try {
-      const target = await resolveWithClient(client, videoId, itag);
-      const resp = await openUpstream(target, range);
-      if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
-      urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
-      return resp;
-    } catch {
-      // siguiente cliente
-    }
+  // 2. Los clientes de YouTube en paralelo: gana el primero que entrega audio.
+  //    Si YouTube bloquea la IP, los tres fallan en menos de 1 s y pasamos al respaldo.
+  try {
+    const { resp, target } = await Promise.any(
+      CLIENTS.map(async (client) => {
+        try {
+          const target = await resolveWithClient(client, videoId, itag);
+          return { resp: await openUpstream(target, range), target };
+        } catch (e) {
+          console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
+          throw e;
+        }
+      })
+    );
+    if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
+    urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+    return resp;
+  } catch {
+    // todos los clientes fallaron
   }
 
-  // 3. Invidious
+  // 3. Invidious: lento y con resultado fijo por canción, solo se intenta en la primera petición.
+  //    Los reintentos del cliente (backup > 0) solo repiten los clientes de YouTube, que fallan rápido.
+  if (backupIndex > 0) return null;
   try {
     return await invidiousFallback(videoId, itag, range);
   } catch {
@@ -176,7 +186,7 @@ export default async function handler(req, res) {
 
   const range = (req.headers && req.headers.range) || 'bytes=0-';
   const upstream = await getUpstream(videoId, itag, range, backupIndex);
-  if (!upstream) return json(502, { error: 'No se pudo obtener el audio de esta canción' });
+  if (!upstream) return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE' });
 
   const headers = {
     'Access-Control-Allow-Origin': '*',

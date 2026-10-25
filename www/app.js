@@ -218,36 +218,48 @@
   }
 
   // --- Manejo de Fallback Automático en Fallas de Audio (Watchdog Inteligente) ---
+  // Canciones seguidas que no pudieron reproducirse; se reinicia en cuanto algo suena
+  let consecutiveStreamFailures = 0;
+  const MAX_AUTO_SKIPS = 3;
+
   function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
       return;
     }
+    // Falla de una canción que ya no es la actual (el usuario cambió mientras tanto): ignorar
+    if (S.queue[S.currentIndex] !== track) return;
+
     if (!track._fallbackStep) track._fallbackStep = 1;
     else track._fallbackStep++;
 
-    console.warn(`[FreeSong Fallback] Intentando paso ${track._fallbackStep} para "${track.title}"...`);
+    console.warn(`[FreeSong Fallback] Intento ${track._fallbackStep} para "${track.title}"...`);
 
-    if (track._fallbackStep === 1) {
-      showToast('Optimizando audio con servidor ultra-rápido...');
-      const fallbackUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=139&backup=1`;
-      deck.src = fallbackUrl;
+    if (track._fallbackStep <= 2) {
+      // Cada reintento sale por otra IP/cliente del servidor; el primero mantiene la calidad elegida
+      const itag = track._fallbackStep === 1 ? S.audioQuality : '139';
+      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${itag}&backup=${track._fallbackStep}`;
       deck.play().catch(() => {
         updatePlayPauseIcons(false, false);
       });
-    } else if (track._fallbackStep === 2) {
-      showToast('Conectando a nodo alternativo...');
-      const fallbackUrl2 = `/api/stream?id=${encodeURIComponent(track.id)}&itag=139&backup=3`;
-      deck.src = fallbackUrl2;
-      deck.play().catch(() => {
-        updatePlayPauseIcons(false, false);
-      });
-    } else {
-      track._fallbackStep = 0;
-      showToast('Servidor ocupado. Pasando a la siguiente canción...');
-      updatePlayPauseIcons(false, false);
-      setTimeout(() => playNext(true), 1200);
+      return;
     }
+
+    // Sin remedio: pasar a la siguiente, pero sin recorrer toda la cola en silencio
+    track._fallbackStep = 0;
+    consecutiveStreamFailures++;
+    updatePlayPauseIcons(false, false);
+    if (consecutiveStreamFailures >= MAX_AUTO_SKIPS) {
+      consecutiveStreamFailures = 0;
+      S.isPlaying = false;
+      showToast('No se pudo reproducir ahora. Revisa tu conexión o inténtalo de nuevo en un momento.');
+      return;
+    }
+    showToast(`No se pudo reproducir «${track.title}». Pasando a la siguiente...`);
+    setTimeout(() => {
+      // Solo avanzar si el usuario no eligió otra canción durante la espera
+      if (S.queue[S.currentIndex] === track && !userIntentionalPause) playNext(true);
+    }, 600);
   }
 
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
@@ -306,6 +318,7 @@
       if (S.queue[S.currentIndex]) {
         S.queue[S.currentIndex]._fallbackStep = 0;
       }
+      consecutiveStreamFailures = 0;
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
