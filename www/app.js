@@ -272,7 +272,7 @@
     if (track._fallbackStep <= 2) {
       // Cada reintento sale por otra IP/cliente del servidor; el primero mantiene la calidad elegida
       const itag = track._fallbackStep === 1 ? S.audioQuality : '139';
-      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${itag}&backup=${track._fallbackStep}`;
+      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${itag}&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
       deck.play().catch(() => {
         updatePlayPauseIcons(false, false);
       });
@@ -563,7 +563,7 @@
     if (!tracks || !Array.isArray(tracks)) return;
     tracks.slice(0, 2).forEach((t) => {
       if (t && t.id) {
-        fetch(`/api/stream?id=${encodeURIComponent(t.id)}`, {
+        fetch(`/api/stream?id=${encodeURIComponent(t.id)}&title=${encodeURIComponent(t.title || '')}&artist=${encodeURIComponent(t.artist || '')}`, {
           headers: { Range: 'bytes=0-1024' }
         }).catch(() => {});
       }
@@ -579,7 +579,7 @@
     prewarmTracks([nextTrack]);
     if (nextTrack.streamUrl) return;
 
-    const targetUrl = `/api/stream?id=${encodeURIComponent(nextTrack.id)}&itag=${S.audioQuality}`;
+    const targetUrl = `/api/stream?id=${encodeURIComponent(nextTrack.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(nextTrack.title || '')}&artist=${encodeURIComponent(nextTrack.artist || '')}`;
     nextTrack.streamUrl = targetUrl;
 
     try {
@@ -665,7 +665,7 @@
     showToast(`Descargando "${track.title}"...`, 3000);
 
     try {
-      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
+      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
       const res = await fetch(streamUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -827,7 +827,7 @@
 
     // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
-    const streamUrl = track.streamUrl || offlineUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
+    const streamUrl = track.streamUrl || offlineUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -896,17 +896,17 @@
       S.isPlaying = true;
       updatePlayPauseIcons(true);
 
-      // Iniciar Watchdog calibrado de 7 segundos contra canciones trabadas en 0:00 / 0:00
+      // Iniciar Watchdog calibrado de 12 segundos contra canciones trabadas en 0:00 / 0:00
       if (streamWatchdogTimer) clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = setTimeout(() => {
         const p = getActivePlayer();
         if (!isTransitioningTrack && S.isPlaying && !userIntentionalPause && p && (p.currentTime === 0 || p.readyState < 2)) {
-          console.warn('Watchdog de 7s disparado: Audio trabado en 0:00, ejecutando fallback...');
+          console.warn('Watchdog de 12s disparado: Audio trabado en 0:00, ejecutando fallback...');
           const targetVol = S.audioNormalize ? 0.88 : 1.0;
           if (p) p.volume = targetVol;
           handleStreamFailure(track, p);
         }
-      }, 7000);
+      }, 12000);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);

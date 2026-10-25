@@ -1,59 +1,83 @@
-// api/stream.js - Proxy de audio. Resuelve la URL directa de googlevideo vía el endpoint
-// interno /youtubei/v1/player (clientes ANDROID_VR / IOS / ANDROID) y la sirve con soporte Range.
-// Invidious queda solo como último recurso (los nodos públicos caen a menudo).
+// api/stream.js - Proxy de audio de alta fidelidad (SimpMusic Engine)
+// Resuelve URLs directas de googlevideo vía clientes nativos móviles (IOS / ANDROID)
+// Soporta AAC (itags 140/139), Opus (itags 251/250) y fallback de búsqueda automática
 import { Readable } from 'stream';
+import { fetchYt, getRunsText } from './_yt.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-const URL_TTL_MS = 20 * 60 * 1000; // las URLs de googlevideo duran ~6 h; renovamos antes
-const RESOLVE_TIMEOUT_MS = 4000;
-const UPSTREAM_TIMEOUT_MS = 6000;
-const FALLBACK_TIMEOUT_MS = 5000; // Invidious cuelga mucho: no esperar más que esto
+const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
+const RESOLVE_TIMEOUT_MS = 5000;
+const UPSTREAM_TIMEOUT_MS = 8000;
 
-// Orden de clientes: los que devuelven URLs sin firma ni PO token
+// Clientes móviles reales con mayor tasa de éxito y sin requerimiento de PO Token para audio
 const CLIENTS = [
-  {
-    name: 'ANDROID_VR',
-    id: 28,
-    ua: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-    context: { clientName: 'ANDROID_VR', clientVersion: '1.60.19', deviceMake: 'Oculus', deviceModel: 'Quest 3', osName: 'Android', osVersion: '12L', androidSdkVersion: 32, hl: 'en', gl: 'US' }
-  },
   {
     name: 'IOS',
     id: 5,
     ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-    context: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82', hl: 'en', gl: 'US' }
+    context: {
+      clientName: 'IOS',
+      clientVersion: '20.10.4',
+      deviceMake: 'Apple',
+      deviceModel: 'iPhone16,2',
+      osName: 'iPhone',
+      osVersion: '18.3.2.22D82',
+      hl: 'es',
+      gl: 'US'
+    }
   },
   {
     name: 'ANDROID',
     id: 3,
     ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-    context: { clientName: 'ANDROID', clientVersion: '20.10.38', osName: 'Android', osVersion: '11', androidSdkVersion: 30, hl: 'en', gl: 'US' }
+    context: {
+      clientName: 'ANDROID',
+      clientVersion: '20.10.38',
+      osName: 'Android',
+      osVersion: '11',
+      androidSdkVersion: 30,
+      hl: 'es',
+      gl: 'US'
+    }
   }
 ];
 
-// Último recurso: instancias Invidious públicas (se prueban en paralelo, 1.er válido gana)
+// Instancias Invidious de respaldo con API activa
 const INVIDIOUS_NODES = [
   'https://yt.chocolatemoo53.com',
-  'https://yewtu.be',
-  'https://invidious.jing.rocks',
+  'https://invidious.nerdvpn.de',
   'https://inv.nadeko.net'
 ];
 
-// Por proceso serverless: `${videoId}:${itag}` -> { url, ua, expires }
 const urlCache = new Map();
-const CACHE_MAX = 200;
+const CACHE_MAX = 300;
 
 const isMediaType = (ct) => {
   ct = (ct || '').toLowerCase();
-  return (ct.includes('audio') || ct.includes('mp4') || ct.includes('octet-stream') || ct.includes('webm')) && !ct.includes('html') && !ct.includes('text');
+  return (ct.includes('audio') || ct.includes('mp4') || ct.includes('webm') || ct.includes('octet-stream')) && !ct.includes('html') && !ct.includes('text');
 };
 
-// Safari/iOS solo reproduce bien AAC en MP4: 140 (128k) y 139 (48k) primero, 141 si existe
+// Selección inteligente de formato: Prioriza AAC/MP4 para compatibilidad iOS Safari,
+// pero acepta WebM Opus (itags 251, 250, 249) que YouTube siempre entrega
 function pickFormat(formats, wantedItag) {
-  const audio = (formats || []).filter((f) => f.url && /^audio\/mp4/.test(f.mimeType || ''));
-  if (!audio.length) return null;
-  const byItag = (n) => audio.find((f) => String(f.itag) === String(n));
-  return byItag(wantedItag) || byItag(140) || byItag(139) || byItag(141) || audio[0];
+  const audios = (formats || []).filter((f) => f.url && ((f.mimeType || '').startsWith('audio/') || (f.mimeType || '').includes('video/mp4')));
+  if (!audios.length) return null;
+
+  const byItag = (n) => audios.find((f) => String(f.itag) === String(n));
+  if (wantedItag && byItag(wantedItag)) return byItag(wantedItag);
+
+  // 1. Preferir AAC MP4 (140 = 128k, 139 = 48k, 141 = 256k)
+  const mp4Audio = audios.filter((f) => /^audio\/mp4/.test(f.mimeType || ''));
+  if (mp4Audio.length) {
+    return byItag(140) || byItag(139) || byItag(141) || mp4Audio[0];
+  }
+
+  // 2. Fallback a Opus WebM (251 = 160k, 250 = 70k, 249 = 50k)
+  const opus = byItag(251) || byItag(250) || byItag(249);
+  if (opus) return opus;
+
+  // 3. Cualquier formato disponible (incluyendo muxed itag 18)
+  return audios[0];
 }
 
 async function resolveWithClient(client, videoId, wantedItag) {
@@ -65,27 +89,64 @@ async function resolveWithClient(client, videoId, wantedItag) {
       'X-YouTube-Client-Name': String(client.id),
       'X-YouTube-Client-Version': client.context.clientVersion
     },
-    body: JSON.stringify({ videoId, context: { client: client.context }, contentCheckOk: true, racyCheckOk: true }),
+    body: JSON.stringify({
+      videoId,
+      context: { client: client.context },
+      contentCheckOk: true,
+      racyCheckOk: true
+    }),
     signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS)
   });
+
   const data = await resp.json();
   if (data.playabilityStatus?.status !== 'OK') {
     throw new Error(data.playabilityStatus?.reason || data.playabilityStatus?.status || 'not playable');
   }
-  const fmt = pickFormat(data.streamingData?.adaptiveFormats, wantedItag);
-  if (!fmt) throw new Error('no audio format');
-  return { url: fmt.url, ua: client.ua, itag: fmt.itag };
+
+  const allFormats = [
+    ...(data.streamingData?.adaptiveFormats || []),
+    ...(data.streamingData?.formats || [])
+  ];
+  const fmt = pickFormat(allFormats, wantedItag);
+  if (!fmt) throw new Error('no audio format with url');
+
+  return { url: fmt.url, ua: client.ua, itag: fmt.itag, mimeType: fmt.mimeType };
 }
 
-// Abre la URL resuelta reenviando el Range del cliente. Devuelve la Response o lanza.
 async function openUpstream(target, range) {
   const resp = await fetch(target.url, {
     headers: { Range: range, 'User-Agent': target.ua },
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
   });
-  if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) return resp;
+  if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
+    return resp;
+  }
   try { await resp.body?.cancel(); } catch {}
-  throw new Error(`upstream ${resp.status}`);
+  throw new Error(`upstream status ${resp.status}`);
+}
+
+// Búsqueda automática de canción alternativa si un videoId específico está bloqueado o caído
+async function findAlternativeVideoId(title, artist) {
+  if (!title) return null;
+  const q = `${title} ${artist || ''}`.trim();
+  try {
+    const data = await fetchYt('search', {
+      query: q,
+      params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
+    });
+    const secList = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+    for (const s of secList) {
+      const list = s.musicShelfRenderer?.contents || [];
+      for (const it of list) {
+        const r = it.musicResponsiveListItemRenderer;
+        if (!r) continue;
+        const titleRun = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0];
+        const vid = titleRun?.navigationEndpoint?.watchEndpoint?.videoId;
+        if (vid) return vid;
+      }
+    }
+  } catch {}
+  return null;
 }
 
 async function invidiousFallback(videoId, itag, range) {
@@ -93,13 +154,15 @@ async function invidiousFallback(videoId, itag, range) {
   const controllers = INVIDIOUS_NODES.map(() => new AbortController());
   const winner = await Promise.any(
     INVIDIOUS_NODES.map(async (node, i) => {
-      const timer = setTimeout(() => controllers[i].abort(), FALLBACK_TIMEOUT_MS);
+      const timer = setTimeout(() => controllers[i].abort(), 3500);
       try {
         const resp = await fetch(`${node}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`, {
           headers: { Range: range, 'User-Agent': ua },
           signal: controllers[i].signal
         });
-        if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) return { resp, i };
+        if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
+          return { resp, i };
+        }
         try { await resp.body?.cancel(); } catch {}
         throw new Error('invalid media');
       } finally {
@@ -111,11 +174,10 @@ async function invidiousFallback(videoId, itag, range) {
   return winner.resp;
 }
 
-// Devuelve la Response de audio de upstream (o null si todo falló)
-async function getUpstream(videoId, itag, range, backupIndex) {
+async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '') {
   const cacheKey = `${videoId}:${itag}`;
 
-  // 1. URL ya resuelta (se salta si el cliente pide un backup: la anterior pudo fallar)
+  // 1. Caché en memoria
   const cached = urlCache.get(cacheKey);
   if (cached && cached.expires > Date.now() && !backupIndex) {
     try {
@@ -125,30 +187,38 @@ async function getUpstream(videoId, itag, range, backupIndex) {
     }
   }
 
-  // 2. Los clientes de YouTube en paralelo: gana el primero que entrega audio.
-  //    Si YouTube bloquea la IP, los tres fallan en menos de 1 s y pasamos al respaldo.
-  try {
-    const { resp, target } = await Promise.any(
-      CLIENTS.map(async (client) => {
-        try {
-          const target = await resolveWithClient(client, videoId, itag);
-          return { resp: await openUpstream(target, range), target };
-        } catch (e) {
-          console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
-          throw e;
-        }
-      })
-    );
-    if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
-    urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
-    return resp;
-  } catch {
-    // todos los clientes fallaron
+  // 2. Resolver con clientes nativos (IOS y ANDROID)
+  for (const client of CLIENTS) {
+    try {
+      const target = await resolveWithClient(client, videoId, itag);
+      const resp = await openUpstream(target, range);
+      if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
+      urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+      return resp;
+    } catch (e) {
+      console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
+    }
   }
 
-  // 3. Invidious: lento y con resultado fijo por canción, solo se intenta en la primera petición.
-  //    Los reintentos del cliente (backup > 0) solo repiten los clientes de YouTube, que fallan rápido.
-  if (backupIndex > 0) return null;
+  // 3. Fallback inteligente: buscar versión alternativa de la canción si el ID original falló
+  if (title || artist) {
+    try {
+      const altVideoId = await findAlternativeVideoId(title, artist);
+      if (altVideoId && altVideoId !== videoId) {
+        console.log(`[stream] Fallback a versión alternativa: ${videoId} -> ${altVideoId}`);
+        for (const client of CLIENTS) {
+          try {
+            const target = await resolveWithClient(client, altVideoId, itag);
+            const resp = await openUpstream(target, range);
+            urlCache.set(`${altVideoId}:${itag}`, { ...target, expires: Date.now() + URL_TTL_MS });
+            return resp;
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Último recurso: Invidious
   try {
     return await invidiousFallback(videoId, itag, range);
   } catch {
@@ -162,6 +232,8 @@ export default async function handler(req, res) {
   const videoId = param('id');
   const itag = String(param('itag') || '140').replace(/\D/g, '') || '140';
   const backupIndex = Math.max(0, parseInt(param('backup') || '0', 10) || 0);
+  const title = param('title') || '';
+  const artist = param('artist') || '';
 
   const node = !!(res && res.setHeader);
   const json = (status, body) => node
@@ -182,11 +254,15 @@ export default async function handler(req, res) {
     return new Response(null, { status: 204, headers: cors });
   }
 
-  if (!videoId || !/^[\w-]{6,20}$/.test(videoId)) return json(400, { error: 'Falta el id de la canción o es inválido' });
+  if (!videoId || !/^[\w-]{6,20}$/.test(videoId)) {
+    return json(400, { error: 'Falta el id de la canción o es inválido' });
+  }
 
   const range = (req.headers && req.headers.range) || 'bytes=0-';
-  const upstream = await getUpstream(videoId, itag, range, backupIndex);
-  if (!upstream) return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE' });
+  const upstream = await getUpstream(videoId, itag, range, backupIndex, title, artist);
+  if (!upstream) {
+    return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE' });
+  }
 
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -194,10 +270,10 @@ export default async function handler(req, res) {
     'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
     'Content-Type': upstream.headers.get('content-type') || 'audio/mp4',
     'Accept-Ranges': 'bytes',
-    // Caché corto: las URLs de origen caducan, el audio en sí no cambia
     'Cache-Control': 'public, max-age=3600, s-maxage=3600',
     Vary: 'Range'
   };
+
   const contentRange = upstream.headers.get('content-range');
   if (contentRange) headers['Content-Range'] = contentRange;
   const contentLength = upstream.headers.get('content-length');
@@ -212,8 +288,14 @@ export default async function handler(req, res) {
     }
     const nodeStream = Readable.fromWeb(upstream.body);
     nodeStream.on('error', () => {});
-    res.on('close', () => { try { nodeStream.destroy(); } catch {} });
-    return nodeStream.pipe(res);
+    if (typeof res.on === 'function') {
+      res.on('close', () => { try { nodeStream.destroy(); } catch {} });
+      return nodeStream.pipe(res);
+    }
+    for await (const chunk of nodeStream) {
+      if (typeof res.write === 'function') res.write(chunk);
+    }
+    return res.end();
   }
 
   return new Response(req.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers });
