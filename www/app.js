@@ -111,9 +111,12 @@
   let activeDeckIdx = 0;
   let isCrossfading = false;
   let fadeInterval = null;
+  window.crossfadeInterval = null;
+  window.activeStreamAbort = null;
   let userIntentionalPause = false;
   let isScrubbing = false;
   let streamWatchdogTimer = null;
+  let lastSkipTimestamp = 0;
 
   function getActivePlayer() {
     return audioDecks[activeDeckIdx];
@@ -121,6 +124,25 @@
 
   function getInactivePlayer() {
     return audioDecks[1 - activeDeckIdx];
+  }
+
+  function cancelActiveCrossfade() {
+    if (window.crossfadeInterval) {
+      clearInterval(window.crossfadeInterval);
+      window.crossfadeInterval = null;
+    }
+    if (fadeInterval) {
+      clearInterval(fadeInterval);
+      fadeInterval = null;
+    }
+    isCrossfading = false;
+    const maxVol = S.audioNormalize ? 0.88 : 1.0;
+    audioDecks.forEach((deck) => {
+      try {
+        deck.volume = maxVol;
+        deck.muted = false;
+      } catch {}
+    });
   }
 
   function formatTime(secs) {
@@ -141,10 +163,10 @@
     return Math.round(raw);
   }
 
-  function enrichTrackDuration(track) {
+  function enrichTrackDuration(track, signal) {
     if (!track || (track.duration && track.duration > 0)) return;
     const q = `${track.title} ${track.artist || ''}`.trim();
-    fetch(`/api/search?q=${encodeURIComponent(q)}`)
+    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal })
       .then((r) => r.json())
       .then((data) => {
         if (data.tracks && data.tracks.length > 0) {
@@ -197,7 +219,10 @@
 
   // --- Manejo de Fallback Automático en Fallas de Audio (Watchdog Inteligente) ---
   function handleStreamFailure(track, deck) {
-    if (!track) return;
+    if (!track) {
+      updatePlayPauseIcons(false, false);
+      return;
+    }
     if (!track._fallbackStep) track._fallbackStep = 1;
     else track._fallbackStep++;
 
@@ -207,15 +232,20 @@
       showToast('Optimizando audio con servidor ultra-rápido...');
       const fallbackUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=139&backup=1`;
       deck.src = fallbackUrl;
-      deck.play().catch(() => {});
+      deck.play().catch(() => {
+        updatePlayPauseIcons(false, false);
+      });
     } else if (track._fallbackStep === 2) {
       showToast('Conectando a nodo alternativo...');
       const fallbackUrl2 = `/api/stream?id=${encodeURIComponent(track.id)}&itag=139&backup=3`;
       deck.src = fallbackUrl2;
-      deck.play().catch(() => {});
+      deck.play().catch(() => {
+        updatePlayPauseIcons(false, false);
+      });
     } else {
       track._fallbackStep = 0;
       showToast('Servidor ocupado. Pasando a la siguiente canción...');
+      updatePlayPauseIcons(false, false);
       setTimeout(() => playNext(true), 1200);
     }
   }
@@ -224,8 +254,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       if (isCrossfading) {
-        if (fadeInterval) clearInterval(fadeInterval);
-        isCrossfading = false;
+        cancelActiveCrossfade();
         const activeP = getActivePlayer();
         if (activeP) activeP.volume = S.audioNormalize ? 0.88 : 1;
       }
@@ -296,7 +325,7 @@
           return;
         }
         S.isPlaying = false;
-        updatePlayPauseIcons(false);
+        updatePlayPauseIcons(false, false);
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
       }
     });
@@ -378,6 +407,8 @@
     deck.addEventListener('error', (e) => {
       if (idx === activeDeckIdx && S.currentIndex >= 0 && S.isPlaying && !userIntentionalPause && !isTransitioningTrack) {
         console.warn('Error en deck de audio:', e);
+        const maxVol = S.audioNormalize ? 0.88 : 1.0;
+        deck.volume = maxVol;
         handleStreamFailure(S.queue[S.currentIndex], deck);
       }
     });
@@ -525,7 +556,7 @@
 
   // --- Autoplay Continuo: Recomendaciones Infinitas ---
   let isFetchingRelated = false;
-  async function ensureUpcomingTracks(track) {
+  async function ensureUpcomingTracks(track, signal) {
     if (!S.autoplayInfinite || !track || isFetchingRelated) return;
     const remaining = S.queue.length - 1 - S.currentIndex;
     if (remaining < 4) {
@@ -534,7 +565,7 @@
         const query = track.artist && track.artist !== 'Artista'
           ? `${track.artist} exitos canciones`
           : `${track.title} mix`;
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal });
         const data = await res.json();
         if (data.tracks && data.tracks.length > 0) {
           const existingIds = new Set(S.queue.map((t) => t.id));
@@ -545,7 +576,9 @@
           }
         }
       } catch (err) {
-        console.error('Error al cargar recomendaciones continuas:', err);
+        if (err.name !== 'AbortError') {
+          console.error('Error al cargar recomendaciones continuas:', err);
+        }
       } finally {
         isFetchingRelated = false;
       }
@@ -725,6 +758,20 @@
     userIntentionalPause = false;
     track._fallbackStep = 0;
 
+    // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
+    if (window.activeStreamAbort) {
+      try {
+        window.activeStreamAbort.abort();
+      } catch {}
+    }
+    window.activeStreamAbort = new AbortController();
+    const abortSignal = window.activeStreamAbort.signal;
+
+    // Si es salto manual o había crossfade activo, cancelar crossfade y fijar volumen al 100%
+    if (immediate || isCrossfading) {
+      cancelActiveCrossfade();
+    }
+
     // 1. Mostrar y sincronizar inmediatamente el Mini-Player en el milisegundo 0 (antes de cualquier audio)
     showAndSyncMiniPlayer(track, true);
 
@@ -742,13 +789,14 @@
     applyDynamicColor(track);
     saveHistory(track);
     recordPlayStat(track);
-    loadLyrics(track);
-    loadSimilarTracks(track);
+    loadLyrics(track, abortSignal);
+    loadSimilarTracks(track, abortSignal);
     updateMediaSession(track);
-    ensureUpcomingTracks(track);
-    enrichTrackDuration(track);
+    ensureUpcomingTracks(track, abortSignal);
+    enrichTrackDuration(track, abortSignal);
 
     const isBg = isBackground();
+    // Crossfade elegante SOLO de forma automática al final natural (!immediate)
     const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
     const outPlayer = getActivePlayer();
     const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
@@ -768,14 +816,14 @@
         inPlayer.play().catch(() => {});
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
       } else {
-        if (isCrossfading) {
-          if (fadeInterval) clearInterval(fadeInterval);
-          isCrossfading = false;
-        }
-        if (outPlayer && outPlayer !== inPlayer) {
+        cancelActiveCrossfade();
+        const inact = getInactivePlayer();
+        if (inact && inact !== inPlayer) {
           try {
-            outPlayer.pause();
-            outPlayer.currentTime = 0;
+            inact.pause();
+            inact.removeAttribute('src');
+            inact.load();
+            inact.volume = targetVolume;
           } catch {}
         }
         inPlayer.muted = false;
@@ -792,6 +840,9 @@
           playPromise.catch((err) => {
             if (err.name !== 'AbortError') {
               console.warn('inPlayer play error:', err);
+              // Limpiar spinner si falla la reproducción
+              S.isPlaying = false;
+              updatePlayPauseIcons(false, false);
             }
           });
         }
@@ -806,6 +857,8 @@
         const p = getActivePlayer();
         if (!isTransitioningTrack && S.isPlaying && !userIntentionalPause && p && (p.currentTime === 0 || p.readyState < 2)) {
           console.warn('Watchdog de 7s disparado: Audio trabado en 0:00, ejecutando fallback...');
+          const targetVol = S.audioNormalize ? 0.88 : 1.0;
+          if (p) p.volume = targetVol;
           handleStreamFailure(track, p);
         }
       }, 7000);
@@ -813,12 +866,14 @@
     } catch (err) {
       console.error('Error al reproducir pista:', err);
       isTransitioningTrack = false;
+      S.isPlaying = false;
+      updatePlayPauseIcons(false, false);
     }
   }
 
   // --- Curva de Crossfade Senoidal (Desktop) ---
   function performCrossfade(outP, inP, durationSec) {
-    if (isCrossfading) clearInterval(fadeInterval);
+    cancelActiveCrossfade();
     isCrossfading = true;
 
     const steps = 30;
@@ -826,7 +881,7 @@
     let currentStep = 0;
     const maxVol = S.audioNormalize ? 0.88 : 1.0;
 
-    fadeInterval = setInterval(() => {
+    window.crossfadeInterval = setInterval(() => {
       currentStep++;
       const progress = currentStep / steps;
 
@@ -834,22 +889,28 @@
       const inVol = Math.sin((progress * Math.PI) / 2) * maxVol;
 
       try {
-        outP.volume = Math.max(0, Math.min(maxVol, outVol));
-        inP.volume = Math.max(0, Math.min(maxVol, inVol));
+        if (outP) outP.volume = Math.max(0, Math.min(maxVol, outVol));
+        if (inP) inP.volume = Math.max(0, Math.min(maxVol, inVol));
       } catch {}
 
       if (currentStep >= steps) {
-        clearInterval(fadeInterval);
+        cancelActiveCrossfade();
         try {
-          outP.pause();
-          outP.currentTime = 0;
-          outP.volume = maxVol;
-          inP.volume = maxVol;
+          if (outP) {
+            outP.pause();
+            outP.currentTime = 0;
+            outP.removeAttribute('src');
+            outP.load();
+            outP.volume = maxVol;
+          }
+          if (inP) {
+            inP.volume = maxVol;
+          }
         } catch {}
         activeDeckIdx = 1 - activeDeckIdx;
-        isCrossfading = false;
       }
     }, stepTime);
+    fadeInterval = window.crossfadeInterval;
   }
 
   function pausePlayback() {
@@ -899,7 +960,12 @@
     else resumePlayback();
   }
 
-  function playNext(immediate = false) {
+  function playNext(immediate = true) {
+    const now = Date.now();
+    // Bloqueo de seguridad de 300ms para evitar colisiones de clics rápidos
+    if (now - lastSkipTimestamp < 300) return;
+    lastSkipTimestamp = now;
+
     userIntentionalPause = false;
     if (S.queue.length === 0) {
       isTransitioningTrack = false;
@@ -923,6 +989,11 @@
   }
 
   function playPrev() {
+    const now = Date.now();
+    // Bloqueo de seguridad de 300ms para clics rápidos
+    if (now - lastSkipTimestamp < 300) return;
+    lastSkipTimestamp = now;
+
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
     const p = getActivePlayer();
@@ -936,7 +1007,7 @@
   }
 
   // --- Letras Sincronizadas (LRCLIB) ---
-  async function loadLyrics(track) {
+  async function loadLyrics(track, signal) {
     const container = $('lyricsContainer');
     if (!container) return;
     container.innerHTML = '<p class="text-zinc-500 text-sm animate-pulse">Buscando letra sincronizada...</p>';
@@ -944,7 +1015,7 @@
     S.currentLyricIdx = -1;
 
     try {
-      const res = await fetch(`/api/lyrics?track=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
+      const res = await fetch(`/api/lyrics?track=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`, { signal });
       const data = await res.json();
 
       if (data.syncedLyrics) {
@@ -955,7 +1026,8 @@
       } else {
         container.innerHTML = '<p class="text-zinc-500 text-sm">Letra no disponible para esta canción</p>';
       }
-    } catch {
+    } catch (err) {
+      if (err.name === 'AbortError') return;
       container.innerHTML = '<p class="text-zinc-500 text-sm">No se pudo cargar la letra</p>';
     }
   }
@@ -1221,7 +1293,7 @@
   }
 
   // --- Subpestaña "Similares" Robusta ---
-  async function loadSimilarTracks(track) {
+  async function loadSimilarTracks(track, signal) {
     const container = $('similarList');
     if (!container) return;
     const targetTrack = track || S.queue[S.currentIndex];
@@ -1233,7 +1305,7 @@
       const q = targetTrack.artist && targetTrack.artist !== 'Artista'
         ? `${targetTrack.artist} exitos`
         : `${targetTrack.title} mix`;
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal });
       const data = await res.json();
 
       if (!data.tracks || data.tracks.length === 0) {
@@ -2809,7 +2881,7 @@
 
     $('miniNextBtn').addEventListener('click', (e) => {
       e.stopPropagation();
-      playNext();
+      playNext(true);
     });
 
     // Cerrar pantalla completa
@@ -2828,7 +2900,7 @@
 
     // Botones de reproducción
     $('playerPlayBtn').addEventListener('click', togglePlayPause);
-    $('playerNextBtn').addEventListener('click', () => playNext());
+    $('playerNextBtn').addEventListener('click', () => playNext(true));
     $('playerPrevBtn').addEventListener('click', playPrev);
 
     // Like, Descarga y Playlist en Full Player
