@@ -37,8 +37,9 @@ input, select, textarea {
 html, body {
   position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
   margin: 0;
   padding: 0;
   background: #09090b;
@@ -46,20 +47,41 @@ html, body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   touch-action: pan-y;
 }
 
 body {
   position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
 }
 
-main, section, .scrollable-y {
+#appShell {
+  height: 100dvh;
+  max-height: 100dvh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+main, #mainContainer, section, .scrollable-y {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
+}
+
+#mainContainer {
+  flex: 1 1 0%;
+  min-height: 0;
+  padding-bottom: 9.5rem;
 }
 
 #fullPlayerSheet {
@@ -68,8 +90,15 @@ main, section, .scrollable-y {
 }
 
 #miniPlayer {
+  z-index: 40;
+  bottom: calc(3.75rem + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(90deg, var(--mini-ambient, rgba(24, 24, 27, 0.95)) 0%, rgba(24, 24, 27, 0.95) 100%);
-  transition: background 0.6s ease, transform 0.2s ease;
+  transition: background 0.6s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+
+nav.bottom-nav {
+  z-index: 40;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .smart-shuffle-badge {

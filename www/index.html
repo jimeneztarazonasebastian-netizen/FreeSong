@@ -52,9 +52,10 @@
     <symbol id="i-arrow-up" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></symbol>
     <symbol id="i-arrow-down" viewBox="0 0 24 24"><path fill="currentColor" d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></symbol>
     <symbol id="i-dj" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></symbol>
+    <symbol id="i-spinner" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" opacity=".25"/><path fill="currentColor" d="M12 4a8 8 0 0 1 7.89 6.7 1 1 0 0 0 1.98-.3A10 10 0 0 0 12 2z"/></symbol>
   </svg>
 
-  <div class="flex flex-col h-screen w-screen overflow-hidden">
+  <div id="appShell" class="flex flex-col h-[100dvh] max-h-[100dvh] w-screen overflow-hidden">
 
     <!-- Encabezado superior -->
     <header class="flex items-center justify-between px-4 pt-3 pb-2.5 shrink-0 bg-zinc-950/90 backdrop-blur-md z-10" style="padding-top: max(12px, env(safe-area-inset-top));">
@@ -82,7 +83,7 @@
     </header>
 
     <!-- Área de contenido principal -->
-    <main id="mainContainer" class="flex-1 overflow-y-auto px-4 pb-32 no-scrollbar">
+    <main id="mainContainer" class="flex-1 min-h-0 overflow-y-auto px-4 pb-[9.5rem] no-scrollbar">
 
       <!-- PESTAÑA: INICIO -->
       <section id="viewHome" class="space-y-4 pt-1">
@@ -429,7 +430,7 @@
     </main>
 
     <!-- Mini reproductor flotante -->
-    <div id="miniPlayer" class="hidden fixed bottom-[64px] left-3 right-3 z-30 rounded-2xl bg-zinc-900/95 border border-zinc-800/80 backdrop-blur-xl shadow-2xl p-2.5 transition-all duration-300 flex items-center justify-between cursor-pointer" style="margin-bottom: max(0px, env(safe-area-inset-bottom));">
+    <div id="miniPlayer" class="hidden fixed left-3 right-3 z-40 rounded-2xl bg-zinc-900/95 border border-zinc-800/80 backdrop-blur-xl shadow-2xl p-2.5 transition-all duration-300 flex items-center justify-between cursor-pointer" style="bottom: calc(3.75rem + env(safe-area-inset-bottom, 0px));">
       <!-- Barra delgada de progreso en el borde inferior -->
       <div class="absolute bottom-0 left-3 right-3 h-[2px] bg-zinc-800 rounded-full overflow-hidden">
         <div id="miniProgress" class="h-full bg-emerald-500 transition-all duration-200" style="width: 0%;"></div>
@@ -457,7 +458,7 @@
     </div>
 
     <!-- Barra de navegación inferior -->
-    <nav class="fixed bottom-0 left-0 right-0 z-20 bg-zinc-950/95 border-t border-zinc-900/80 backdrop-blur-xl flex items-center justify-around py-1.5 px-4" style="padding-bottom: max(6px, env(safe-area-inset-bottom));">
+    <nav class="bottom-nav fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 border-t border-zinc-900/80 backdrop-blur-xl flex items-center justify-around py-1.5 px-4" style="padding-bottom: env(safe-area-inset-bottom, 0px);">
       <button data-nav="home" class="flex flex-col items-center gap-1 py-1 px-3 text-emerald-400 font-semibold text-[10px] press">
         <svg class="w-6 h-6"><use href="#i-home"/></svg><span>Inicio</span>
       </button>

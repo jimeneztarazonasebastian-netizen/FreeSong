@@ -64,7 +64,8 @@
     repeat: 'all', // 'off', 'all', 'one'
     favorites: JSON.parse(localStorage.getItem('fs_favorites') || '[]'),
     downloads: JSON.parse(localStorage.getItem('fs_downloads') || '[]'),
-    offlineBlobUrls: {},
+    offlineBlobUrls: new Map(),
+    currentTrack: null,
     isDownloadingMap: {},
     recentSearches: JSON.parse(localStorage.getItem('fs_recent_searches') || '[]'),
     djVibeIndex: 0,
@@ -242,11 +243,23 @@
   let trackTransitionTimeout = null;
 
   audioDecks.forEach((deck, idx) => {
+    deck.addEventListener('loadstart', () => {
+      if (idx === activeDeckIdx && S.isPlaying) {
+        updatePlayPauseIcons(true, true);
+      }
+    });
+
+    deck.addEventListener('waiting', () => {
+      if (idx === activeDeckIdx && S.isPlaying) {
+        updatePlayPauseIcons(true, true);
+      }
+    });
+
     deck.addEventListener('play', () => {
       if (idx === activeDeckIdx) {
         S.isPlaying = true;
         userIntentionalPause = false;
-        updatePlayPauseIcons(true);
+        updatePlayPauseIcons(true, false);
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       }
     });
@@ -265,7 +278,7 @@
         S.queue[S.currentIndex]._fallbackStep = 0;
       }
       S.isPlaying = true;
-      updatePlayPauseIcons(true);
+      updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
@@ -468,11 +481,25 @@
     return next;
   }
 
+  function prewarmTracks(tracks) {
+    if (!tracks || !Array.isArray(tracks)) return;
+    tracks.slice(0, 2).forEach((t) => {
+      if (t && t.id) {
+        fetch(`/api/stream?id=${encodeURIComponent(t.id)}`, {
+          headers: { Range: 'bytes=0-1024' }
+        }).catch(() => {});
+      }
+    });
+  }
+
   function prefetchNextTrack() {
     const nextIdx = getNextIndex();
     if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
     const nextTrack = S.queue[nextIdx];
-    if (!nextTrack || nextTrack.streamUrl) return;
+    if (!nextTrack) return;
+
+    prewarmTracks([nextTrack]);
+    if (nextTrack.streamUrl) return;
 
     const targetUrl = `/api/stream?id=${encodeURIComponent(nextTrack.id)}&itag=${S.audioQuality}`;
     nextTrack.streamUrl = targetUrl;
@@ -536,12 +563,12 @@
     try {
       const cache = await caches.open('freesong-offline-audio-v1');
       for (const item of S.downloads) {
-        if (!item || !item.id || S.offlineBlobUrls[item.id]) continue;
+        if (!item || !item.id || S.offlineBlobUrls.has(item.id)) continue;
         const match = await cache.match('/offline-audio/' + item.id);
         if (match) {
           const blob = await match.blob();
           if (blob && blob.size > 1000) {
-            S.offlineBlobUrls[item.id] = URL.createObjectURL(blob);
+            S.offlineBlobUrls.set(item.id, URL.createObjectURL(blob));
           }
         }
       }
@@ -580,10 +607,10 @@
         );
       }
 
-      if (S.offlineBlobUrls[track.id]) {
-        URL.revokeObjectURL(S.offlineBlobUrls[track.id]);
+      if (S.offlineBlobUrls.has(track.id)) {
+        URL.revokeObjectURL(S.offlineBlobUrls.get(track.id));
       }
-      S.offlineBlobUrls[track.id] = URL.createObjectURL(blob);
+      S.offlineBlobUrls.set(track.id, URL.createObjectURL(blob));
 
       const entry = {
         id: track.id,
@@ -627,9 +654,9 @@
         const cache = await caches.open('freesong-offline-audio-v1');
         await cache.delete('/offline-audio/' + trackId);
       }
-      if (S.offlineBlobUrls[trackId]) {
-        URL.revokeObjectURL(S.offlineBlobUrls[trackId]);
-        delete S.offlineBlobUrls[trackId];
+      if (S.offlineBlobUrls.has(trackId)) {
+        URL.revokeObjectURL(S.offlineBlobUrls.get(trackId));
+        S.offlineBlobUrls.delete(trackId);
       }
     } catch (e) {
       console.warn('deleteDownload cache error:', e);
@@ -692,14 +719,23 @@
     }
     S.currentIndex = index;
     const track = S.queue[index];
+    S.currentTrack = track;
+    localStorage.setItem('fs_last_track', JSON.stringify(track));
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
+
+    // 1. Mostrar y sincronizar inmediatamente el Mini-Player en el milisegundo 0 (antes de cualquier audio)
+    showAndSyncMiniPlayer(track, true);
 
     // Reset inmediato de posición visual en la interfaz para la nueva pista
     if ($('playerCurTime')) $('playerCurTime').textContent = '0:00';
     if ($('playerSeek')) $('playerSeek').value = 0;
     if ($('miniProgress')) $('miniProgress').style.width = '0%';
+
+    // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
+    const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
+    const streamUrl = track.streamUrl || offlineUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -711,28 +747,6 @@
     updateMediaSession(track);
     ensureUpcomingTracks(track);
     enrichTrackDuration(track);
-
-    // Si la pista está en caché offline, usar el Blob ObjectURL para reproducción instantánea 0ms
-    let streamUrl = track.streamUrl;
-    if (!streamUrl) {
-      if (S.offlineBlobUrls && S.offlineBlobUrls[track.id]) {
-        streamUrl = S.offlineBlobUrls[track.id];
-      } else {
-        streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}`;
-      }
-    }
-
-    // Si está en la lista de descargadas pero aún no se había montado el Blob URL, resolverlo en background
-    if ('caches' in window && isDownloaded(track.id) && !S.offlineBlobUrls[track.id]) {
-      caches.open('freesong-offline-audio-v1').then(async (c) => {
-        const res = await c.match('/offline-audio/' + track.id);
-        if (res) {
-          const blob = await res.blob();
-          const u = URL.createObjectURL(blob);
-          S.offlineBlobUrls[track.id] = u;
-        }
-      }).catch(() => {});
-    }
 
     const isBg = isBackground();
     const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
@@ -866,6 +880,12 @@
     }
     const p = getActivePlayer();
     if (p) {
+      if (!p.src || p.src === '' || p.src === window.location.href) {
+        if (S.currentIndex >= 0 && S.queue[S.currentIndex]) {
+          playTrack(S.currentIndex, true);
+          return;
+        }
+      }
       p.playbackRate = S.playbackRate;
       p.play().catch(() => {});
       S.isPlaying = true;
@@ -1527,11 +1547,34 @@
   }
 
   // --- Actualizaciones de Interfaz y Like ---
+  function showAndSyncMiniPlayer(track, isLoading = false) {
+    const mini = $('miniPlayer');
+    if (!mini || !track) return;
+
+    mini.classList.remove('hidden', 'translate-y-full', 'opacity-0', 'pointer-events-none');
+    mini.style.display = 'flex';
+
+    const miniCover = $('miniCover');
+    if (miniCover) miniCover.src = track.thumbnail || 'icons/icon-192.png';
+    const miniTitle = $('miniTitle');
+    if (miniTitle) miniTitle.textContent = track.title || 'Canción';
+    const miniArtist = $('miniArtist');
+    if (miniArtist) miniArtist.textContent = track.artist || 'Artista';
+
+    updateLikeButton(track);
+    updatePlayPauseIcons(S.isPlaying, isLoading);
+  }
+
+  function closeFullPlayer() {
+    $('fullPlayerSheet').classList.add('translate-y-full');
+    const cur = S.queue[S.currentIndex] || S.currentTrack;
+    if (cur) {
+      showAndSyncMiniPlayer(cur, false);
+    }
+  }
+
   function updatePlayerUI(track) {
-    $('miniPlayer').classList.remove('hidden');
-    $('miniTitle').textContent = track.title;
-    $('miniArtist').textContent = track.artist || 'Artista';
-    $('miniCover').src = track.thumbnail;
+    showAndSyncMiniPlayer(track, false);
 
     $('playerTitle').textContent = track.title;
     $('playerArtist').textContent = track.artist || 'Artista';
@@ -1542,14 +1585,23 @@
     renderQueue();
   }
 
-  function updatePlayPauseIcons(playing) {
+  function updatePlayPauseIcons(playing, isLoading = false) {
     const playSvg = '<svg class="w-5 h-5"><use href="#i-play"/></svg>';
     const pauseSvg = '<svg class="w-5 h-5"><use href="#i-pause"/></svg>';
+    const spinnerSvg = '<svg class="w-5 h-5 animate-spin text-emerald-400"><use href="#i-spinner"/></svg>';
+
     const bigPlaySvg = '<svg class="w-8 h-8"><use href="#i-play"/></svg>';
     const bigPauseSvg = '<svg class="w-8 h-8"><use href="#i-pause"/></svg>';
+    const bigSpinnerSvg = '<svg class="w-8 h-8 animate-spin text-emerald-400"><use href="#i-spinner"/></svg>';
 
-    $('miniPlayBtn').innerHTML = playing ? pauseSvg : playSvg;
-    $('playerPlayBtn').innerHTML = playing ? bigPauseSvg : bigPlaySvg;
+    const miniPlayBtn = $('miniPlayBtn');
+    if (miniPlayBtn) {
+      miniPlayBtn.innerHTML = isLoading ? spinnerSvg : (playing ? pauseSvg : playSvg);
+    }
+    const playerPlayBtn = $('playerPlayBtn');
+    if (playerPlayBtn) {
+      playerPlayBtn.innerHTML = isLoading ? bigSpinnerSvg : (playing ? bigPauseSvg : bigPlaySvg);
+    }
   }
 
   function updateLikeButton(track) {
@@ -2152,6 +2204,10 @@
         return;
       }
 
+      if (data.shelves[0]?.items?.length > 0) {
+        prewarmTracks(data.shelves[0].items.slice(0, 2));
+      }
+
       renderQuickAccess();
 
       if (category === 'todo' && data.shelves[0]?.items?.length > 0) {
@@ -2416,6 +2472,8 @@
         return;
       }
 
+      prewarmTracks(data.tracks.slice(0, 2));
+
       results.innerHTML = data.tracks.map((t, idx) => `
         <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
@@ -2597,7 +2655,7 @@
           const dx = e.changedTouches[0].clientX - touchStartX;
           // Deslizar hacia abajo minimiza el reproductor
           if (dy > 70 && Math.abs(dy) > Math.abs(dx) * 1.5) {
-            playerSheet.classList.add('translate-y-full');
+            closeFullPlayer();
           }
         }
       }, { passive: true });
@@ -2649,7 +2707,7 @@
 
     // Cerrar pantalla completa
     $('playerCloseBtn').addEventListener('click', () => {
-      $('fullPlayerSheet').classList.add('translate-y-full');
+      closeFullPlayer();
     });
 
     // Subpestañas del Full Player
@@ -3074,6 +3132,23 @@
     renderLibrary();
     loadHomeContent('todo');
     initOfflineBlobs();
+
+    // Restaurar última canción escuchada en el Mini-Player (como Spotify)
+    try {
+      const savedTrack = localStorage.getItem('fs_last_track');
+      if (savedTrack) {
+        const lastTrack = JSON.parse(savedTrack);
+        if (lastTrack && lastTrack.id) {
+          S.currentTrack = lastTrack;
+          S.queue = [lastTrack];
+          S.currentIndex = 0;
+          showAndSyncMiniPlayer(lastTrack, false);
+          updatePlayPauseIcons(false);
+        }
+      }
+    } catch (e) {
+      console.warn('Error al restaurar última canción:', e);
+    }
 
     // Reproducción directa por URL (?track=VIDEO_ID)
     const params = new URLSearchParams(window.location.search);

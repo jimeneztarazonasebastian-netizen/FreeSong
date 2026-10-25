@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.0.0: guarda el app shell para abrirla sin internet.
+// Service worker de FreeSong v3.1.0: Network-First para App Shell (actualización inmediata)
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.0.0';
+const VERSION = 'freesong-v3.1.0';
 const SHELL = [
   './',
   'index.html',
@@ -16,7 +16,11 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(VERSION)
+      .then((c) => c.addAll(SHELL))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -39,33 +43,39 @@ self.addEventListener('fetch', (event) => {
   // No interceptar llamadas de API ni audio offline
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/offline-audio/')) return;
 
-  // Páginas: primero la red (para recibir actualizaciones), si falla la copia guardada.
-  if (req.mode === 'navigate') {
+  // ESTRATEGIA NETWORK-FIRST para '/', 'index.html', 'app.js', 'app.css' y navegación
+  const isCoreAsset = req.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname.endsWith('index.html') ||
+    url.pathname.endsWith('app.js') ||
+    url.pathname.endsWith('app.css');
+
+  if (isCoreAsset) {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put('index.html', copy));
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(VERSION).then((c) => c.put(req, copy));
+          }
           return res;
         })
-        .catch(() => caches.match('index.html'))
+        .catch(() => caches.match(req).then((cached) => cached || (req.mode === 'navigate' ? caches.match('index.html') : null)))
     );
     return;
   }
 
-  // Archivos de la app: primero la red (así siempre llega la versión nueva);
-  // sin conexión, o si la red tarda más de 4 s, se usa la copia guardada.
-  event.respondWith((async () => {
-    const cached = await caches.match(req);
-    const network = fetch(req).then((res) => {
-      if (res.ok) {
-        const copy = res.clone();
-        caches.open(VERSION).then((c) => c.put(req, copy));
-      }
-      return res;
-    });
-    if (!cached) return network;
-    const slow = new Promise((resolve) => setTimeout(() => resolve(cached), 4000));
-    return Promise.race([network.catch(() => cached), slow]);
-  })());
+  // Otros activos estáticos (iconos, fuentes): Cache-First con actualización de fondo
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      if (cached) return cached;
+      return fetch(req).then((res) => {
+        if (res && res.status === 200) {
+          const copy = res.clone();
+          caches.open(VERSION).then((c) => c.put(req, copy));
+        }
+        return res;
+      });
+    })
+  );
 });
