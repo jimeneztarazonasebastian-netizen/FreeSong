@@ -1368,6 +1368,9 @@
     });
 
     $('songMenuModal').classList.remove('hidden');
+    try {
+      history.pushState({ modal: 'songMenu' }, '');
+    } catch {}
   }
 
   function closeSongMenu() {
@@ -1426,36 +1429,92 @@
 
   // --- Vista / Perfil del Artista Completo (Estilo Spotify) ---
   let currentArtistTracks = [];
-  async function openArtistPage(artistName, artistThumb = '') {
-    if (!artistName) return;
-    const cleanArtist = artistName.replace(/\s*-\s*Topic$/i, '').trim();
-    if (!cleanArtist || cleanArtist === 'Artista' || cleanArtist === 'FreeSong Music') return;
+
+  function parseArtistCollabs(rawName) {
+    if (!rawName) return [];
+    const clean = rawName.replace(/\s*-\s*Topic$/i, '').trim();
+    // Separar por comas, &, " y ", " and ", feat., ft., etc.
+    const parts = clean
+      .split(/[,&/|]|\by\b|\band\b|\bfeat\.?\b|\bft\.?\b/i)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && s !== 'Artista' && s !== 'FreeSong Music');
+    return parts.length > 0 ? parts : [clean];
+  }
+
+  function closeArtistProfile() {
+    const modal = $('artistViewModal');
+    if (modal && !modal.classList.contains('hidden')) {
+      modal.classList.add('hidden');
+    }
+  }
+  window.closeArtistProfile = closeArtistProfile;
+
+  async function openArtistPage(rawArtistName, artistThumb = '') {
+    if (!rawArtistName) return;
+    const allArtists = parseArtistCollabs(rawArtistName);
+    const primaryArtist = allArtists[0] || rawArtistName.replace(/\s*-\s*Topic$/i, '').trim();
+    if (!primaryArtist || primaryArtist === 'Artista' || primaryArtist === 'FreeSong Music') return;
 
     const modal = $('artistViewModal');
     if (!modal) return;
     modal.classList.remove('hidden');
+    modal.scrollTop = 0;
 
-    $('artistTopBarTitle').textContent = cleanArtist;
-    $('artistHeroName').textContent = cleanArtist;
+    try {
+      history.pushState({ modal: 'artist' }, '');
+    } catch {}
+
+    $('artistTopBarTitle').textContent = primaryArtist;
+    $('artistHeroName').textContent = primaryArtist;
     if (artistThumb) {
       $('artistHeroImg').src = artistThumb;
     } else {
       $('artistHeroImg').src = 'icons/icon-512.png';
     }
 
+    // Renderizar chips de colaboración si hay más de 1 artista
+    const chipsEl = $('artistCollabChips');
+    if (chipsEl) {
+      if (allArtists.length > 1) {
+        chipsEl.classList.remove('hidden');
+        chipsEl.innerHTML = allArtists.map((art) => {
+          const isCurrent = art.toLowerCase() === primaryArtist.toLowerCase();
+          return `
+            <button data-collab-artist="${art}" class="px-3 py-1 rounded-full text-xs font-bold transition shrink-0 ${
+              isCurrent
+                ? 'bg-emerald-500 text-black shadow-md'
+                : 'bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700'
+            }">
+              ${art}
+            </button>
+          `;
+        }).join('');
+
+        $$('[data-collab-artist]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const chosen = btn.getAttribute('data-collab-artist');
+            openArtistPage(chosen);
+          });
+        });
+      } else {
+        chipsEl.classList.add('hidden');
+        chipsEl.innerHTML = '';
+      }
+    }
+
     const topListEl = $('artistTopTracksList');
-    topListEl.innerHTML = `<div class="py-10 text-center text-zinc-500 text-xs animate-pulse">Cargando éxitos de ${cleanArtist}...</div>`;
+    topListEl.innerHTML = `<div class="py-10 text-center text-zinc-500 text-xs animate-pulse">Cargando éxitos de ${primaryArtist}...</div>`;
     const simListEl = $('artistSimilarList');
     simListEl.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(cleanArtist + ' exitos')}`);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(primaryArtist + ' exitos')}`);
       const data = await res.json();
       const tracks = (data.tracks || []).slice(0, 10);
       currentArtistTracks = tracks;
 
       if (tracks.length === 0) {
-        topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${cleanArtist}</p>`;
+        topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${primaryArtist}</p>`;
         return;
       }
 
@@ -1517,7 +1576,7 @@
 
       // Fans también escuchan
       const LATIN_STARS = ['Feid', 'Karol G', 'Bad Bunny', 'Rauw Alejandro', 'Quevedo', 'Mora', 'Manuel Turizo', 'Myke Towers', 'Ozuna', 'J Balvin'];
-      const simArtists = LATIN_STARS.filter((a) => a.toLowerCase() !== cleanArtist.toLowerCase()).slice(0, 5);
+      const simArtists = LATIN_STARS.filter((a) => a.toLowerCase() !== primaryArtist.toLowerCase()).slice(0, 5);
 
       simListEl.innerHTML = simArtists.map((artName) => `
         <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${artName}">
@@ -1546,6 +1605,12 @@
     }
   }
 
+  function openArtistProfile(artistName, artistThumb = '') {
+    return openArtistPage(artistName, artistThumb);
+  }
+  window.openArtistProfile = openArtistProfile;
+  window.openArtistPage = openArtistPage;
+
   // --- Actualizaciones de Interfaz y Like ---
   function showAndSyncMiniPlayer(track, isLoading = false) {
     const mini = $('miniPlayer');
@@ -1563,6 +1628,13 @@
 
     updateLikeButton(track);
     updatePlayPauseIcons(S.isPlaying, isLoading);
+  }
+
+  function openFullPlayer() {
+    $('fullPlayerSheet').classList.remove('translate-y-full');
+    try {
+      history.pushState({ modal: 'player' }, '');
+    } catch {}
   }
 
   function closeFullPlayer() {
@@ -2019,6 +2091,9 @@
       });
     }
     $('playlistModal').classList.remove('hidden');
+    try {
+      history.pushState({ modal: 'playlist' }, '');
+    } catch {}
   }
 
   function renderUserPlaylists() {
@@ -2584,6 +2659,9 @@
 
   function openSleepTimerModal() {
     $('sleepTimerModal').classList.remove('hidden');
+    try {
+      history.pushState({ modal: 'sleepTimer' }, '');
+    } catch {}
   }
 
   function closeSleepTimerModal() {
@@ -2592,6 +2670,7 @@
 
   // --- Navegación entre pestañas ---
   function switchTab(tab) {
+    closeArtistProfile();
     S.activeTab = tab;
     $('viewHome').classList.toggle('hidden', tab !== 'home');
     $('viewSearch').classList.toggle('hidden', tab !== 'search');
@@ -2660,6 +2739,31 @@
         }
       }, { passive: true });
     }
+
+    const artistModal = $('artistViewModal');
+    if (artistModal) {
+      let artistTouchStartX = 0;
+      let artistTouchStartY = 0;
+
+      artistModal.addEventListener('touchstart', (e) => {
+        artistTouchStartX = e.touches[0].clientX;
+        artistTouchStartY = e.touches[0].clientY;
+      }, { passive: true });
+
+      artistModal.addEventListener('touchend', (e) => {
+        const dx = e.changedTouches[0].clientX - artistTouchStartX;
+        const dy = e.changedTouches[0].clientY - artistTouchStartY;
+
+        // Deslizar hacia la derecha desde el borde izquierdo (gesto nativo iOS volver)
+        const isSwipeRight = artistTouchStartX < 75 && dx > 60 && Math.abs(dx) > Math.abs(dy) * 1.3;
+        // O deslizar hacia abajo si el scroll está en el inicio superior
+        const isSwipeDownFromTop = artistModal.scrollTop <= 5 && dy > 80 && Math.abs(dy) > Math.abs(dx) * 1.4;
+
+        if (isSwipeRight || isSwipeDownFromTop) {
+          closeArtistProfile();
+        }
+      }, { passive: true });
+    }
   }
 
   // --- Enlazar Todos los Eventos de la Interfaz ---
@@ -2677,7 +2781,10 @@
 
     // Pestañas inferiores de la app
     $$('[data-nav]').forEach((btn) => {
-      btn.addEventListener('click', () => switchTab(btn.getAttribute('data-nav')));
+      btn.addEventListener('click', () => {
+        closeArtistProfile();
+        switchTab(btn.getAttribute('data-nav'));
+      });
     });
 
     // Mini Player
@@ -2687,7 +2794,7 @@
         e.target.closest('#miniNextBtn') ||
         e.target.closest('#miniLikeBtn')
       ) return;
-      $('fullPlayerSheet').classList.remove('translate-y-full');
+      openFullPlayer();
     });
 
     $('miniLikeBtn').addEventListener('click', (e) => {
@@ -2706,7 +2813,7 @@
     });
 
     // Cerrar pantalla completa
-    $('playerCloseBtn').addEventListener('click', () => {
+    $('playerCloseBtn')?.addEventListener('click', () => {
       closeFullPlayer();
     });
 
@@ -2893,9 +3000,8 @@
     $('homeDjCard')?.addEventListener('click', startDjSession);
 
     // Modal: Perfil del Artista Completo
-    $('artistBackBtn')?.addEventListener('click', () => {
-      $('artistViewModal')?.classList.add('hidden');
-    });
+    $('artistCloseBtn')?.addEventListener('click', closeArtistProfile);
+    $('artistBackBtn')?.addEventListener('click', closeArtistProfile);
 
     $('artistPlayBtn')?.addEventListener('click', () => {
       if (currentArtistTracks.length > 0) {
@@ -3123,6 +3229,46 @@
     else text = 'Buenas noches';
     el.textContent = text;
   }
+
+  // --- Manejo Global de Modales, Botón Atrás (History API) y Tecla Escape ---
+  function closeTopModal() {
+    const songMenu = $('songMenuModal');
+    if (songMenu && !songMenu.classList.contains('hidden')) {
+      closeSongMenu();
+      return true;
+    }
+    const plModal = $('playlistModal');
+    if (plModal && !plModal.classList.contains('hidden')) {
+      plModal.classList.add('hidden');
+      return true;
+    }
+    const sleepModal = $('sleepTimerModal');
+    if (sleepModal && !sleepModal.classList.contains('hidden')) {
+      closeSleepTimerModal();
+      return true;
+    }
+    const fullPlayer = $('fullPlayerSheet');
+    if (fullPlayer && !fullPlayer.classList.contains('translate-y-full')) {
+      closeFullPlayer();
+      return true;
+    }
+    const artistModal = $('artistViewModal');
+    if (artistModal && !artistModal.classList.contains('hidden')) {
+      closeArtistProfile();
+      return true;
+    }
+    return false;
+  }
+
+  window.addEventListener('popstate', () => {
+    closeTopModal();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeTopModal();
+    }
+  });
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {

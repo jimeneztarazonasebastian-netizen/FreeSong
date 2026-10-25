@@ -340,3 +340,10 @@ body[data-playing="true"] .track-row[data-current="true"]:hover .t-eq { display:
 @media (prefers-reduced-motion: reduce) {
   .eq-bar-1, .eq-bar-2, .eq-bar-3 { animation: none; height: 10px; }
 }
+
+/* Modal de Perfil de Artista - z-30 para quedar debajo de MiniPlayer y Nav (z-40) */
+#artistViewModal {
+  z-index: 30;
+  padding-bottom: calc(10rem + env(safe-area-inset-bottom, 0px));
+}
+
