@@ -18,3 +18,16 @@ Este repositorio está preconfigurado con `vercel.json` para despliegue automát
 1. Conecta este repositorio en Vercel.
 2. Pulsa **Deploy** (los archivos se sirven directamente desde `www`).
 3. Abre el enlace en tu iPhone y disfrútalo.
+
+## 🛠️ Desarrollo local
+
+```bash
+npm install
+npm run build   # compila Tailwind -> www/app.css
+npm start       # http://localhost:5173 (sirve www/ y emula las funciones de /api)
+npm run icons   # regenera los íconos PNG desde assets/icon.svg
+```
+
+## 🔊 Cómo funciona el streaming
+
+`api/stream.js` obtiene la URL directa del audio (AAC/MP4) desde YouTube con los clientes `ANDROID_VR`, `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. Si YouTube bloquea los tres, usa instancias públicas de Invidious como último recurso. Si todo falla responde `502`.

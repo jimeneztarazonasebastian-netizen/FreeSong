@@ -20,8 +20,23 @@ createServer(async (req, res) => {
     const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (urlPath.startsWith('/api/')) {
       const apiName = urlPath.replace('/api/', '').split('?')[0];
+      // Imita los helpers que Vercel agrega a req/res en las funciones /api
+      const parsed = new URL(req.url, 'http://x');
+      req.query = Object.fromEntries(parsed.searchParams);
+      res.status = (code) => { res.statusCode = code; return res; };
+      res.send = (body) => { res.end(body); return res; };
+      res.json = (body) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(body));
+        return res;
+      };
+      res.redirect = (code, url) => {
+        res.writeHead(code, { Location: url });
+        res.end();
+        return res;
+      };
       const apiModule = await import(`../api/${apiName}.js`);
-      return apiModule.default(req, res);
+      return await apiModule.default(req, res);
     }
     let file = normalize(join(ROOT, urlPath));
     if (!file.startsWith(ROOT)) throw new Error('forbidden');
@@ -29,8 +44,11 @@ createServer(async (req, res) => {
     const body = await readFile(file);
     res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(body);
-  } catch {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('404');
+  } catch (err) {
+    if (res.headersSent) return res.end();
+    const isApi = req.url.startsWith('/api/');
+    if (isApi) console.error(err);
+    res.writeHead(isApi ? 500 : 404, { 'Content-Type': 'text/plain' });
+    res.end(isApi ? 'Error en la API' : '404');
   }
 }).listen(PORT, () => console.log(`FreeSong en http://localhost:${PORT}`));
