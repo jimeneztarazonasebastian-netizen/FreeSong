@@ -171,7 +171,7 @@
           <svg class="w-5 h-5 absolute left-3.5 top-3 text-zinc-400 pointer-events-none"><use href="#i-search"/></svg>
           <input id="searchInput" type="search" placeholder="¿Qué quieres escuchar hoy?" autocomplete="off"
             class="w-full pl-11 pr-10 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-base text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition shadow-inner" />
-          <button id="searchClearBtn" class="hidden absolute right-3 top-3 text-zinc-400 hover:text-white p-0.5"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
+          <button id="searchClearBtn" type="button" aria-label="Borrar búsqueda" class="hidden absolute right-3 top-3 text-zinc-400 hover:text-white p-0.5"><svg class="w-5 h-5"><use href="#i-close"/></svg></button>
         </div>
 
         <!-- Búsquedas Recientes (cuando el input está vacío) -->
@@ -709,10 +709,10 @@
         <!-- Botones de Acción del Artista -->
         <div class="flex items-center justify-between pt-1">
           <div class="flex items-center gap-3">
-            <button id="artistPlayBtn" class="w-12 h-12 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.4)] press">
+            <button id="artistPlayBtn" aria-label="Reproducir artista" class="w-12 h-12 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.4)] press">
               <svg class="w-6 h-6"><use href="#i-play"/></svg>
             </button>
-            <button id="artistShuffleBtn" class="w-10 h-10 rounded-full bg-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center press border border-zinc-700">
+            <button id="artistShuffleBtn" aria-label="Reproducir en aleatorio" class="w-10 h-10 rounded-full bg-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center press border border-zinc-700">
               <svg class="w-5 h-5"><use href="#i-shuffle"/></svg>
             </button>
           </div>
@@ -782,7 +782,7 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <svg class="w-5 h-5 text-emerald-400"><use href="#i-playlist-add"/></svg>
-            <h3 class="font-bold text-white text-base">Guardar en playlist</h3>
+            <h3 id="playlistModalTitle" class="font-bold text-white text-base">Guardar en playlist</h3>
           </div>
           <button id="playlistModalCloseBtn" type="button" aria-label="Cerrar modal playlist" class="p-1 text-zinc-400 hover:text-white active:scale-95 transition cursor-pointer">
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -793,11 +793,11 @@
 
         <!-- Crear nueva playlist -->
         <div class="flex items-center gap-2">
-          <input id="newPlaylistInput" type="text" placeholder="Nombre de la nueva playlist..." class="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500" />
+          <input id="newPlaylistInput" type="text" maxlength="60" autocomplete="off" aria-label="Nombre de la playlist" placeholder="Nombre de la nueva playlist..." class="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500" />
           <button id="createPlaylistConfirmBtn" class="px-3.5 py-2.5 rounded-xl bg-emerald-500 text-black font-bold text-xs press">Crear</button>
         </div>
 
-        <div class="space-y-1.5 max-h-48 overflow-y-auto no-scrollbar pt-1">
+        <div id="playlistModalListWrap" class="space-y-1.5 max-h-48 overflow-y-auto no-scrollbar pt-1">
           <p class="text-[11px] font-bold uppercase text-zinc-500">Tus playlists</p>
           <div id="modalPlaylistsList" class="space-y-1">
             <!-- Rellenado por app.js -->

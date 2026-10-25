@@ -4,7 +4,7 @@
   'use strict';
 
   // Detección precisa de iOS (iPhone, iPad, iPod, y Safari en iOS modernos)
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || ('ontouchend' in document);
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
   // --- Bloqueo global de Zoom en iOS Safari (Pinch-to-zoom y Doble Tap) ---
   document.addEventListener('touchmove', (e) => {
@@ -13,14 +13,8 @@
     }
   }, { passive: false });
 
-  let lastTouchEnd = 0;
-  document.addEventListener('touchend', (e) => {
-    const now = Date.now();
-    if (now - lastTouchEnd <= 300) {
-      e.preventDefault();
-    }
-    lastTouchEnd = now;
-  }, { passive: false });
+  // El zoom por doble toque ya se evita con `touch-action: manipulation` (app.css).
+  // No se cancela `touchend` aquí: anulaba el 2.º toque rápido (p. ej. dos veces en "siguiente").
 
   ['gesturestart', 'gesturechange', 'gestureend', 'dblclick'].forEach((ev) => {
     window.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
@@ -35,6 +29,45 @@
   // --- Elementos del DOM ---
   const $ = (id) => document.getElementById(id);
   const $$ = (sel) => document.querySelectorAll(sel);
+
+  // Escapa texto dinámico (títulos, artistas, nombres de playlist) antes de usarlo en innerHTML
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // --- Historial del navegador ligado a los paneles: "atrás" (o el gesto) cierra el panel abierto ---
+  // Cada panel agrega una entrada al abrirse; al cerrarlo por otro medio hay que retirarla,
+  // si no el historial se llena de entradas vacías y "atrás" deja de hacer nada visible.
+  let popGuard = 0; // retrocesos provocados por nosotros al cerrar un panel
+  let inPopstate = false; // el navegador ya retrocedió por su cuenta
+  const pendingPushes = []; // paneles abiertos mientras un retroceso nuestro sigue en curso
+
+  function pushModalState(name) {
+    if (popGuard > 0) {
+      pendingPushes.push(name);
+      return;
+    }
+    try { history.pushState({ modal: name }, ''); } catch {}
+  }
+
+  function popModalState() {
+    if (inPopstate) return;
+    if (pendingPushes.length > 0) {
+      pendingPushes.pop();
+      return;
+    }
+    if (!(history.state && history.state.modal)) return;
+    popGuard++;
+    try { history.back(); } catch { popGuard--; }
+  }
+
+  // Mezcla uniforme (Fisher-Yates); sort(() => Math.random() - 0.5) está sesgado
+  function shuffled(list) {
+    const a = [...list];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
 
   // --- Sistema de Notificaciones Toast Flotantes ---
   let toastTimer = null;
@@ -83,6 +116,7 @@
     activeChip: 'todo',
     activePlayerSubTab: 'track', // 'track', 'queue', 'lyrics', 'similar'
     libFilter: 'likes', // 'likes', 'downloads', 'playlists', 'history', 'stats'
+    openPlaylistId: null, // playlist abierta en el detalle de la biblioteca
     libSort: 'recent',
     menuTargetTrack: null,
     sleepTimerMinutes: null,
@@ -1035,7 +1069,7 @@
         S.syncedLyrics = parseLrc(data.syncedLyrics);
         renderLyrics(S.syncedLyrics);
       } else if (data.plainLyrics) {
-        container.innerHTML = `<div class="text-zinc-300 text-sm leading-relaxed whitespace-pre-line py-4">${data.plainLyrics}</div>`;
+        container.innerHTML = `<div class="text-zinc-300 text-sm leading-relaxed whitespace-pre-line py-4">${esc(data.plainLyrics)}</div>`;
       } else {
         container.innerHTML = '<p class="text-zinc-500 text-sm">Letra no disponible para esta canción</p>';
       }
@@ -1068,7 +1102,7 @@
     const container = $('lyricsContainer');
     container.innerHTML = lyricsList.map((item, idx) => `
       <p id="lyric-${idx}" class="lyric-line text-lg sm:text-xl font-bold text-zinc-500 py-1 transition-all duration-300 cursor-pointer hover:text-zinc-200">
-        ${item.text}
+        ${esc(item.text)}
       </p>
     `).join('');
 
@@ -1332,8 +1366,8 @@
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <img src="${t.thumbnail}" class="w-10 h-10 rounded-xl object-cover bg-zinc-800 shrink-0" loading="lazy" />
             <div class="min-w-0 flex-1">
-              <p class="text-xs font-bold text-white truncate">${t.title}</p>
-              <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+              <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0 ml-2">
@@ -1453,13 +1487,14 @@
     });
 
     $('songMenuModal').classList.remove('hidden');
-    try {
-      history.pushState({ modal: 'songMenu' }, '');
-    } catch {}
+    pushModalState('songMenu');
   }
 
   function closeSongMenu() {
-    $('songMenuModal').classList.add('hidden');
+    const modal = $('songMenuModal');
+    if (modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    popModalState();
   }
 
   function setPlaybackRate(rate) {
@@ -1530,6 +1565,7 @@
     const modal = $('artistViewModal');
     if (modal && !modal.classList.contains('hidden')) {
       modal.classList.add('hidden');
+      popModalState();
     }
   }
   window.closeArtistProfile = closeArtistProfile;
@@ -1542,12 +1578,10 @@
 
     const modal = $('artistViewModal');
     if (!modal) return;
+    // Si ya estaba abierto (artista → artista) no se agrega otra entrada de historial
+    if (modal.classList.contains('hidden')) pushModalState('artist');
     modal.classList.remove('hidden');
     modal.scrollTop = 0;
-
-    try {
-      history.pushState({ modal: 'artist' }, '');
-    } catch {}
 
     $('artistTopBarTitle').textContent = primaryArtist;
     $('artistHeroName').textContent = primaryArtist;
@@ -1613,10 +1647,10 @@
             <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
             <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
-              <p class="text-xs font-bold text-white truncate">${t.title}</p>
+              <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
               <div class="flex items-center gap-1.5 mt-0.5">
                 ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
               </div>
             </div>
           </div>
@@ -1716,14 +1750,18 @@
   }
 
   function openFullPlayer() {
-    $('fullPlayerSheet').classList.remove('translate-y-full');
-    try {
-      history.pushState({ modal: 'player' }, '');
-    } catch {}
+    const sheet = $('fullPlayerSheet');
+    if (!sheet.classList.contains('translate-y-full')) return;
+    sheet.classList.remove('translate-y-full');
+    pushModalState('player');
   }
 
   function closeFullPlayer() {
-    $('fullPlayerSheet').classList.add('translate-y-full');
+    const sheet = $('fullPlayerSheet');
+    if (!sheet.classList.contains('translate-y-full')) {
+      sheet.classList.add('translate-y-full');
+      popModalState();
+    }
     const cur = S.queue[S.currentIndex] || S.currentTrack;
     if (cur) {
       showAndSyncMiniPlayer(cur, false);
@@ -1850,8 +1888,8 @@
           <span class="w-5 text-center text-sm font-black text-emerald-400 shrink-0">#${idx + 1}</span>
           <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${t.title}</p>
-            <p class="text-[10px] text-zinc-400 truncate">${t.artist} • ${count} veces</p>
+            <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+            <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)} • ${count} veces</p>
           </div>
         </div>
         <div class="w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center shrink-0 ml-2 shadow-md">
@@ -1888,10 +1926,10 @@
         nowPlayingWrap.innerHTML = `
           <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-emerald-400 truncate">${t.title}</p>
+            <p class="text-xs font-bold text-emerald-400 truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
               ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold" title="Descargada">✓</span>' : ''}
-              <p class="text-[11px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
@@ -1921,10 +1959,10 @@
         <div class="flex items-center gap-2.5 min-w-0 flex-1">
           <img src="${t.thumbnail}" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${t.title}</p>
+            <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
               ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-              <p class="text-[10px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
             </div>
           </div>
         </div>
@@ -2025,7 +2063,8 @@
     $('libHistoryList').classList.toggle('hidden', S.libFilter !== 'history');
     $('libPlaylistsWrap').classList.toggle('hidden', S.libFilter !== 'playlists');
     $('libStatsWrap').classList.toggle('hidden', S.libFilter !== 'stats');
-    $('libActionsBar').classList.toggle('hidden', S.libFilter === 'stats');
+    // En Playlists la lista de playlists/detalle trae sus propios botones de reproducción
+    $('libActionsBar').classList.toggle('hidden', S.libFilter === 'stats' || S.libFilter === 'playlists');
 
     // Actualizar botones de filtro
     const filterMap = [
@@ -2053,7 +2092,8 @@
     }
   }
 
-  function renderTrackList(container, tracks, emptyText) {
+  // opts.onRemove(idx): si se pasa, cada fila muestra un botón para quitarla (p. ej. dentro de una playlist)
+  function renderTrackList(container, tracks, emptyText, opts = {}) {
     if (!container) return;
     if (tracks.length === 0) {
       container.innerHTML = `<p class="text-zinc-500 text-xs py-8 text-center">${emptyText}</p>`;
@@ -2063,16 +2103,17 @@
     container.innerHTML = tracks.map((t, idx) => `
       <div class="flex items-center justify-between p-2 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-lib-track-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
-          <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+          <img src="${esc(t.thumbnail)}" alt="" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${t.title}</p>
+            <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
               ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold" title="Descargada">✓</span>' : ''}
-              <p class="text-[10px] text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${t.artist}">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-[10px] text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
             </div>
           </div>
         </div>
         <div class="flex items-center gap-1 shrink-0 ml-2">
+          ${opts.onRemove ? `<button data-lib-track-del="${idx}" class="p-1.5 text-zinc-400 hover:text-red-400 press" aria-label="Quitar de la playlist" title="Quitar de la playlist"><svg class="w-4 h-4"><use href="#i-trash"/></svg></button>` : ''}
           <button data-lib-track-down="${idx}" class="p-1.5 text-zinc-400 hover:text-emerald-400 press" title="Descargar">
             <svg class="w-4 h-4"><use href="${isDownloaded(t.id) ? '#i-download-done' : '#i-download'}"/></svg>
           </button>
@@ -2086,16 +2127,16 @@
       </div>
     `).join('');
 
-    $$('[data-lib-track-idx]').forEach((card) => {
+    container.querySelectorAll('[data-lib-track-idx]').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('[data-lib-track-more]') || e.target.closest('[data-lib-track-like]') || e.target.closest('[data-lib-track-down]') || e.target.closest('.artist-link')) return;
+        if (e.target.closest('[data-lib-track-more]') || e.target.closest('[data-lib-track-like]') || e.target.closest('[data-lib-track-down]') || e.target.closest('[data-lib-track-del]') || e.target.closest('.artist-link')) return;
         const idx = parseInt(card.getAttribute('data-lib-track-idx'), 10);
         S.queue = [...tracks];
         playTrack(idx, true);
       });
     });
 
-    $$('[data-lib-track-down]').forEach((btn) => {
+    container.querySelectorAll('[data-lib-track-down]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.getAttribute('data-lib-track-down'), 10);
@@ -2103,7 +2144,14 @@
       });
     });
 
-    $$('[data-lib-track-more]').forEach((btn) => {
+    container.querySelectorAll('[data-lib-track-del]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (opts.onRemove) opts.onRemove(parseInt(btn.getAttribute('data-lib-track-del'), 10));
+      });
+    });
+
+    container.querySelectorAll('[data-lib-track-more]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.getAttribute('data-lib-track-more'), 10);
@@ -2111,7 +2159,7 @@
       });
     });
 
-    $$('[data-lib-track-like]').forEach((btn) => {
+    container.querySelectorAll('[data-lib-track-like]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.getAttribute('data-lib-track-like'), 10);
@@ -2121,17 +2169,56 @@
   }
 
   // --- Playlists Personalizadas ---
+  let playlistModalMode = 'save'; // 'save' | 'create' | 'rename'
+  let playlistModalTarget = null; // canción a guardar; null si solo se crea o renombra
+  let playlistRenameId = null;
+  let pendingDeletePlaylistId = null;
+  let pendingDeleteTimer = null;
+  const TRASH_SVG = '<svg class="w-4 h-4"><use href="#i-trash"/></svg>';
+
+  function savePlaylists() {
+    localStorage.setItem('fs_playlists', JSON.stringify(S.playlists));
+  }
+
   function createPlaylist(name) {
-    if (!name || !name.trim()) return;
+    if (!name || !name.trim()) return null;
     const pl = {
       id: Date.now().toString(),
       name: name.trim(),
       tracks: []
     };
     S.playlists.push(pl);
-    localStorage.setItem('fs_playlists', JSON.stringify(S.playlists));
+    savePlaylists();
     renderUserPlaylists();
-    showToast(`Playlist "${name.trim()}" creada`);
+    showToast(`Playlist "${pl.name}" creada`);
+    return pl;
+  }
+
+  function renamePlaylist(id, name) {
+    const pl = S.playlists.find((p) => p.id === id);
+    const clean = (name || '').trim();
+    if (!pl || !clean) return;
+    pl.name = clean;
+    savePlaylists();
+    renderUserPlaylists();
+    showToast('Playlist renombrada');
+  }
+
+  function deletePlaylist(id) {
+    S.playlists = S.playlists.filter((p) => p.id !== id);
+    if (S.openPlaylistId === id) S.openPlaylistId = null;
+    savePlaylists();
+    renderUserPlaylists();
+    showToast('Playlist eliminada');
+  }
+
+  function removeTrackFromPlaylist(playlistId, trackId) {
+    const pl = S.playlists.find((p) => p.id === playlistId);
+    if (!pl) return;
+    pl.tracks = pl.tracks.filter((t) => t.id !== trackId);
+    savePlaylists();
+    renderUserPlaylists();
+    showToast('Quitada de la playlist');
   }
 
   function addTrackToPlaylist(playlistId, track) {
@@ -2139,7 +2226,7 @@
     if (!pl || !track) return;
     if (!pl.tracks.some((t) => t.id === track.id)) {
       pl.tracks.push(track);
-      localStorage.setItem('fs_playlists', JSON.stringify(S.playlists));
+      savePlaylists();
       renderUserPlaylists();
       showToast(`Guardada en "${pl.name}"`);
     } else {
@@ -2147,70 +2234,133 @@
     }
   }
 
-  function openPlaylistModal(customTrack) {
-    const target = customTrack || (S.currentIndex >= 0 ? S.queue[S.currentIndex] : null);
-    if (!target) {
+  // mode: 'save' (guardar `customTrack` o la actual), 'create' (solo crear) o 'rename'
+  function openPlaylistModal(customTrack, options = {}) {
+    const mode = options.mode || 'save';
+    const target = mode === 'save' ? (customTrack || (S.currentIndex >= 0 ? S.queue[S.currentIndex] : null)) : null;
+    if (mode === 'save' && !target) {
       showToast('Selecciona una canción primero');
       return;
     }
+    playlistModalMode = mode;
+    playlistModalTarget = target;
+    playlistRenameId = options.playlistId || null;
+
+    const input = $('newPlaylistInput');
+    input.value = mode === 'rename' ? (options.currentName || '') : '';
+    $('playlistModalTitle').textContent = { save: 'Guardar en playlist', create: 'Nueva playlist', rename: 'Renombrar playlist' }[mode];
+    $('createPlaylistConfirmBtn').textContent = mode === 'rename' ? 'Guardar' : 'Crear';
+    $('playlistModalListWrap').classList.toggle('hidden', mode !== 'save');
+    if (mode === 'save') renderModalPlaylists(target);
+
+    const modal = $('playlistModal');
+    if (modal.classList.contains('hidden')) {
+      modal.classList.remove('hidden');
+      pushModalState('playlist');
+    }
+    if (mode !== 'save' || S.playlists.length === 0) setTimeout(() => input.focus(), 60);
+  }
+
+  function renderModalPlaylists(target) {
     const container = $('modalPlaylistsList');
     if (S.playlists.length === 0) {
       container.innerHTML = '<p class="text-zinc-500 text-xs py-2">No tienes playlists. Escribe un nombre y pulsa Crear.</p>';
-    } else {
-      container.innerHTML = S.playlists.map((pl) => `
-        <button data-pick-pl="${pl.id}" class="w-full text-left p-2.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-between press">
-          <div>
-            <p class="text-xs font-bold text-white">${pl.name}</p>
-            <p class="text-[10px] text-zinc-400">${pl.tracks.length} canciones</p>
-          </div>
-          <svg class="w-4 h-4 text-emerald-400"><use href="#i-plus"/></svg>
-        </button>
-      `).join('');
-
-      $$('[data-pick-pl]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const plId = btn.getAttribute('data-pick-pl');
-          addTrackToPlaylist(plId, target);
-          $('playlistModal').classList.add('hidden');
-        });
-      });
+      return;
     }
-    $('playlistModal').classList.remove('hidden');
-    try {
-      history.pushState({ modal: 'playlist' }, '');
-    } catch {}
+    container.innerHTML = S.playlists.map((pl) => `
+      <button data-pick-pl="${esc(pl.id)}" class="w-full text-left p-2.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-between press">
+        <div class="min-w-0">
+          <p class="text-xs font-bold text-white truncate">${esc(pl.name)}</p>
+          <p class="text-[10px] text-zinc-400">${pl.tracks.length} canciones</p>
+        </div>
+        <svg class="w-4 h-4 text-emerald-400 shrink-0"><use href="#i-plus"/></svg>
+      </button>
+    `).join('');
+
+    container.querySelectorAll('[data-pick-pl]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        addTrackToPlaylist(btn.getAttribute('data-pick-pl'), target);
+        closePlaylistModal();
+      });
+    });
+  }
+
+  function closePlaylistModal() {
+    const modal = $('playlistModal');
+    if (modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    popModalState();
+  }
+
+  function submitPlaylistModal() {
+    const input = $('newPlaylistInput');
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+    if (playlistModalMode === 'rename') {
+      renamePlaylist(playlistRenameId, name);
+    } else {
+      const pl = createPlaylist(name);
+      // Crear desde "Guardar en playlist" también guarda la canción en la playlist nueva
+      if (pl && playlistModalTarget) addTrackToPlaylist(pl.id, playlistModalTarget);
+    }
+    input.value = '';
+    closePlaylistModal();
   }
 
   function renderUserPlaylists() {
-    const container = $('userPlaylistsList');
-    if (!container) return;
-    if (S.playlists.length === 0) {
-      container.innerHTML = '<p class="text-zinc-500 text-xs py-4 text-center">Crea tu primera playlist pulsando "+ Nueva playlist"</p>';
+    const listEl = $('userPlaylistsList');
+    const detailEl = $('libPlaylistContent');
+    if (!listEl) return;
+
+    const open = S.openPlaylistId ? S.playlists.find((p) => p.id === S.openPlaylistId) : null;
+    if (!open) S.openPlaylistId = null;
+    listEl.classList.toggle('hidden', !!open);
+    if (detailEl) detailEl.classList.toggle('hidden', !open);
+    if (open) {
+      renderPlaylistDetail(open);
       return;
     }
-    container.innerHTML = S.playlists.map((pl, idx) => `
+    if (detailEl) detailEl.innerHTML = '';
+
+    if (S.playlists.length === 0) {
+      listEl.innerHTML = '<p class="text-zinc-500 text-xs py-4 text-center">Crea tu primera playlist pulsando "+ Nueva playlist"</p>';
+      return;
+    }
+    listEl.innerHTML = S.playlists.map((pl, idx) => `
       <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 border border-zinc-800/60 hover:bg-zinc-800 cursor-pointer press" data-pl-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <div class="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm shrink-0">
-            ${pl.name.slice(0, 2).toUpperCase()}
+            ${esc(pl.name.slice(0, 2).toUpperCase())}
           </div>
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${pl.name}</p>
+            <p class="text-xs font-bold text-white truncate">${esc(pl.name)}</p>
             <p class="text-[10px] text-zinc-400 truncate">${pl.tracks.length} canciones</p>
           </div>
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-2">
-          <button data-pl-play="${idx}" class="w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center press shadow-sm">
+          <button data-pl-play="${idx}" aria-label="Reproducir ${esc(pl.name)}" class="w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center press shadow-sm">
             <svg class="w-4 h-4"><use href="#i-play"/></svg>
           </button>
         </div>
       </div>
     `).join('');
 
-    $$('[data-pl-idx]').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        const idx = parseInt(el.getAttribute('data-pl-idx'), 10);
-        const pl = S.playlists[idx];
+    listEl.querySelectorAll('[data-pl-idx]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const pl = S.playlists[parseInt(el.getAttribute('data-pl-idx'), 10)];
+        if (!pl) return;
+        S.openPlaylistId = pl.id;
+        renderUserPlaylists();
+      });
+    });
+
+    listEl.querySelectorAll('[data-pl-play]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pl = S.playlists[parseInt(btn.getAttribute('data-pl-play'), 10)];
         if (pl && pl.tracks.length > 0) {
           S.queue = [...pl.tracks];
           playTrack(0, true);
@@ -2219,6 +2369,83 @@
         }
       });
     });
+  }
+
+  function renderPlaylistDetail(pl) {
+    const detailEl = $('libPlaylistContent');
+    detailEl.innerHTML = `
+      <div class="space-y-3">
+        <button id="plBackBtn" class="flex items-center gap-1 text-xs font-bold text-zinc-400 hover:text-white press" aria-label="Volver a mis playlists">
+          <svg class="w-4 h-4 rotate-90"><use href="#i-down"/></svg>
+          <span>Playlists</span>
+        </button>
+        <div>
+          <h3 class="text-lg font-bold text-white break-words">${esc(pl.name)}</h3>
+          <p class="text-[11px] text-zinc-400">${pl.tracks.length} canciones</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="plPlayBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 text-black font-bold text-xs press shadow-md">
+            <svg class="w-4 h-4"><use href="#i-play"/></svg><span>Reproducir</span>
+          </button>
+          <button id="plShuffleBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs press">
+            <svg class="w-4 h-4"><use href="#i-shuffle"/></svg><span>Aleatorio</span>
+          </button>
+          <button id="plRenameBtn" class="px-3.5 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-bold text-xs press">Renombrar</button>
+          <button id="plDeleteBtn" aria-label="Eliminar playlist" class="px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 font-bold text-xs press">${TRASH_SVG}</button>
+        </div>
+        <div id="plDetailTracks" class="space-y-1.5"></div>
+      </div>
+    `;
+
+    $('plBackBtn').addEventListener('click', () => {
+      S.openPlaylistId = null;
+      renderUserPlaylists();
+    });
+
+    $('plPlayBtn').addEventListener('click', () => {
+      if (pl.tracks.length === 0) return showToast('Esta playlist está vacía');
+      S.queue = [...pl.tracks];
+      playTrack(0, true);
+    });
+
+    $('plShuffleBtn').addEventListener('click', () => {
+      if (pl.tracks.length === 0) return showToast('Esta playlist está vacía');
+      S.queue = shuffled(pl.tracks);
+      playTrack(0, true);
+      showToast('Reproduciendo en aleatorio');
+    });
+
+    $('plRenameBtn').addEventListener('click', () => {
+      openPlaylistModal(null, { mode: 'rename', playlistId: pl.id, currentName: pl.name });
+    });
+
+    // Eliminar pide un segundo toque en 3 s (sin diálogos nativos)
+    const delBtn = $('plDeleteBtn');
+    delBtn.addEventListener('click', () => {
+      if (pendingDeletePlaylistId === pl.id) {
+        clearTimeout(pendingDeleteTimer);
+        pendingDeletePlaylistId = null;
+        deletePlaylist(pl.id);
+        return;
+      }
+      pendingDeletePlaylistId = pl.id;
+      delBtn.textContent = '¿Eliminar?';
+      delBtn.classList.add('text-red-400', 'border-red-500/50');
+      pendingDeleteTimer = setTimeout(() => {
+        pendingDeletePlaylistId = null;
+        if (delBtn.isConnected) {
+          delBtn.innerHTML = TRASH_SVG;
+          delBtn.classList.remove('text-red-400', 'border-red-500/50');
+        }
+      }, 3000);
+    });
+
+    renderTrackList(
+      $('plDetailTracks'),
+      pl.tracks,
+      'Esta playlist está vacía. Agrega canciones desde el menú ⋮ de cualquier tema.',
+      { onRemove: (idx) => removeTrackFromPlaylist(pl.id, pl.tracks[idx].id) }
+    );
   }
 
   // --- Exportar e Importar Biblioteca (Copia de Seguridad JSON) ---
@@ -2301,7 +2528,7 @@
 
     let djQueue = [];
     if (S.favorites.length > 0) {
-      const favSample = [...S.favorites].sort(() => Math.random() - 0.5).slice(0, 2);
+      const favSample = shuffled(S.favorites).slice(0, 2);
       djQueue.push(...favSample);
     }
 
@@ -2385,7 +2612,7 @@
       container.innerHTML = shelvesToRender.map((shelf, sIdx) => `
         <div class="space-y-3">
           <div class="flex items-center justify-between px-0.5">
-            <h2 class="text-base font-bold text-white tracking-tight">${shelf.title}</h2>
+            <h2 class="text-base font-bold text-white tracking-tight">${esc(shelf.title)}</h2>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             ${shelf.items.map((t, itemIdx) => `
@@ -2399,8 +2626,8 @@
                   </div>
                   ${t.durationText ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[9px] font-mono font-bold text-white">${t.durationText}</span>` : ''}
                 </div>
-                <p class="text-xs font-bold text-white truncate">${t.title}</p>
-                <p class="text-[11px] text-zinc-400 truncate mt-0.5">${t.artist}</p>
+                <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+                <p class="text-[11px] text-zinc-400 truncate mt-0.5">${esc(t.artist)}</p>
               </div>
             `).join('')}
           </div>
@@ -2436,7 +2663,7 @@
     grid.innerHTML = source.map((t, idx) => `
       <div class="flex items-center rounded-xl bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 overflow-hidden cursor-pointer press shadow-sm group" data-quick-idx="${idx}">
         <img src="${t.thumbnail}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
-        <span class="text-xs font-bold text-white px-2.5 truncate flex-1 leading-tight">${t.title}</span>
+        <span class="text-xs font-bold text-white px-2.5 truncate flex-1 leading-tight">${esc(t.title)}</span>
         <div class="w-7 h-7 rounded-full bg-emerald-500 text-black flex items-center justify-center mr-2 opacity-0 group-hover:opacity-100 transition shadow-md shrink-0">
           <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
         </div>
@@ -2466,8 +2693,8 @@
           <span class="w-5 text-center text-sm font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
           <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${t.title}</p>
-            <p class="text-[11px] text-zinc-400 truncate">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+            <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
           </div>
         </div>
         <div class="flex items-center gap-1 shrink-0 ml-2">
@@ -2530,7 +2757,7 @@
     wrap.classList.remove('hidden');
     container.innerHTML = S.recentSearches.map((term, i) => `
       <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white transition cursor-pointer press group shadow-sm">
-        <span data-search-chip="${term}">${term}</span>
+        <span data-search-chip="${esc(term)}">${esc(term)}</span>
         <button data-recent-del="${i}" class="text-zinc-500 hover:text-red-400 p-0.5 ml-0.5 text-sm leading-none" title="Eliminar">×</button>
       </span>
     `).join('');
@@ -2639,10 +2866,10 @@
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-bold text-white truncate">${t.title}</p>
+              <p class="text-sm font-bold text-white truncate">${esc(t.title)}</p>
               <div class="flex items-center gap-1.5 mt-0.5">
                 ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${t.artist}">${t.artist}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
               </div>
             </div>
           </div>
@@ -2743,14 +2970,17 @@
   }
 
   function openSleepTimerModal() {
-    $('sleepTimerModal').classList.remove('hidden');
-    try {
-      history.pushState({ modal: 'sleepTimer' }, '');
-    } catch {}
+    const modal = $('sleepTimerModal');
+    if (!modal.classList.contains('hidden')) return;
+    modal.classList.remove('hidden');
+    pushModalState('sleepTimer');
   }
 
   function closeSleepTimerModal() {
-    $('sleepTimerModal').classList.add('hidden');
+    const modal = $('sleepTimerModal');
+    if (modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    popModalState();
   }
 
   // --- Navegación entre pestañas ---
@@ -3097,7 +3327,7 @@
 
     $('artistShuffleBtn')?.addEventListener('click', () => {
       if (currentArtistTracks.length > 0) {
-        S.queue = [...currentArtistTracks].sort(() => Math.random() - 0.5);
+        S.queue = shuffled(currentArtistTracks);
         playTrack(0, true);
         showToast('Reproduciendo canciones del artista en aleatorio');
       }
@@ -3176,7 +3406,7 @@
     $('libShuffleAllBtn').addEventListener('click', () => {
       const tracks = getFilteredLibraryTracks();
       if (tracks.length > 0) {
-        S.queue = [...tracks].sort(() => Math.random() - 0.5);
+        S.queue = shuffled(tracks);
         playTrack(0, true);
         showToast('Reproduciendo en aleatorio');
       } else {
@@ -3201,21 +3431,21 @@
 
     // Playlist modal events
     $('libNewPlaylistBtn').addEventListener('click', () => {
-      const name = prompt('Nombre de la nueva playlist:');
-      if (name) createPlaylist(name);
+      S.libFilter = 'playlists';
+      S.openPlaylistId = null;
+      renderLibrary();
+      openPlaylistModal(null, { mode: 'create' });
     });
 
-    $('playlistModalCloseBtn').addEventListener('click', () => {
-      $('playlistModal').classList.add('hidden');
+    $('playlistModalCloseBtn').addEventListener('click', closePlaylistModal);
+    $('playlistModal').addEventListener('click', (e) => {
+      if (e.target.id === 'playlistModal') closePlaylistModal();
     });
-
-    $('createPlaylistConfirmBtn').addEventListener('click', () => {
-      const input = $('newPlaylistInput');
-      const name = input.value.trim();
-      if (name) {
-        createPlaylist(name);
-        input.value = '';
-        $('playlistModal').classList.add('hidden');
+    $('createPlaylistConfirmBtn').addEventListener('click', submitPlaylistModal);
+    $('newPlaylistInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitPlaylistModal();
       }
     });
 
@@ -3324,7 +3554,7 @@
     }
     const plModal = $('playlistModal');
     if (plModal && !plModal.classList.contains('hidden')) {
-      plModal.classList.add('hidden');
+      closePlaylistModal();
       return true;
     }
     const sleepModal = $('sleepTimerModal');
@@ -3346,12 +3576,48 @@
   }
 
   window.addEventListener('popstate', () => {
-    closeTopModal();
+    // Retroceso que provocamos nosotros al cerrar un panel: ya no hay nada más que cerrar
+    if (popGuard > 0) {
+      popGuard--;
+      if (popGuard === 0) {
+        pendingPushes.splice(0).forEach((name) => {
+          try { history.pushState({ modal: name }, ''); } catch {}
+        });
+      }
+      return;
+    }
+    inPopstate = true;
+    try {
+      closeTopModal();
+    } finally {
+      inPopstate = false;
+    }
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeTopModal();
+      return;
+    }
+
+    // Atajos de teclado (escritorio): no se activan al escribir ni sobre controles que ya usan estas teclas
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(tag) || (e.target && e.target.isContentEditable)) return;
+
+    if (e.key === ' ' || e.code === 'Space') {
+      if (S.currentIndex < 0) return;
+      e.preventDefault();
+      togglePlayPause();
+    } else if (e.key === 'ArrowRight' && e.shiftKey) {
+      playNext(true);
+    } else if (e.key === 'ArrowLeft' && e.shiftKey) {
+      playPrev();
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      const p = getActivePlayer();
+      if (p && isFinite(p.duration)) {
+        p.currentTime = Math.max(0, Math.min(p.duration, p.currentTime + (e.key === 'ArrowRight' ? 5 : -5)));
+      }
     }
   });
 

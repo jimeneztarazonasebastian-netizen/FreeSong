@@ -347,3 +347,17 @@ body[data-playing="true"] .track-row[data-current="true"]:hover .t-eq { display:
   padding-bottom: calc(10rem + env(safe-area-inset-bottom, 0px));
 }
 
+
+/* Pantallas anchas (escritorio/tablet): columna centrada en vez de estirar la interfaz móvil */
+@media (min-width: 768px) {
+  #appShell { max-width: 720px; margin-inline: auto; }
+  #miniPlayer { left: 0; right: 0; max-width: 696px; margin-inline: auto; }
+  nav.bottom-nav {
+    left: 0;
+    right: 0;
+    max-width: 720px;
+    margin-inline: auto;
+    border-radius: 1rem 1rem 0 0;
+  }
+  #artistViewModal { left: 0; right: 0; max-width: 720px; margin-inline: auto; }
+}

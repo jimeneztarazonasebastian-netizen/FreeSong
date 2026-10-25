@@ -9,6 +9,8 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 - **Música y Streaming**: Búsqueda, reproducción completa de YouTube, Audius y tus propios archivos (MP3, M4A, FLAC).
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real.
 - **Herramientas de audio**: Ecualizador, velocidad (Slowed & Reverb / Nightcore), temporizador de apagado.
+- **Playlists propias**: crea, renombra y elimina playlists; abre una para ver, quitar o reproducir sus canciones (guardadas solo en tu dispositivo).
+- **Atajos de teclado (escritorio)**: `Espacio` reproducir/pausar, `←`/`→` retroceder/adelantar 5 s, `Shift+←`/`Shift+→` canción anterior/siguiente.
 - **100% Privado y Seguro**: Sin anuncios, sin rastreadores, sin analíticas. Tus favoritos y playlists se guardan únicamente en tu dispositivo.
 
 ## 🚀 Despliegue en Vercel
