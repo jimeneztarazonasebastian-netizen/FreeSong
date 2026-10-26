@@ -87,14 +87,38 @@ function pickFormat(formats, wantedItag) {
   return audios[0];
 }
 
+let cachedCookies = '';
+let cookieExpiry = 0;
+
+async function getVisitorCookies() {
+  if (cachedCookies && cookieExpiry > Date.now()) return cachedCookies;
+  try {
+    const res = await fetch('https://www.youtube.com', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      signal: AbortSignal.timeout(2000)
+    });
+    const raw = res.headers.getSetCookie ? res.headers.getSetCookie() : [res.headers.get('set-cookie')];
+    if (raw && raw.length) {
+      cachedCookies = raw.map(c => (c || '').split(';')[0]).filter(Boolean).join('; ');
+      cookieExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
+      return cachedCookies;
+    }
+  } catch {}
+  return '';
+}
+
 async function resolveWithClient(client, videoId, wantedItag) {
+  const cookies = await getVisitorCookies();
   const resp = await fetch(PLAYER_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'User-Agent': client.ua,
       'X-YouTube-Client-Name': String(client.id),
-      'X-YouTube-Client-Version': client.context.clientVersion
+      'X-YouTube-Client-Version': client.context.clientVersion,
+      ...(cookies ? { Cookie: cookies } : {})
     },
     body: JSON.stringify({
       videoId,
@@ -123,8 +147,13 @@ async function resolveWithClient(client, videoId, wantedItag) {
 }
 
 async function openUpstream(target, range) {
+  const cookies = await getVisitorCookies();
   const resp = await fetch(target.url, {
-    headers: { Range: range, 'User-Agent': target.ua },
+    headers: {
+      Range: range,
+      'User-Agent': target.ua,
+      ...(cookies ? { Cookie: cookies } : {})
+    },
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
   });
   if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {

@@ -583,14 +583,8 @@
   }
 
   function prewarmTracks(tracks) {
-    if (!tracks || !Array.isArray(tracks)) return;
-    tracks.slice(0, 2).forEach((t) => {
-      if (t && t.id) {
-        fetch(`/api/stream?id=${encodeURIComponent(t.id)}&title=${encodeURIComponent(t.title || '')}&artist=${encodeURIComponent(t.artist || '')}`, {
-          headers: { Range: 'bytes=0-1024' }
-        }).catch(() => {});
-      }
-    });
+    // Desactivado: Las precargas masivas en cada búsqueda saturan el backend serverless
+    // y provocan que YouTube marque la IP con "Inicia sesión para confirmar que no eres un bot".
   }
 
   function prefetchNextTrack() {
