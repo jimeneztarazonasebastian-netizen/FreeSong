@@ -256,7 +256,7 @@
   let consecutiveStreamFailures = 0;
   const MAX_AUTO_SKIPS = 3;
 
-  function handleStreamFailure(track, deck) {
+  async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
       return;
@@ -269,14 +269,39 @@
 
     console.warn(`[FreeSong Fallback] Intento ${track._fallbackStep} para "${track.title}"...`);
 
+    // Intento 1 y 2: Reintentar con formato universal 18 (AAC progresivo no estrangulado)
     if (track._fallbackStep <= 2) {
-      // Cada reintento sale por otra IP/cliente del servidor; el primero mantiene la calidad elegida
-      const itag = track._fallbackStep === 1 ? S.audioQuality : '139';
+      const itag = '18';
       deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${itag}&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
       deck.play().catch(() => {
         updatePlayPauseIcons(false, false);
       });
       return;
+    }
+
+    // Intento 3: Búsqueda inteligente de versión alternativa activa para esta misma canción
+    if (!track._searchedAlternative) {
+      track._searchedAlternative = true;
+      track._fallbackStep = 0;
+      try {
+        const query = `${track.title} ${track.artist || ''}`.trim();
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=songs`);
+        const data = await res.json();
+        const altTrack = (data.tracks || []).find((t) => t.id && t.id !== track.id);
+        if (altTrack) {
+          console.log(`[FreeSong] Respaldo automático: Reemplazando ${track.id} por ${altTrack.id}`);
+          showToast(`Sintonizando audio oficial de «${track.title}»...`, 2000);
+          track.id = altTrack.id;
+          track.streamUrl = null;
+          deck.src = `/api/stream?id=${encodeURIComponent(altTrack.id)}&itag=18&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+          deck.play().catch(() => {
+            updatePlayPauseIcons(false, false);
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Error en búsqueda de versión alternativa:', err);
+      }
     }
 
     // Sin remedio: pasar a la siguiente, pero sin recorrer toda la cola en silencio

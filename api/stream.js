@@ -10,7 +10,22 @@ const RESOLVE_TIMEOUT_MS = 5000;
 const UPSTREAM_TIMEOUT_MS = 8000;
 
 // Clientes móviles reales con mayor tasa de éxito y sin requerimiento de PO Token para audio
+// Clientes móviles reales con mayor tasa de éxito y sin requerimiento de PO Token para audio
 const CLIENTS = [
+  {
+    name: 'ANDROID',
+    id: 3,
+    ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+    context: {
+      clientName: 'ANDROID',
+      clientVersion: '20.10.38',
+      osName: 'Android',
+      osVersion: '11',
+      androidSdkVersion: 30,
+      hl: 'es',
+      gl: 'US'
+    }
+  },
   {
     name: 'IOS',
     id: 5,
@@ -22,20 +37,6 @@ const CLIENTS = [
       deviceModel: 'iPhone16,2',
       osName: 'iPhone',
       osVersion: '18.3.2.22D82',
-      hl: 'es',
-      gl: 'US'
-    }
-  },
-  {
-    name: 'ANDROID',
-    id: 3,
-    ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-    context: {
-      clientName: 'ANDROID',
-      clientVersion: '20.10.38',
-      osName: 'Android',
-      osVersion: '11',
-      androidSdkVersion: 30,
       hl: 'es',
       gl: 'US'
     }
@@ -57,26 +58,43 @@ const isMediaType = (ct) => {
   return (ct.includes('audio') || ct.includes('mp4') || ct.includes('webm') || ct.includes('octet-stream')) && !ct.includes('html') && !ct.includes('text');
 };
 
-// Selección inteligente de formato: Prioriza AAC/MP4 para compatibilidad iOS Safari,
-// pero acepta WebM Opus (itags 251, 250, 249) que YouTube siempre entrega
+// Selección inteligente de formato (SimpMusic Engine Strategy):
+// 1. Prioriza itag 18 (MP4 con audio AAC estéreo a 44.1kHz).
+//    Es el formato progresivo móvil de YouTube que NO se corta a 1MB con error 403.
+// 2. Fallback a AAC adaptativo (itags 140 / 139) y WebM Opus (itags 251 / 250).
 function pickFormat(formats, wantedItag) {
   const audios = (formats || []).filter((f) => f.url && ((f.mimeType || '').startsWith('audio/') || (f.mimeType || '').includes('video/mp4')));
   if (!audios.length) return null;
 
   const byItag = (n) => audios.find((f) => String(f.itag) === String(n));
-  if (wantedItag && byItag(wantedItag)) return byItag(wantedItag);
 
-  // 1. Preferir AAC MP4 (140 = 128k, 139 = 48k, 141 = 256k)
+  const f18 = byItag(18);
+
+  // 1. Formato universal no estrangulado: itag 18 (MP4 progresivo con audio AAC-LC estéreo 44.1kHz).
+  // Es la estrategia oficial de SimpMusic (noLogIn = true / ITAG.MUXED_360P): Google NO corta a 1MB
+  // con error 403 en formatos progresivos y reproduce el 100% de la canción sin interrupciones.
+  if (f18 && (!wantedItag || wantedItag === '18' || wantedItag === '140')) {
+    return f18;
+  }
+
+  // 2. Si se pide explícitamente otro itag disponible (ej. ahorro de datos 139 o 251):
+  if (wantedItag && byItag(wantedItag)) {
+    return byItag(wantedItag);
+  }
+
+  if (f18) return f18;
+
+  // 3. AAC MP4 adaptativo (140 = 128k, 139 = 48k, 141 = 256k)
   const mp4Audio = audios.filter((f) => /^audio\/mp4/.test(f.mimeType || ''));
   if (mp4Audio.length) {
     return byItag(140) || byItag(139) || byItag(141) || mp4Audio[0];
   }
 
-  // 2. Fallback a Opus WebM (251 = 160k, 250 = 70k, 249 = 50k)
+  // 4. Opus WebM (251 = 160k, 250 = 70k, 249 = 50k)
   const opus = byItag(251) || byItag(250) || byItag(249);
   if (opus) return opus;
 
-  // 3. Cualquier formato disponible (incluyendo muxed itag 18)
+  // 5. Cualquier formato de audio disponible
   return audios[0];
 }
 
@@ -104,8 +122,8 @@ async function resolveWithClient(client, videoId, wantedItag) {
   }
 
   const allFormats = [
-    ...(data.streamingData?.adaptiveFormats || []),
-    ...(data.streamingData?.formats || [])
+    ...(data.streamingData?.formats || []),
+    ...(data.streamingData?.adaptiveFormats || [])
   ];
   const fmt = pickFormat(allFormats, wantedItag);
   if (!fmt) throw new Error('no audio format with url');
@@ -187,7 +205,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     }
   }
 
-  // 2. Resolver con clientes nativos (IOS y ANDROID)
+  // 2. Resolver con clientes nativos (ANDROID y luego IOS)
   for (const client of CLIENTS) {
     try {
       const target = await resolveWithClient(client, videoId, itag);
@@ -230,7 +248,7 @@ export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const param = (k) => (req.query && req.query[k]) || urlObj.searchParams.get(k);
   const videoId = param('id');
-  const itag = String(param('itag') || '140').replace(/\D/g, '') || '140';
+  const itag = String(param('itag') || '18').replace(/\D/g, '') || '18';
   const backupIndex = Math.max(0, parseInt(param('backup') || '0', 10) || 0);
   const title = param('title') || '';
   const artist = param('artist') || '';
@@ -258,17 +276,32 @@ export default async function handler(req, res) {
     return json(400, { error: 'Falta el id de la canción o es inválido' });
   }
 
-  const range = (req.headers && req.headers.range) || 'bytes=0-';
-  const upstream = await getUpstream(videoId, itag, range, backupIndex, title, artist);
+  // Limitar el tamaño de fragmento a 512 KB (aprox. 32 segs de audio).
+  // Esto garantiza que cada petición en Vercel responda en <150ms y termine limpiamente
+  // evitando el timeout de 10s de Vercel y evitando el bloqueo de Google en rangos abiertos.
+  const CHUNK_SIZE = 512 * 1024; // 512 KB
+  const rawRange = (req.headers && req.headers.range) || 'bytes=0-';
+  const rangeMatch = rawRange.match(/bytes=(\d+)-(\d+)?/);
+  const startByte = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
+  let endByte = rangeMatch && rangeMatch[2] ? parseInt(rangeMatch[2], 10) : (startByte + CHUNK_SIZE - 1);
+  if (endByte - startByte + 1 > CHUNK_SIZE) {
+    endByte = startByte + CHUNK_SIZE - 1;
+  }
+  const boundedRange = req.method === 'HEAD' ? 'bytes=0-1' : `bytes=${startByte}-${endByte}`;
+
+  const upstream = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
   if (!upstream) {
     return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE' });
   }
+
+  const rawType = (upstream.headers.get('content-type') || '').toLowerCase();
+  const contentType = rawType.includes('webm') ? 'audio/webm' : 'audio/mp4';
 
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
     'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
-    'Content-Type': upstream.headers.get('content-type') || 'audio/mp4',
+    'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'public, max-age=3600, s-maxage=3600',
     Vary: 'Range'
