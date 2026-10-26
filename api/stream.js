@@ -9,18 +9,17 @@ const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
 const RESOLVE_TIMEOUT_MS = 2500;
 const UPSTREAM_TIMEOUT_MS = 3000;
 
-// Clientes móviles reales con mayor tasa de éxito
+// Clientes móviles reales con mayor tasa de éxito (SimpMusic Engine)
 const CLIENTS = [
   {
     name: 'ANDROID',
     id: 3,
-    ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+    ua: 'com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip',
     context: {
       clientName: 'ANDROID',
-      clientVersion: '20.10.38',
+      clientVersion: '21.26.364',
       osName: 'Android',
       osVersion: '11',
-      androidSdkVersion: 30,
       hl: 'es',
       gl: 'US'
     }
@@ -28,14 +27,14 @@ const CLIENTS = [
   {
     name: 'IOS',
     id: 5,
-    ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+    ua: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)',
     context: {
       clientName: 'IOS',
-      clientVersion: '20.10.4',
+      clientVersion: '19.45.4',
       deviceMake: 'Apple',
       deviceModel: 'iPhone16,2',
       osName: 'iPhone',
-      osVersion: '18.3.2.22D82',
+      osVersion: '17.5.1.21F90',
       hl: 'es',
       gl: 'US'
     }
@@ -109,8 +108,38 @@ async function getVisitorCookies() {
   return '';
 }
 
+let cachedVisitorData = '';
+let visitorExpiry = 0;
+
+async function getVisitorData() {
+  if (cachedVisitorData && visitorExpiry > Date.now()) return cachedVisitorData;
+  try {
+    const swRes = await fetch('https://music.youtube.com/sw.js_data', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      signal: AbortSignal.timeout(2000)
+    });
+    const swText = await swRes.text();
+    const match = swText.match(/"(Cg[stuv][A-Za-z0-9_%-]{15,})"/);
+    if (match) {
+      cachedVisitorData = decodeURIComponent(match[1]);
+      visitorExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
+      return cachedVisitorData;
+    }
+  } catch (e) {
+    console.warn('[stream] visitorData fetch failed:', e.message);
+  }
+  return '';
+}
+
 async function resolveWithClient(client, videoId, wantedItag) {
-  const cookies = await getVisitorCookies();
+  const [visitorData, cookies] = await Promise.all([getVisitorData(), getVisitorCookies()]);
+  const clientContext = {
+    ...client.context,
+    ...(visitorData ? { visitorData } : {})
+  };
+
   const resp = await fetch(PLAYER_URL, {
     method: 'POST',
     headers: {
@@ -118,11 +147,12 @@ async function resolveWithClient(client, videoId, wantedItag) {
       'User-Agent': client.ua,
       'X-YouTube-Client-Name': String(client.id),
       'X-YouTube-Client-Version': client.context.clientVersion,
+      ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
       ...(cookies ? { Cookie: cookies } : {})
     },
     body: JSON.stringify({
       videoId,
-      context: { client: client.context },
+      context: { client: clientContext },
       contentCheckOk: true,
       racyCheckOk: true
     }),
