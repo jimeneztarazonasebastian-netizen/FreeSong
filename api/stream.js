@@ -160,32 +160,31 @@ async function findAlternativeVideoId(title, artist) {
 
 async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '') {
   const cacheKey = `${videoId}:${itag}`;
+  const errors = [];
 
   // 1. Caché en memoria
   const cached = urlCache.get(cacheKey);
   if (cached && cached.expires > Date.now() && !backupIndex) {
     try {
-      return await openUpstream(cached, range);
-    } catch {
+      return { upstream: await openUpstream(cached, range), errors };
+    } catch (e) {
+      errors.push(`cache failed: ${e.message}`);
       urlCache.delete(cacheKey);
     }
   }
 
   // 2. Resolver con clientes nativos (ANDROID y luego IOS)
-  let videoIsDead = false;
   for (const client of CLIENTS) {
     try {
       const target = await resolveWithClient(client, videoId, itag);
       const resp = await openUpstream(target, range);
       if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
       urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
-      return resp;
+      return { upstream: resp, errors };
     } catch (e) {
+      errors.push(`${client.name}: ${e.message}`);
       console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
-      if (e.isDead) {
-        videoIsDead = true;
-        break; // No perder tiempo con otros clientes si el vídeo está muerto en YouTube
-      }
+      if (e.isDead) break;
     }
   }
 
@@ -194,20 +193,26 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     try {
       const altVideoId = await findAlternativeVideoId(title, artist);
       if (altVideoId && altVideoId !== videoId) {
-        console.log(`[stream] Fallback a versión alternativa: ${videoId} -> ${altVideoId}`);
+        errors.push(`alt found: ${altVideoId}`);
         for (const client of CLIENTS) {
           try {
             const target = await resolveWithClient(client, altVideoId, itag);
             const resp = await openUpstream(target, range);
             urlCache.set(`${altVideoId}:${itag}`, { ...target, expires: Date.now() + URL_TTL_MS });
-            return resp;
-          } catch {}
+            return { upstream: resp, errors };
+          } catch (e) {
+            errors.push(`alt ${client.name}: ${e.message}`);
+          }
         }
+      } else {
+        errors.push(`alt not found or same as original`);
       }
-    } catch {}
+    } catch (e) {
+      errors.push(`alt search error: ${e.message}`);
+    }
   }
 
-  return null;
+  return { upstream: null, errors };
 }
 
 export default async function handler(req, res) {
@@ -255,9 +260,9 @@ export default async function handler(req, res) {
   }
   const boundedRange = req.method === 'HEAD' ? 'bytes=0-1' : `bytes=${startByte}-${endByte}`;
 
-  const upstream = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
+  const { upstream, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
   if (!upstream) {
-    return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE' });
+    return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE', details: errors });
   }
 
   const rawType = (upstream.headers.get('content-type') || '').toLowerCase();
