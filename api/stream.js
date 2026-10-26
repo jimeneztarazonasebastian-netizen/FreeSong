@@ -194,7 +194,7 @@ async function openUpstream(target, range) {
 }
 
 // Búsqueda automática de canción alternativa si un videoId específico está bloqueado o caído
-async function findAlternativeVideoId(title, artist) {
+async function findAlternativeVideoId(title, artist, originalId) {
   if (!title) return null;
   const q = `${title} ${artist || ''}`.trim();
   try {
@@ -210,7 +210,7 @@ async function findAlternativeVideoId(title, artist) {
         if (!r) continue;
         const titleRun = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0];
         const vid = titleRun?.navigationEndpoint?.watchEndpoint?.videoId;
-        if (vid) return vid;
+        if (vid && vid !== originalId) return vid;
       }
     }
   } catch {}
@@ -250,7 +250,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   // 3. Fallback inteligente inmediato: buscar versión alternativa si el ID original falló
   if (title || artist) {
     try {
-      const altVideoId = await findAlternativeVideoId(title, artist);
+      const altVideoId = await findAlternativeVideoId(title, artist, videoId);
       if (altVideoId && altVideoId !== videoId) {
         errors.push(`alt found: ${altVideoId}`);
         for (const client of CLIENTS) {

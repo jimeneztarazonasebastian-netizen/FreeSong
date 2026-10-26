@@ -251,149 +251,9 @@
     document.documentElement.style.setProperty('--tint', `${r} ${g} ${b}`);
   }
 
-  // --- Motor de Reproducción Universal YouTube Web (Respaldo Infalible) ---
-  let ytPlayer = null;
-  let isYtReady = false;
-  let isYtMode = false;
-  let ytProgressTimer = null;
-
-  function initYouTubeEngine() {
-    if (window.YT && window.YT.Player) {
-      setupYtPlayer();
-    } else {
-      window.onYouTubeIframeAPIReady = () => {
-        setupYtPlayer();
-      };
-      if (!document.getElementById('ytIframeScript')) {
-        const tag = document.createElement('script');
-        tag.id = 'ytIframeScript';
-        tag.src = 'https://www.youtube.com/iframe_api';
-        document.head.appendChild(tag);
-      }
-    }
-  }
-
-  function setupYtPlayer() {
-    if (ytPlayer || !document.getElementById('ytPlayerFrame')) return;
-    try {
-      ytPlayer = new YT.Player('ytPlayerFrame', {
-        height: '200',
-        width: '200',
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          playsinline: 1,
-          rel: 0,
-          modestbranding: 1
-        },
-        events: {
-          onReady: () => {
-            isYtReady = true;
-            console.log('[FreeSong] Motor de respaldo YouTube Web listo');
-          },
-          onStateChange: onYtStateChange,
-          onError: onYtError
-        }
-      });
-    } catch (e) {
-      console.warn('Error inicializando ytPlayer:', e);
-    }
-  }
-
-  function onYtStateChange(event) {
-    if (!isYtMode) return;
-    if (event.data === 1) { // PLAYING
-      S.isPlaying = true;
-      consecutiveStreamFailures = 0;
-      updatePlayPauseIcons(true, false);
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-      startYtProgressTimer();
-    } else if (event.data === 2) { // PAUSED
-      S.isPlaying = false;
-      updatePlayPauseIcons(false, false);
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-      stopYtProgressTimer();
-    } else if (event.data === 3) { // BUFFERING
-      updatePlayPauseIcons(true, true);
-    } else if (event.data === 0) { // ENDED
-      stopYtProgressTimer();
-      handleTrackFinished();
-    }
-  }
-
-  function onYtError(event) {
-    console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
-    stopYtProgressTimer();
-    playNext(true);
-  }
-
-  function startYtProgressTimer() {
-    stopYtProgressTimer();
-    ytProgressTimer = setInterval(() => {
-      if (!isYtMode || !ytPlayer || typeof ytPlayer.getCurrentTime !== 'function') return;
-      try {
-        const cur = ytPlayer.getCurrentTime() || 0;
-        const dur = ytPlayer.getDuration() || (S.currentTrack && S.currentTrack.duration) || 0;
-        if (dur > 0 && !isScrubbing) {
-          const pct = (cur / dur) * 100;
-          if ($('playerSeek')) $('playerSeek').value = pct;
-          if ($('miniProgress')) $('miniProgress').style.width = pct + '%';
-        }
-        if ($('playerCurTime')) $('playerCurTime').textContent = formatTime(cur);
-        if (dur > 0 && $('playerDurTime')) $('playerDurTime').textContent = formatTime(dur);
-        if (S.syncedLyrics && S.syncedLyrics.length > 0 && !isBackground()) {
-          syncLyricsWithTime(cur);
-        }
-      } catch {}
-    }, 250);
-  }
-
-  function stopYtProgressTimer() {
-    if (ytProgressTimer) {
-      clearInterval(ytProgressTimer);
-      ytProgressTimer = null;
-    }
-  }
-
-  function playWithYouTubeEngine(track) {
-    if (!track) return;
-    isYtMode = true;
-    S.isPlaying = true;
-    updatePlayPauseIcons(true, true);
-
-    // Detener cualquier deck HTML5
-    audioDecks.forEach((deck) => {
-      try {
-        deck.pause();
-        deck.removeAttribute('src');
-        deck.load();
-      } catch {}
-    });
-
-    const triggerPlay = () => {
-      if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-        try {
-          ytPlayer.loadVideoById({ videoId: track.id, suggestedQuality: 'small' });
-          ytPlayer.playVideo();
-        } catch (err) {
-          console.warn('Error al llamar loadVideoById:', err);
-        }
-      }
-    };
-
-    if (isYtReady && ytPlayer) {
-      triggerPlay();
-    } else {
-      initYouTubeEngine();
-      setTimeout(triggerPlay, 600);
-      setTimeout(triggerPlay, 1500);
-    }
-  }
-
-  // --- Manejo de Fallback Automático en Fallas de Audio ---
+  // --- Manejo de Fallback Automático en Fallas de Audio (Deck HTML5 Nativo) ---
   let consecutiveStreamFailures = 0;
+  const MAX_AUTO_SKIPS = 3;
 
   async function handleStreamFailure(track, deck) {
     if (!track) {
@@ -402,17 +262,58 @@
     }
     if (S.queue[S.currentIndex] !== track) return;
 
-    console.warn(`[FreeSong Fallback] Activando motor de respaldo YouTube Web para "${track.title}" (${track.id})...`);
-    showToast(`Conectando audio de «${track.title}»...`, 1500);
+    if (!track._fallbackStep) track._fallbackStep = 1;
+    else track._fallbackStep++;
 
-    // Detener el deck de audio HTML5 para evitar interferencias
-    try {
-      deck.pause();
-      deck.removeAttribute('src');
-      deck.load();
-    } catch {}
+    console.warn(`[FreeSong Fallback] Intento ${track._fallbackStep} para "${track.title}"...`);
 
-    playWithYouTubeEngine(track);
+    // Intento 1: Buscar versión alternativa activa en YouTube Music (Topic / Audio / Video alternativo)
+    if (!track._searchedAlternative) {
+      track._searchedAlternative = true;
+      try {
+        const query = `${track.title} ${track.artist || ''}`.trim();
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=songs`);
+        const data = await res.json();
+        const altTrack = (data.tracks || []).find((t) => t.id && t.id !== track.id);
+        if (altTrack) {
+          console.log(`[FreeSong] Respaldo nativo: Reemplazando ${track.id} por versión alternativa ${altTrack.id}`);
+          showToast(`Sintonizando versión alternativa de «${track.title}»...`, 2000);
+          track.id = altTrack.id;
+          track.streamUrl = null;
+          deck.src = `/api/stream?id=${encodeURIComponent(altTrack.id)}&itag=18&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+          deck.play().catch(() => {
+            updatePlayPauseIcons(false, false);
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Error en búsqueda de versión alternativa:', err);
+      }
+    }
+
+    // Intento 2: Reintentar con itag 18 forzado
+    if (track._fallbackStep <= 2) {
+      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=18&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+      deck.play().catch(() => {
+        updatePlayPauseIcons(false, false);
+      });
+      return;
+    }
+
+    // Si la canción está completamente caída: pasar a la siguiente sin bloquear la cola
+    track._fallbackStep = 0;
+    consecutiveStreamFailures++;
+    updatePlayPauseIcons(false, false);
+    if (consecutiveStreamFailures >= MAX_AUTO_SKIPS) {
+      consecutiveStreamFailures = 0;
+      S.isPlaying = false;
+      showToast('No se pudo reproducir. Comprueba tu conexión o intenta con otra canción.');
+      return;
+    }
+    showToast(`No se pudo reproducir «${track.title}». Pasando a la siguiente...`);
+    setTimeout(() => {
+      if (S.queue[S.currentIndex] === track && !userIntentionalPause) playNext(true);
+    }, 600);
   }
 
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
@@ -916,13 +817,6 @@
     userIntentionalPause = false;
     track._fallbackStep = 0;
 
-    // Si veníamos de YouTube Engine, pausarlo al cambiar de pista
-    if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
-      try { ytPlayer.pauseVideo(); } catch {}
-    }
-    isYtMode = false;
-    stopYtProgressTimer();
-
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
     if (window.activeStreamAbort) {
       try {
@@ -1089,9 +983,6 @@
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
     }
-    if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
-      try { ytPlayer.pauseVideo(); } catch {}
-    }
     const p = getActivePlayer();
     if (p) p.pause();
     const inact = getInactivePlayer();
@@ -1105,15 +996,6 @@
     userIntentionalPause = false;
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
-      return;
-    }
-    if (isYtMode) {
-      if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
-        try { ytPlayer.playVideo(); } catch {}
-        S.isPlaying = true;
-        updatePlayPauseIcons(true);
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-      }
       return;
     }
     const p = getActivePlayer();
@@ -3800,13 +3682,6 @@
 
     seekEl.addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value);
-      if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
-        const dur = ytPlayer.getDuration() || (S.currentTrack && S.currentTrack.duration) || 0;
-        if (dur > 0) {
-          ytPlayer.seekTo((pct / 100) * dur, true);
-        }
-        return;
-      }
       const p = getActivePlayer();
       const track = S.queue[S.currentIndex];
       const dur = getEffectiveDuration(p, track);
@@ -4217,7 +4092,6 @@
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
-    initYouTubeEngine();
     updateGreeting();
     bindEvents();
     setupSearch();

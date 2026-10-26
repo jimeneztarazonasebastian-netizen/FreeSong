@@ -889,16 +889,10 @@
       <span id="toastText">Mensaje</span>
     </div>
 
-  <!-- Motor de audio HTML5 nativo de doble deck para Crossfade continuo -->
+  <!-- Motor de audio HTML5 nativo de doble deck para Crossfade continuo y reproduccion en segundo plano -->
   <audio id="audioA" playsinline preload="auto"></audio>
   <audio id="audioB" playsinline preload="auto"></audio>
 
-  <!-- Contenedor invisible para motor de respaldo YouTube Web -->
-  <div id="ytPlayerContainer" style="position:fixed;bottom:-9999px;left:-9999px;width:200px;height:200px;opacity:0.001;pointer-events:none;z-index:-1;">
-    <div id="ytPlayerFrame"></div>
-  </div>
-
-  <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.2.5"></script>
+  <script src="app.js?v=3.2.6"></script>
 </body>
 </html>
