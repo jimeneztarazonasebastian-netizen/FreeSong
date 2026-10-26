@@ -269,20 +269,9 @@
 
     console.warn(`[FreeSong Fallback] Intento ${track._fallbackStep} para "${track.title}"...`);
 
-    // Intento 1 y 2: Reintentar con formato universal 18 (AAC progresivo no estrangulado)
-    if (track._fallbackStep <= 2) {
-      const itag = '18';
-      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${itag}&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
-      deck.play().catch(() => {
-        updatePlayPauseIcons(false, false);
-      });
-      return;
-    }
-
-    // Intento 3: Búsqueda inteligente de versión alternativa activa para esta misma canción
+    // Intento 1: Búsqueda inmediata de versión alternativa activa para esta misma canción
     if (!track._searchedAlternative) {
       track._searchedAlternative = true;
-      track._fallbackStep = 0;
       try {
         const query = `${track.title} ${track.artist || ''}`.trim();
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=songs`);
@@ -302,6 +291,15 @@
       } catch (err) {
         console.warn('Error en búsqueda de versión alternativa:', err);
       }
+    }
+
+    // Intento 2: Reintentar con itag 18 forzado
+    if (track._fallbackStep <= 2) {
+      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=18&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+      deck.play().catch(() => {
+        updatePlayPauseIcons(false, false);
+      });
+      return;
     }
 
     // Sin remedio: pasar a la siguiente, pero sin recorrer toda la cola en silencio

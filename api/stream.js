@@ -6,11 +6,10 @@ import { fetchYt, getRunsText } from './_yt.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
-const RESOLVE_TIMEOUT_MS = 5000;
-const UPSTREAM_TIMEOUT_MS = 8000;
+const RESOLVE_TIMEOUT_MS = 2500;
+const UPSTREAM_TIMEOUT_MS = 3000;
 
-// Clientes móviles reales con mayor tasa de éxito y sin requerimiento de PO Token para audio
-// Clientes móviles reales con mayor tasa de éxito y sin requerimiento de PO Token para audio
+// Clientes móviles reales con mayor tasa de éxito
 const CLIENTS = [
   {
     name: 'ANDROID',
@@ -43,13 +42,6 @@ const CLIENTS = [
   }
 ];
 
-// Instancias Invidious de respaldo con API activa
-const INVIDIOUS_NODES = [
-  'https://yt.chocolatemoo53.com',
-  'https://invidious.nerdvpn.de',
-  'https://inv.nadeko.net'
-];
-
 const urlCache = new Map();
 const CACHE_MAX = 300;
 
@@ -67,12 +59,9 @@ function pickFormat(formats, wantedItag) {
   if (!audios.length) return null;
 
   const byItag = (n) => audios.find((f) => String(f.itag) === String(n));
-
   const f18 = byItag(18);
 
   // 1. Formato universal no estrangulado: itag 18 (MP4 progresivo con audio AAC-LC estéreo 44.1kHz).
-  // Es la estrategia oficial de SimpMusic (noLogIn = true / ITAG.MUXED_360P): Google NO corta a 1MB
-  // con error 403 en formatos progresivos y reproduce el 100% de la canción sin interrupciones.
   if (f18 && (!wantedItag || wantedItag === '18' || wantedItag === '140')) {
     return f18;
   }
@@ -118,7 +107,9 @@ async function resolveWithClient(client, videoId, wantedItag) {
 
   const data = await resp.json();
   if (data.playabilityStatus?.status !== 'OK') {
-    throw new Error(data.playabilityStatus?.reason || data.playabilityStatus?.status || 'not playable');
+    const err = new Error(data.playabilityStatus?.reason || data.playabilityStatus?.status || 'not playable');
+    err.isDead = (data.playabilityStatus?.status === 'ERROR' || data.playabilityStatus?.status === 'UNPLAYABLE');
+    throw err;
   }
 
   const allFormats = [
@@ -167,31 +158,6 @@ async function findAlternativeVideoId(title, artist) {
   return null;
 }
 
-async function invidiousFallback(videoId, itag, range) {
-  const ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15';
-  const controllers = INVIDIOUS_NODES.map(() => new AbortController());
-  const winner = await Promise.any(
-    INVIDIOUS_NODES.map(async (node, i) => {
-      const timer = setTimeout(() => controllers[i].abort(), 3500);
-      try {
-        const resp = await fetch(`${node}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`, {
-          headers: { Range: range, 'User-Agent': ua },
-          signal: controllers[i].signal
-        });
-        if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
-          return { resp, i };
-        }
-        try { await resp.body?.cancel(); } catch {}
-        throw new Error('invalid media');
-      } finally {
-        clearTimeout(timer);
-      }
-    })
-  );
-  controllers.forEach((c, i) => { if (i !== winner.i) { try { c.abort(); } catch {} } });
-  return winner.resp;
-}
-
 async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '') {
   const cacheKey = `${videoId}:${itag}`;
 
@@ -206,6 +172,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   }
 
   // 2. Resolver con clientes nativos (ANDROID y luego IOS)
+  let videoIsDead = false;
   for (const client of CLIENTS) {
     try {
       const target = await resolveWithClient(client, videoId, itag);
@@ -215,10 +182,14 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
       return resp;
     } catch (e) {
       console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
+      if (e.isDead) {
+        videoIsDead = true;
+        break; // No perder tiempo con otros clientes si el vídeo está muerto en YouTube
+      }
     }
   }
 
-  // 3. Fallback inteligente: buscar versión alternativa de la canción si el ID original falló
+  // 3. Fallback inteligente inmediato: buscar versión alternativa si el ID original falló
   if (title || artist) {
     try {
       const altVideoId = await findAlternativeVideoId(title, artist);
@@ -236,12 +207,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     } catch {}
   }
 
-  // 4. Último recurso: Invidious
-  try {
-    return await invidiousFallback(videoId, itag, range);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 export default async function handler(req, res) {
