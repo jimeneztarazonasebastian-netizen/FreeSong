@@ -893,6 +893,12 @@
   <audio id="audioA" playsinline preload="auto"></audio>
   <audio id="audioB" playsinline preload="auto"></audio>
 
-  <script src="app.js?v=3.2.4"></script>
+  <!-- Contenedor invisible para motor de respaldo YouTube Web -->
+  <div id="ytPlayerContainer" style="position:fixed;bottom:-9999px;left:-9999px;width:200px;height:200px;opacity:0.001;pointer-events:none;z-index:-1;">
+    <div id="ytPlayerFrame"></div>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="app.js?v=3.2.5"></script>
 </body>
 </html>
