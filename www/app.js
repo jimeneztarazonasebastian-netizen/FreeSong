@@ -251,10 +251,185 @@
     document.documentElement.style.setProperty('--tint', `${r} ${g} ${b}`);
   }
 
-  // --- Manejo de Fallback Automático en Fallas de Audio (Deck HTML5 Nativo) ---
-  let consecutiveStreamFailures = 0;
-  const MAX_AUTO_SKIPS = 3;
+  // Detección de pantalla bloqueada o pestaña en segundo plano
+  function isBackground() {
+    return document.visibilityState === 'hidden';
+  }
 
+  // --- Mantenedor de sesión de audio nativo en móviles (iOS Safari / Android) ---
+  // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit
+  const silentLoop = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+  silentLoop.loop = true;
+  silentLoop.volume = 0.01;
+  function keepAudioAlive() {
+    if (silentLoop.paused) {
+      silentLoop.play().catch(() => {});
+    }
+  }
+
+  // Despertar la sesión de audio al primer toque físico en la pantalla
+  window.addEventListener('touchstart', keepAudioAlive, { passive: true });
+  window.addEventListener('click', keepAudioAlive);
+
+  // --- Motor de Audio YouTube Web (Respaldo Infalible sin Errores 502) ---
+  let isYtMode = false;
+  let ytPlayer = null;
+  let isYtReady = false;
+  let ytProgressTimer = null;
+
+  function initYouTubeEngine() {
+    if (ytPlayer || !window.YT || !window.YT.Player) return;
+    try {
+      ytPlayer = new YT.Player('ytDeck', {
+        height: '2',
+        width: '2',
+        videoId: '',
+        playerVars: {
+          autoplay: 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          rel: 0,
+          playsinline: 1,
+          enablejsapi: 1,
+          modestbranding: 1,
+          origin: window.location.origin
+        },
+        events: {
+          onReady: () => {
+            isYtReady = true;
+          },
+          onStateChange: onYtStateChange,
+          onError: onYtError
+        }
+      });
+    } catch (e) {
+      console.warn('Error inicializando YouTube Engine:', e);
+    }
+  }
+
+  window.onYouTubeIframeAPIReady = () => {
+    initYouTubeEngine();
+  };
+  if (window.YT && window.YT.Player) {
+    initYouTubeEngine();
+  }
+
+  function onYtStateChange(event) {
+    if (!isYtMode) return;
+    if (event.data === 1) { // PLAYING
+      S.isPlaying = true;
+      userIntentionalPause = false;
+      updatePlayPauseIcons(true, false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      startYtProgressTimer();
+    } else if (event.data === 2) { // PAUSED
+      // Si la pausa NO fue iniciada intencionalmente por el usuario (ej: pantalla bloqueada o pestaña en segundo plano en iOS)
+      if (!userIntentionalPause && S.isPlaying) {
+        keepAudioAlive();
+        try {
+          if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+            ytPlayer.playVideo();
+          }
+        } catch {}
+        return;
+      }
+      S.isPlaying = false;
+      updatePlayPauseIcons(false, false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      stopYtProgressTimer();
+    } else if (event.data === 3) { // BUFFERING
+      updatePlayPauseIcons(true, true);
+    } else if (event.data === 0) { // ENDED
+      stopYtProgressTimer();
+      handleTrackFinished();
+    }
+  }
+
+  function onYtError(event) {
+    console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
+    stopYtProgressTimer();
+    playNext(true);
+  }
+
+  function startYtProgressTimer() {
+    stopYtProgressTimer();
+    ytProgressTimer = setInterval(() => {
+      if (!isYtMode || !ytPlayer || typeof ytPlayer.getCurrentTime !== 'function') return;
+      try {
+        const cur = ytPlayer.getCurrentTime() || 0;
+        const dur = ytPlayer.getDuration() || (S.currentTrack && S.currentTrack.duration) || 0;
+        if (dur > 0) {
+          const clampedCur = Math.min(cur, dur);
+          $('playerCurTime').textContent = formatTime(clampedCur);
+          $('playerDurTime').textContent = formatTime(dur);
+          if (!isScrubbing) {
+            const pct = Math.min(100, (clampedCur / dur) * 100);
+            $('playerSeek').value = pct;
+            $('miniProgress').style.width = `${pct}%`;
+          }
+          if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession) {
+            try {
+              navigator.mediaSession.setPositionState({
+                duration: dur,
+                playbackRate: 1,
+                position: clampedCur
+              });
+            } catch {}
+          }
+        }
+        if (S.syncedLyrics && S.syncedLyrics.length > 0 && !isBackground()) {
+          syncLyricsWithTime(cur);
+        }
+      } catch {}
+    }, 250);
+  }
+
+  function stopYtProgressTimer() {
+    if (ytProgressTimer) {
+      clearInterval(ytProgressTimer);
+      ytProgressTimer = null;
+    }
+  }
+
+  function playWithYouTubeEngine(track) {
+    if (!track) return;
+    isYtMode = true;
+    S.isPlaying = true;
+    userIntentionalPause = false;
+    keepAudioAlive();
+    updatePlayPauseIcons(true, true);
+
+    // Detener cualquier deck HTML5 para evitar interferencias
+    audioDecks.forEach((deck) => {
+      try {
+        deck.pause();
+        deck.removeAttribute('src');
+        deck.load();
+      } catch {}
+    });
+
+    const triggerPlay = () => {
+      if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+        try {
+          ytPlayer.loadVideoById({ videoId: track.id, suggestedQuality: 'small' });
+          ytPlayer.playVideo();
+        } catch (err) {
+          console.warn('Error al llamar loadVideoById:', err);
+        }
+      }
+    };
+
+    if (isYtReady && ytPlayer) {
+      triggerPlay();
+    } else {
+      initYouTubeEngine();
+      setTimeout(triggerPlay, 400);
+      setTimeout(triggerPlay, 1200);
+    }
+  }
+
+  // --- Manejo de Fallback Automático en Fallas de Audio ---
   async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
@@ -262,58 +437,8 @@
     }
     if (S.queue[S.currentIndex] !== track) return;
 
-    if (!track._fallbackStep) track._fallbackStep = 1;
-    else track._fallbackStep++;
-
-    console.warn(`[FreeSong Fallback] Intento ${track._fallbackStep} para "${track.title}"...`);
-
-    // Intento 1: Buscar versión alternativa activa en YouTube Music (Topic / Audio / Video alternativo)
-    if (!track._searchedAlternative) {
-      track._searchedAlternative = true;
-      try {
-        const query = `${track.title} ${track.artist || ''}`.trim();
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=songs`);
-        const data = await res.json();
-        const altTrack = (data.tracks || []).find((t) => t.id && t.id !== track.id);
-        if (altTrack) {
-          console.log(`[FreeSong] Respaldo nativo: Reemplazando ${track.id} por versión alternativa ${altTrack.id}`);
-          showToast(`Sintonizando versión alternativa de «${track.title}»...`, 2000);
-          track.id = altTrack.id;
-          track.streamUrl = null;
-          deck.src = `/api/stream?id=${encodeURIComponent(altTrack.id)}&itag=18&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
-          deck.play().catch(() => {
-            updatePlayPauseIcons(false, false);
-          });
-          return;
-        }
-      } catch (err) {
-        console.warn('Error en búsqueda de versión alternativa:', err);
-      }
-    }
-
-    // Intento 2: Reintentar con itag 18 forzado
-    if (track._fallbackStep <= 2) {
-      deck.src = `/api/stream?id=${encodeURIComponent(track.id)}&itag=18&backup=${track._fallbackStep}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
-      deck.play().catch(() => {
-        updatePlayPauseIcons(false, false);
-      });
-      return;
-    }
-
-    // Si la canción está completamente caída: pasar a la siguiente sin bloquear la cola
-    track._fallbackStep = 0;
-    consecutiveStreamFailures++;
-    updatePlayPauseIcons(false, false);
-    if (consecutiveStreamFailures >= MAX_AUTO_SKIPS) {
-      consecutiveStreamFailures = 0;
-      S.isPlaying = false;
-      showToast('No se pudo reproducir. Comprueba tu conexión o intenta con otra canción.');
-      return;
-    }
-    showToast(`No se pudo reproducir «${track.title}». Pasando a la siguiente...`);
-    setTimeout(() => {
-      if (S.queue[S.currentIndex] === track && !userIntentionalPause) playNext(true);
-    }, 600);
+    console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
+    playWithYouTubeEngine(track);
   }
 
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
@@ -817,6 +942,14 @@
     userIntentionalPause = false;
     track._fallbackStep = 0;
 
+    // Si veníamos de YouTube Engine, pausarlo al cambiar de pista
+    if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+      try { ytPlayer.pauseVideo(); } catch {}
+    }
+    isYtMode = false;
+    stopYtProgressTimer();
+    keepAudioAlive();
+
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
     if (window.activeStreamAbort) {
       try {
@@ -983,6 +1116,9 @@
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
     }
+    if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+      try { ytPlayer.pauseVideo(); } catch {}
+    }
     const p = getActivePlayer();
     if (p) p.pause();
     const inact = getInactivePlayer();
@@ -994,8 +1130,18 @@
 
   function resumePlayback() {
     userIntentionalPause = false;
+    keepAudioAlive();
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
+      return;
+    }
+    if (isYtMode) {
+      if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+        try { ytPlayer.playVideo(); } catch {}
+        S.isPlaying = true;
+        updatePlayPauseIcons(true);
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      }
       return;
     }
     const p = getActivePlayer();
@@ -3682,6 +3828,13 @@
 
     seekEl.addEventListener('input', (e) => {
       const pct = parseFloat(e.target.value);
+      if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+        const dur = ytPlayer.getDuration() || (S.currentTrack && S.currentTrack.duration) || 0;
+        if (dur > 0) {
+          ytPlayer.seekTo((pct / 100) * dur, true);
+        }
+        return;
+      }
       const p = getActivePlayer();
       const track = S.queue[S.currentIndex];
       const dur = getEffectiveDuration(p, track);
@@ -4092,6 +4245,7 @@
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
+    initYouTubeEngine();
     updateGreeting();
     bindEvents();
     setupSearch();

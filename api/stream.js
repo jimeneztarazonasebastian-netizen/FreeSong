@@ -12,6 +12,21 @@ const UPSTREAM_TIMEOUT_MS = 3000;
 // Clientes móviles reales con mayor tasa de éxito (SimpMusic Engine)
 const CLIENTS = [
   {
+    name: 'IOS',
+    id: 5,
+    ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+    context: {
+      clientName: 'IOS',
+      clientVersion: '20.10.4',
+      deviceMake: 'Apple',
+      deviceModel: 'iPhone16,2',
+      osName: 'iPhone',
+      osVersion: '18.3.2.22D82',
+      hl: 'es',
+      gl: 'US'
+    }
+  },
+  {
     name: 'ANDROID',
     id: 3,
     ua: 'com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip',
@@ -20,21 +35,6 @@ const CLIENTS = [
       clientVersion: '21.26.364',
       osName: 'Android',
       osVersion: '11',
-      hl: 'es',
-      gl: 'US'
-    }
-  },
-  {
-    name: 'IOS',
-    id: 5,
-    ua: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)',
-    context: {
-      clientName: 'IOS',
-      clientVersion: '19.45.4',
-      deviceMake: 'Apple',
-      deviceModel: 'iPhone16,2',
-      osName: 'iPhone',
-      osVersion: '17.5.1.21F90',
       hl: 'es',
       gl: 'US'
     }
@@ -90,6 +90,7 @@ let cachedCookies = '';
 let cookieExpiry = 0;
 
 async function getVisitorCookies() {
+  if (process.env.YOUTUBE_COOKIE) return process.env.YOUTUBE_COOKIE;
   if (cachedCookies && cookieExpiry > Date.now()) return cachedCookies;
   try {
     const res = await fetch('https://www.youtube.com', {
