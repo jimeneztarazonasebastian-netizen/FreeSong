@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.0.0 Ultra Spotify Premium para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.2.8 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -151,6 +151,8 @@
   let isScrubbing = false;
   let streamWatchdogTimer = null;
   let lastSkipTimestamp = 0;
+  let consecutiveStreamFailures = 0;
+  const MAX_STREAM_FAILURES = 3; // fallbacks/saltos seguidos antes de detenerse
 
   function getActivePlayer() {
     return audioDecks[activeDeckIdx];
@@ -193,7 +195,8 @@
 
     if (official > 0) return official;
     if (!raw || isNaN(raw) || raw <= 0) return 0;
-    if (isIOS && raw > 180) return Math.round(raw / 2);
+    // El bug de duración x2 de DASH ya no aplica al stream progresivo actual.
+    // Dividir aquí cortaba a la mitad cualquier canción de más de 3 min sin duración oficial.
     return Math.round(raw);
   }
 
@@ -320,6 +323,7 @@
     if (event.data === 1) { // PLAYING
       S.isPlaying = true;
       userIntentionalPause = false;
+      consecutiveStreamFailures = 0;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       startYtProgressTimer();
@@ -349,6 +353,7 @@
   function onYtError(event) {
     console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
     stopYtProgressTimer();
+    if (!noteStreamFailure()) return;
     playNext(true);
   }
 
@@ -416,26 +421,75 @@
           ytPlayer.playVideo();
         } catch (err) {
           console.warn('Error al llamar loadVideoById:', err);
+          return false;
         }
+        return true;
       }
+      return false;
     };
 
     if (isYtReady && ytPlayer) {
       triggerPlay();
     } else {
       initYouTubeEngine();
-      setTimeout(triggerPlay, 400);
-      setTimeout(triggerPlay, 1200);
+      const attempt = (final = false) => {
+        if (triggerPlay()) return;
+        if (final) {
+          console.warn('[FreeSong] La API de YouTube no está disponible para el respaldo.');
+          stopAfterStreamFailures();
+        }
+      };
+      setTimeout(() => attempt(), 400);
+      setTimeout(() => attempt(), 1200);
+      setTimeout(() => attempt(true), 3000);
     }
   }
 
   // --- Manejo de Fallback Automático en Fallas de Audio ---
+  function stopAfterStreamFailures() {
+    consecutiveStreamFailures = 0;
+    userIntentionalPause = true;
+    S.isPlaying = false;
+    try {
+      audioDecks.forEach((deck) => deck.pause());
+    } catch {}
+    if (isYtMode && ytPlayer && typeof ytPlayer.stopVideo === 'function') {
+      try { ytPlayer.stopVideo(); } catch {}
+    }
+    isYtMode = false;
+    stopYtProgressTimer();
+    if (streamWatchdogTimer) {
+      clearTimeout(streamWatchdogTimer);
+      streamWatchdogTimer = null;
+    }
+    if (trackTransitionTimeout) {
+      clearTimeout(trackTransitionTimeout);
+      trackTransitionTimeout = null;
+    }
+    isTransitioningTrack = false;
+    updatePlayPauseIcons(false, false);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    showToast('No se pudo reproducir esta canción. Revisa tu conexión e inténtalo de nuevo.', 3200);
+  }
+
+  // Devuelve false si ya se superó el máximo de fallos seguidos (y detiene la reproducción).
+  function noteStreamFailure() {
+    consecutiveStreamFailures++;
+    if (consecutiveStreamFailures > MAX_STREAM_FAILURES) {
+      stopAfterStreamFailures();
+      return false;
+    }
+    showToast(`Problema de audio. Reintentando (${consecutiveStreamFailures}/${MAX_STREAM_FAILURES})...`, 1800);
+    return true;
+  }
+
   async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
       return;
     }
     if (S.queue[S.currentIndex] !== track) return;
+    if (!noteStreamFailure()) return;
 
     console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
     playWithYouTubeEngine(track);
@@ -626,6 +680,30 @@
       return;
     }
 
+    // Repetir una pista: reiniciar aquí (no en playNext, que también usa el botón "siguiente")
+    if (S.repeat === 'one') {
+      if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+        try {
+          ytPlayer.seekTo(0, true);
+          ytPlayer.playVideo();
+        } catch {}
+      } else {
+        const p = getActivePlayer();
+        if (p) {
+          try {
+            p.currentTime = 0;
+            p.play().catch(() => {});
+          } catch {}
+        }
+      }
+      isTransitioningTrack = false;
+      if (trackTransitionTimeout) {
+        clearTimeout(trackTransitionTimeout);
+        trackTransitionTimeout = null;
+      }
+      return;
+    }
+
     // Lógica de Smart Shuffle: inyectar recomendación cada 2 pistas
     if (S.shuffleMode === 2) {
       S.smartShuffleInjectCount++;
@@ -688,17 +766,24 @@
   }
 
   // --- Siguiente Canción y Precarga ---
-  function getNextIndex() {
+  // manualSkip=true lo usa el botón "siguiente": con repetir-una el avance manual
+  // debe pasar a la siguiente pista, mientras que el fin de pista la repite.
+  function getNextIndex(manualSkip = false) {
     if (S.queue.length === 0) return -1;
-    if (S.repeat === 'one') return S.currentIndex;
+    // Con repetir-una la reproducción automática la gestiona handleTrackFinished;
+    // aquí solo apuntamos a la misma pista para la precarga.
+    if (!manualSkip && S.repeat === 'one') return S.currentIndex;
     let next = S.currentIndex + 1;
     if (S.shuffleMode > 0) {
       next = Math.floor(Math.random() * S.queue.length);
       if (next === S.currentIndex && S.queue.length > 1) {
         next = (next + 1) % S.queue.length;
       }
+      return next;
     }
     if (next >= S.queue.length) {
+      // Repetición desactivada: no dar la vuelta a la cola.
+      if (S.repeat === 'off') return -1;
       next = 0;
     }
     return next;
@@ -714,6 +799,8 @@
     if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
     const nextTrack = S.queue[nextIdx];
     if (!nextTrack) return;
+    // Si ya está descargada, se reproducirá desde el blob offline: no gastes red.
+    if (isDownloaded(nextTrack.id)) return;
 
     prewarmTracks([nextTrack]);
     if (nextTrack.streamUrl) return;
@@ -804,12 +891,20 @@
     showToast(`Descargando "${track.title}"...`, 3000);
 
     try {
-      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+      // full=1 desactiva el recorte de 512 KB que usa el streaming por rangos.
+      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&full=1&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
       const res = await fetch(streamUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const blob = await res.blob();
       if (!blob || blob.size < 1000) throw new Error('Blob de audio inválido');
+
+      // Comprobar que llegó la canción completa usando el total de Content-Range.
+      const contentRange = res.headers.get('content-range') || '';
+      const totalBytes = parseInt((contentRange.split('/')[1] || '').trim(), 10);
+      if (totalBytes > 0 && blob.size < totalBytes) {
+        throw new Error(`Descarga incompleta (${blob.size}/${totalBytes} bytes)`);
+      }
 
       if ('caches' in window) {
         const cache = await caches.open('freesong-offline-audio-v1');
@@ -974,7 +1069,9 @@
 
     // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
-    const streamUrl = track.streamUrl || offlineUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+    // La copia offline tiene prioridad: si está descargada debe sonar sin red,
+    // aunque la pista también tenga una URL de streaming precargada.
+    const streamUrl = offlineUrl || track.streamUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -1065,7 +1162,16 @@
 
   // --- Curva de Crossfade Senoidal (Desktop) ---
   function performCrossfade(outP, inP, durationSec) {
-    cancelActiveCrossfade();
+    // No usar cancelActiveCrossfade(): resetea AMBOS decks a volumen máximo y hacía
+    // que la pista entrante sonara fuerte durante el primer tick del fundido.
+    if (window.crossfadeInterval) {
+      clearInterval(window.crossfadeInterval);
+      window.crossfadeInterval = null;
+    }
+    if (fadeInterval) {
+      clearInterval(fadeInterval);
+      fadeInterval = null;
+    }
     isCrossfading = true;
 
     const steps = 30;
@@ -1176,20 +1282,17 @@
       isTransitioningTrack = false;
       return;
     }
-    if (S.repeat === 'one') {
-      const p = getActivePlayer();
-      if (p) {
-        p.currentTime = 0;
-        p.play().catch(() => {});
-      }
-      isTransitioningTrack = false;
-      return;
-    }
-    const nextIdx = getNextIndex();
+    const nextIdx = getNextIndex(true);
     if (nextIdx >= 0) {
       playTrack(nextIdx, typeof immediate === 'boolean' ? immediate : true);
     } else {
+      // Fin de la cola con la repetición desactivada
       isTransitioningTrack = false;
+      userIntentionalPause = true;
+      S.isPlaying = false;
+      try { getActivePlayer().pause(); } catch {}
+      updatePlayPauseIcons(false, false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     }
   }
 
@@ -1569,7 +1672,8 @@
           }
         });
       });
-    } catch {
+    } catch (err) {
+      if (err.name === 'AbortError') return;
       container.innerHTML = `
         <div class="text-center py-6 space-y-2">
           <p class="text-zinc-500 text-xs">Error al cargar recomendaciones</p>
@@ -1768,12 +1872,12 @@
         chipsEl.innerHTML = allArtists.map((art) => {
           const isCurrent = art.toLowerCase() === primaryArtist.toLowerCase();
           return `
-            <button data-collab-artist="${art}" class="px-3 py-1 rounded-full text-xs font-bold transition shrink-0 ${
+            <button data-collab-artist="${esc(art)}" class="px-3 py-1 rounded-full text-xs font-bold transition shrink-0 ${
               isCurrent
                 ? 'bg-emerald-500 text-black shadow-md'
                 : 'bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700'
             }">
-              ${art}
+              ${esc(art)}
             </button>
           `;
         }).join('');
@@ -3420,6 +3524,8 @@
         });
       } else {
         $$('[data-search-idx]').forEach((el) => {
+          if (el.dataset.searchBound) return;
+          el.dataset.searchBound = '1';
           el.addEventListener('click', (e) => {
             if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
@@ -3429,6 +3535,8 @@
         });
 
         $$('[data-search-down]').forEach((btn) => {
+          if (btn.dataset.searchBound) return;
+          btn.dataset.searchBound = '1';
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const idx = parseInt(btn.getAttribute('data-search-down'), 10);
@@ -3437,6 +3545,8 @@
         });
 
         $$('[data-search-more]').forEach((btn) => {
+          if (btn.dataset.searchBound) return;
+          btn.dataset.searchBound = '1';
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const idx = parseInt(btn.getAttribute('data-search-more'), 10);
@@ -3659,6 +3769,22 @@
   }
 
   // --- Enlazar Todos los Eventos de la Interfaz ---
+  // El estado inicial de S.repeat es 'all': sincroniza el botón al arrancar para que
+  // no muestre "repetición desactivada" mientras la cola sí da la vuelta.
+  function syncRepeatButton() {
+    const btn = $('playerRepeatBtn');
+    if (!btn) return;
+    if (S.repeat === 'off') {
+      btn.className = 'p-2 text-zinc-400 hover:text-white press';
+      btn.innerHTML = '<svg class="w-5 h-5"><use href="#i-repeat"/></svg>';
+    } else {
+      btn.className = 'p-2 text-emerald-400 has-active-dot press';
+      btn.innerHTML = S.repeat === 'one'
+        ? '<svg class="w-5 h-5"><use href="#i-repeat-one"/></svg>'
+        : '<svg class="w-5 h-5"><use href="#i-repeat"/></svg>';
+    }
+  }
+
   function bindEvents() {
     // Chips de categorías de Home
     $$('.chip-btn[data-chip]').forEach((chip) => {
@@ -3871,19 +3997,10 @@
       else if (S.repeat === 'all') S.repeat = 'one';
       else S.repeat = 'off';
 
-      if (S.repeat === 'one') {
-        $('playerRepeatBtn').className = 'p-2 text-emerald-400 has-active-dot press';
-        $('playerRepeatBtn').innerHTML = '<svg class="w-5 h-5"><use href="#i-repeat-one"/></svg>';
-        showToast('Repetir una canción');
-      } else if (S.repeat === 'all') {
-        $('playerRepeatBtn').className = 'p-2 text-emerald-400 has-active-dot press';
-        $('playerRepeatBtn').innerHTML = '<svg class="w-5 h-5"><use href="#i-repeat"/></svg>';
-        showToast('Repetir lista completa');
-      } else {
-        $('playerRepeatBtn').className = 'p-2 text-zinc-400 hover:text-white press';
-        $('playerRepeatBtn').innerHTML = '<svg class="w-5 h-5"><use href="#i-repeat"/></svg>';
-        showToast('Repetición desactivada');
-      }
+      syncRepeatButton();
+      if (S.repeat === 'one') showToast('Repetir una canción');
+      else if (S.repeat === 'all') showToast('Repetir lista completa');
+      else showToast('Repetición desactivada');
     });
 
     // Filtros de Biblioteca
@@ -4119,13 +4236,22 @@
     $('importBackupFileInput').addEventListener('change', handleImportBackup);
 
     // Restablecer datos
-    $('btnClearData').addEventListener('click', () => {
-      if (confirm('¿Deseas restablecer todos tus datos locales (favoritos, historial, playlists)?')) {
+    $('btnClearData').addEventListener('click', async () => {
+      if (confirm('¿Deseas restablecer todos tus datos locales (favoritos, historial, playlists y descargas)?')) {
         localStorage.clear();
         S.favorites = [];
         S.history = [];
         S.playlists = [];
+        S.downloads = [];
+        S.recentSearches = [];
         S.stats = { totalPlays: 0, songs: {}, artists: {} };
+        S.offlineBlobUrls.forEach((url) => {
+          try { URL.revokeObjectURL(url); } catch {}
+        });
+        S.offlineBlobUrls.clear();
+        if ('caches' in window) {
+          try { await caches.delete('freesong-offline-audio-v1'); } catch {}
+        }
         renderLibrary();
         showToast('Datos restablecidos con éxito');
       }
@@ -4248,6 +4374,7 @@
     initYouTubeEngine();
     updateGreeting();
     bindEvents();
+    syncRepeatButton();
     setupSearch();
     renderLibrary();
     loadHomeContent('todo');

@@ -32,7 +32,7 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 
 ## 🔊 Cómo funciona el streaming
 
-`api/stream.js` obtiene la URL directa del audio (AAC/MP4) desde YouTube con los clientes `ANDROID_VR`, `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. Si YouTube bloquea los tres, usa instancias públicas de Invidious como último recurso. Si todo falla responde `502`.
+`api/stream.js` obtiene la URL directa del audio desde YouTube con los clientes `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. En streaming sirve fragmentos de 512 KB; con `full=1` entrega la pista completa (lo usan las descargas offline). Si todo falla responde `502`.
 
 ### ⚠️ Limitación conocida
 

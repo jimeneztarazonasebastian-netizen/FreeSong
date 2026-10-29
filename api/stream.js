@@ -7,7 +7,7 @@ import { fetchYt, getRunsText } from './_yt.js';
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
 const RESOLVE_TIMEOUT_MS = 2500;
-const UPSTREAM_TIMEOUT_MS = 3000;
+const UPSTREAM_TIMEOUT_MS = 5000; // solo para esperar cabeceras; el cuerpo no se aborta
 
 // Clientes móviles reales con mayor tasa de éxito (SimpMusic Engine)
 const CLIENTS = [
@@ -179,19 +179,30 @@ async function resolveWithClient(client, videoId, wantedItag) {
 
 async function openUpstream(target, range) {
   const cookies = await getVisitorCookies();
-  const resp = await fetch(target.url, {
-    headers: {
-      Range: range,
-      'User-Agent': target.ua,
-      ...(cookies ? { Cookie: cookies } : {})
-    },
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
-  });
-  if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
-    return resp;
+  // El timeout solo debe cubrir la espera de cabeceras. Antes abortaba también
+  // el cuerpo a los 3 s y cortaba fragmentos de audio en conexiones lentas.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const resp = await fetch(target.url, {
+      headers: {
+        Range: range,
+        'User-Agent': target.ua,
+        ...(cookies ? { Cookie: cookies } : {})
+      },
+      signal: controller.signal
+    });
+    if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
+      clearTimeout(timeout);
+      return resp;
+    }
+    clearTimeout(timeout);
+    try { await resp.body?.cancel(); } catch {}
+    throw new Error(`upstream status ${resp.status}`);
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
   }
-  try { await resp.body?.cancel(); } catch {}
-  throw new Error(`upstream status ${resp.status}`);
 }
 
 // Búsqueda automática de canción alternativa si un videoId específico está bloqueado o caído
@@ -283,6 +294,8 @@ export default async function handler(req, res) {
   const backupIndex = Math.max(0, parseInt(param('backup') || '0', 10) || 0);
   const title = param('title') || '';
   const artist = param('artist') || '';
+  // full=1 se usa para descargas: devuelve la pista completa en vez de un fragmento.
+  const full = param('full') === '1' || param('full') === 'true';
 
   const node = !!(res && res.setHeader);
   const json = (status, body) => node
@@ -310,15 +323,18 @@ export default async function handler(req, res) {
   // Limitar el tamaño de fragmento a 512 KB (aprox. 32 segs de audio).
   // Esto garantiza que cada petición en Vercel responda en <150ms y termine limpiamente
   // evitando el timeout de 10s de Vercel y evitando el bloqueo de Google en rangos abiertos.
+  // Con full=1 (descargas) se pide la pista completa de una sola vez.
   const CHUNK_SIZE = 512 * 1024; // 512 KB
   const rawRange = (req.headers && req.headers.range) || 'bytes=0-';
   const rangeMatch = rawRange.match(/bytes=(\d+)-(\d+)?/);
   const startByte = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
   let endByte = rangeMatch && rangeMatch[2] ? parseInt(rangeMatch[2], 10) : (startByte + CHUNK_SIZE - 1);
-  if (endByte - startByte + 1 > CHUNK_SIZE) {
+  if (!full && endByte - startByte + 1 > CHUNK_SIZE) {
     endByte = startByte + CHUNK_SIZE - 1;
   }
-  const boundedRange = req.method === 'HEAD' ? 'bytes=0-1' : `bytes=${startByte}-${endByte}`;
+  const boundedRange = req.method === 'HEAD'
+    ? 'bytes=0-1'
+    : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
 
   const { upstream, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
   if (!upstream) {
@@ -334,7 +350,7 @@ export default async function handler(req, res) {
     'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
     'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+    'Cache-Control': full ? 'private, max-age=0, no-store' : 'public, max-age=3600, s-maxage=3600',
     Vary: 'Range'
   };
 
