@@ -6,8 +6,9 @@ import { fetchYt, getRunsText } from './_yt.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
-const RESOLVE_TIMEOUT_MS = 2500;
-const UPSTREAM_TIMEOUT_MS = 5000; // solo para esperar cabeceras; el cuerpo no se aborta
+const RESOLVE_TIMEOUT_MS = 4000;
+const UPSTREAM_TIMEOUT_MS = 8000; // solo para esperar cabeceras; el cuerpo no se aborta
+const NEGATIVE_TTL_MS = 5 * 60 * 1000; // no repetir fallos de cookies/visitorData en cada petición
 
 // Clientes móviles reales con mayor tasa de éxito (SimpMusic Engine)
 const CLIENTS = [
@@ -43,6 +44,9 @@ const CLIENTS = [
 
 const urlCache = new Map();
 const CACHE_MAX = 300;
+// Varias peticiones de rango del mismo tema llegan a la vez (Safari pide 2-3 rangos
+// en paralelo). Reutiliza la misma resolución en curso en vez de llamar a YouTube N veces.
+const pendingResolves = new Map();
 
 const isMediaType = (ct) => {
   ct = (ct || '').toLowerCase();
@@ -88,93 +92,125 @@ function pickFormat(formats, wantedItag) {
 
 let cachedCookies = '';
 let cookieExpiry = 0;
+let cookiesRetryAt = 0;
+let cookiesPromise = null;
 
-async function getVisitorCookies() {
-  if (process.env.YOUTUBE_COOKIE) return process.env.YOUTUBE_COOKIE;
-  if (cachedCookies && cookieExpiry > Date.now()) return cachedCookies;
-  try {
-    const res = await fetch('https://www.youtube.com', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      signal: AbortSignal.timeout(2000)
-    });
-    const raw = res.headers.getSetCookie ? res.headers.getSetCookie() : [res.headers.get('set-cookie')];
-    if (raw && raw.length) {
-      cachedCookies = raw.map(c => (c || '').split(';')[0]).filter(Boolean).join('; ');
-      cookieExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
-      return cachedCookies;
-    }
-  } catch {}
-  return '';
+function getVisitorCookies() {
+  if (process.env.YOUTUBE_COOKIE) return Promise.resolve(process.env.YOUTUBE_COOKIE);
+  if (cachedCookies && cookieExpiry > Date.now()) return Promise.resolve(cachedCookies);
+  if (cookiesPromise) return cookiesPromise;
+  if (cookiesRetryAt > Date.now()) return Promise.resolve('');
+
+  cookiesPromise = (async () => {
+    try {
+      const res = await fetch('https://www.youtube.com', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        signal: AbortSignal.timeout(3000)
+      });
+      const raw = res.headers.getSetCookie ? res.headers.getSetCookie() : [res.headers.get('set-cookie')];
+      const joined = (raw || []).map(c => (c || '').split(';')[0]).filter(Boolean).join('; ');
+      if (joined) {
+        cachedCookies = joined;
+        cookieExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
+        return cachedCookies;
+      }
+    } catch {}
+    // Sin cookies no pasa nada: no vuelvas a pedirlas en cada fragmento de audio.
+    cookiesRetryAt = Date.now() + NEGATIVE_TTL_MS;
+    return '';
+  })().finally(() => { cookiesPromise = null; });
+
+  return cookiesPromise;
 }
 
 let cachedVisitorData = '';
 let visitorExpiry = 0;
+let visitorRetryAt = 0;
+let visitorPromise = null;
 
-async function getVisitorData() {
-  if (cachedVisitorData && visitorExpiry > Date.now()) return cachedVisitorData;
-  try {
-    const swRes = await fetch('https://music.youtube.com/sw.js_data', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      signal: AbortSignal.timeout(2000)
-    });
-    const swText = await swRes.text();
-    const match = swText.match(/"(Cg[stuv][A-Za-z0-9_%-]{15,})"/);
-    if (match) {
-      cachedVisitorData = decodeURIComponent(match[1]);
-      visitorExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
-      return cachedVisitorData;
+function getVisitorData() {
+  if (cachedVisitorData && visitorExpiry > Date.now()) return Promise.resolve(cachedVisitorData);
+  if (visitorPromise) return visitorPromise;
+  if (visitorRetryAt > Date.now()) return Promise.resolve('');
+
+  visitorPromise = (async () => {
+    try {
+      const swRes = await fetch('https://music.youtube.com/sw.js_data', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        signal: AbortSignal.timeout(3000)
+      });
+      const swText = await swRes.text();
+      const match = swText.match(/"(Cg[stuv][A-Za-z0-9_%-]{15,})"/);
+      if (match) {
+        cachedVisitorData = decodeURIComponent(match[1]);
+        visitorExpiry = Date.now() + 6 * 3600 * 1000; // 6 horas
+        return cachedVisitorData;
+      }
+    } catch (e) {
+      console.warn('[stream] visitorData fetch failed:', e.message);
     }
-  } catch (e) {
-    console.warn('[stream] visitorData fetch failed:', e.message);
-  }
-  return '';
+    visitorRetryAt = Date.now() + NEGATIVE_TTL_MS;
+    return '';
+  })().finally(() => { visitorPromise = null; });
+
+  return visitorPromise;
 }
 
-async function resolveWithClient(client, videoId, wantedItag) {
-  const [visitorData, cookies] = await Promise.all([getVisitorData(), getVisitorCookies()]);
-  const clientContext = {
-    ...client.context,
-    ...(visitorData ? { visitorData } : {})
-  };
+function resolveWithClient(client, videoId, wantedItag) {
+  const dedupeKey = `${client.name}:${videoId}:${wantedItag || ''}`;
+  const pending = pendingResolves.get(dedupeKey);
+  if (pending) return pending;
 
-  const resp = await fetch(PLAYER_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': client.ua,
-      'X-YouTube-Client-Name': String(client.id),
-      'X-YouTube-Client-Version': client.context.clientVersion,
-      ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
-      ...(cookies ? { Cookie: cookies } : {})
-    },
-    body: JSON.stringify({
-      videoId,
-      context: { client: clientContext },
-      contentCheckOk: true,
-      racyCheckOk: true
-    }),
-    signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS)
-  });
+  const task = (async () => {
+    const [visitorData, cookies] = await Promise.all([getVisitorData(), getVisitorCookies()]);
+    const clientContext = {
+      ...client.context,
+      ...(visitorData ? { visitorData } : {})
+    };
 
-  const data = await resp.json();
-  if (data.playabilityStatus?.status !== 'OK') {
-    const err = new Error(data.playabilityStatus?.reason || data.playabilityStatus?.status || 'not playable');
-    err.isDead = (data.playabilityStatus?.status === 'ERROR' || data.playabilityStatus?.status === 'UNPLAYABLE');
-    throw err;
-  }
+    const resp = await fetch(PLAYER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': client.ua,
+        'X-YouTube-Client-Name': String(client.id),
+        'X-YouTube-Client-Version': client.context.clientVersion,
+        ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
+        ...(cookies ? { Cookie: cookies } : {})
+      },
+      body: JSON.stringify({
+        videoId,
+        context: { client: clientContext },
+        contentCheckOk: true,
+        racyCheckOk: true
+      }),
+      signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS)
+    });
 
-  const allFormats = [
-    ...(data.streamingData?.formats || []),
-    ...(data.streamingData?.adaptiveFormats || [])
-  ];
-  const fmt = pickFormat(allFormats, wantedItag);
-  if (!fmt) throw new Error('no audio format with url');
+    const data = await resp.json();
+    if (data.playabilityStatus?.status !== 'OK') {
+      const err = new Error(data.playabilityStatus?.reason || data.playabilityStatus?.status || 'not playable');
+      err.isDead = (data.playabilityStatus?.status === 'ERROR' || data.playabilityStatus?.status === 'UNPLAYABLE');
+      throw err;
+    }
 
-  return { url: fmt.url, ua: client.ua, itag: fmt.itag, mimeType: fmt.mimeType };
+    const allFormats = [
+      ...(data.streamingData?.formats || []),
+      ...(data.streamingData?.adaptiveFormats || [])
+    ];
+    const fmt = pickFormat(allFormats, wantedItag);
+    if (!fmt) throw new Error('no audio format with url');
+
+    return { url: fmt.url, ua: client.ua, itag: fmt.itag, mimeType: fmt.mimeType };
+  })();
+
+  pendingResolves.set(dedupeKey, task);
+  task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
+  return task;
 }
 
 async function openUpstream(target, range) {
@@ -355,12 +391,19 @@ export default async function handler(req, res) {
   };
 
   const contentRange = upstream.headers.get('content-range');
-  if (contentRange) headers['Content-Range'] = contentRange;
   const contentLength = upstream.headers.get('content-length');
-  if (contentLength) headers['Content-Length'] = contentLength;
+  const totalBytes = parseInt((contentRange || '').split('/')[1] || '', 10) || 0;
+
+  if (req.method === 'HEAD' && totalBytes > 0) {
+    // Un HEAD debe describir el recurso completo; Safari lo usa antes de pedir rangos.
+    headers['Content-Length'] = String(totalBytes);
+  } else {
+    if (contentRange) headers['Content-Range'] = contentRange;
+    if (contentLength) headers['Content-Length'] = contentLength;
+  }
 
   if (node) {
-    res.statusCode = upstream.status;
+    res.statusCode = req.method === 'HEAD' ? 200 : upstream.status;
     Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
     if (req.method === 'HEAD' || !upstream.body) {
       try { await upstream.body?.cancel(); } catch {}
@@ -378,5 +421,8 @@ export default async function handler(req, res) {
     return res.end();
   }
 
-  return new Response(req.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers });
+  return new Response(req.method === 'HEAD' ? null : upstream.body, {
+    status: req.method === 'HEAD' ? 200 : upstream.status,
+    headers
+  });
 }

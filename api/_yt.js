@@ -22,20 +22,33 @@ export const SEARCH_FILTERS = {
   community_playlists: 'EgeKAQQoAEABagoQAxAEEAoQCRAF'
 };
 
-export async function fetchYt(endpoint, body) {
+export async function fetchYt(endpoint, body, { timeoutMs = 8000, retries = 1 } = {}) {
   const url = `https://music.youtube.com/youtubei/v1/${endpoint}?prettyPrint=false`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: YT_HEADERS,
-    body: JSON.stringify({
-      context: { client: YT_CLIENT },
-      ...body
-    })
+  const payload = JSON.stringify({
+    context: { client: YT_CLIENT },
+    ...body
   });
-  if (!res.ok) {
-    throw new Error(`YouTube API ${endpoint} failed: ${res.status} ${res.statusText}`);
+
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: YT_HEADERS,
+        body: payload,
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!res.ok) {
+        throw new Error(`YouTube API ${endpoint} failed: ${res.status} ${res.statusText}`);
+      }
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      // Reintenta una vez tras un fallo de red/timeout; los 4xx no mejoran.
+      if (String(err.message || '').match(/\b(4\d\d)\b/)) break;
+    }
   }
-  return await res.json();
+  throw lastErr;
 }
 
 export function parseDuration(text) {

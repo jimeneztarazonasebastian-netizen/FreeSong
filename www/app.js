@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.2.8 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.2.9 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -99,6 +99,7 @@
     downloads: JSON.parse(localStorage.getItem('fs_downloads') || '[]'),
     offlineBlobUrls: new Map(),
     currentTrack: null,
+    pendingResume: null, // { id, seconds } para retomar donde se quedó al reabrir
     isDownloadingMap: {},
     recentSearches: JSON.parse(localStorage.getItem('fs_recent_searches') || '[]'),
     djVibeIndex: 0,
@@ -106,7 +107,7 @@
     playlists: JSON.parse(localStorage.getItem('fs_playlists') || '[]'),
     stats: JSON.parse(localStorage.getItem('fs_stats') || '{"totalPlays":0,"songs":{},"artists":{}}'),
     playbackRate: 1.0,
-    audioQuality: localStorage.getItem('fs_quality') || '140',
+    audioQuality: ['140', '139'].includes(localStorage.getItem('fs_quality')) ? localStorage.getItem('fs_quality') : '140',
     audioNormalize: localStorage.getItem('fs_normalize') !== 'false',
     autoplayInfinite: localStorage.getItem('fs_autoplay') !== 'false',
     smartShuffleInjectCount: 0,
@@ -160,6 +161,115 @@
 
   function getInactivePlayer() {
     return audioDecks[1 - activeDeckIdx];
+  }
+
+  // --- Sesión persistente entre aperturas de la app (PWA en iPhone) ---
+  const SESSION_KEY = 'fs_session_v2';
+  let lastSessionSave = 0;
+
+  function saveSession(force = false, positionOverride = null) {
+    if (S.queue.length === 0 && !S.currentTrack) return;
+    const now = Date.now();
+    if (!force && now - lastSessionSave < 4000) return;
+    lastSessionSave = now;
+
+    let position = 0;
+    if (positionOverride !== null) {
+      position = positionOverride;
+    } else if (S.pendingResume && S.currentTrack && S.pendingResume.id === S.currentTrack.id) {
+      position = S.pendingResume.seconds;
+    } else if (!isYtMode) {
+      const p = getActivePlayer();
+      if (p && isFinite(p.currentTime) && p.currentTime > 0) position = p.currentTime;
+    }
+
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({
+        queue: S.queue.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          duration: t.duration || 0,
+          durationSeconds: t.durationSeconds || 0,
+          durationText: t.durationText || '',
+          thumbnail: t.thumbnail || ''
+        })),
+        currentIndex: S.currentIndex,
+        position,
+        repeat: S.repeat,
+        shuffleMode: S.shuffleMode,
+        quality: S.audioQuality,
+        normalize: S.audioNormalize,
+        playbackRate: S.playbackRate,
+        crossfade: S.crossfade,
+        crossfadeDuration: S.crossfadeDuration,
+        autoplay: S.autoplayInfinite,
+        savedAt: now
+      }));
+    } catch {}
+  }
+
+  // Devuelve true si restauró una sesión completa.
+  function restoreSession() {
+    let data = null;
+    try { data = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch {}
+    if (!data || !Array.isArray(data.queue) || data.queue.length === 0) return false;
+    // Ignora sesiones de hace más de una semana.
+    if (data.savedAt && Date.now() - Number(data.savedAt) > 7 * 24 * 3600 * 1000) return false;
+
+    S.queue = data.queue.filter((t) => t && t.id);
+    if (S.queue.length === 0) return false;
+    S.currentIndex = Math.min(Math.max(0, Number(data.currentIndex) | 0), S.queue.length - 1);
+    S.currentTrack = S.queue[S.currentIndex];
+
+    if (data.repeat === 'off' || data.repeat === 'all' || data.repeat === 'one') S.repeat = data.repeat;
+    if (typeof data.shuffleMode === 'number') S.shuffleMode = Math.max(0, Math.min(2, data.shuffleMode | 0));
+    if (['140', '139'].includes(String(data.quality))) S.audioQuality = String(data.quality);
+    if (typeof data.normalize === 'boolean') S.audioNormalize = data.normalize;
+    if (typeof data.playbackRate === 'number' && data.playbackRate > 0.25 && data.playbackRate < 4) S.playbackRate = data.playbackRate;
+    if (typeof data.crossfade === 'boolean') S.crossfade = data.crossfade;
+    if (typeof data.crossfadeDuration === 'number') S.crossfadeDuration = data.crossfadeDuration;
+    if (typeof data.autoplay === 'boolean') S.autoplayInfinite = data.autoplay;
+
+    const seconds = Math.max(0, Number(data.position) || 0);
+    S.pendingResume = seconds > 1 ? { id: S.currentTrack.id, seconds } : null;
+
+    updatePlayerUI(S.currentTrack);
+    updateMediaSession(S.currentTrack);
+    syncRepeatButton();
+    syncShuffleButton();
+
+    if (S.pendingResume) {
+      if ($('playerCurTime')) $('playerCurTime').textContent = formatTime(seconds);
+      const dur = S.currentTrack.duration || S.currentTrack.durationSeconds || 0;
+      if (dur > 0) {
+        if ($('playerDurTime')) $('playerDurTime').textContent = formatTime(dur);
+        if ($('playerSeek')) $('playerSeek').value = Math.min(100, (seconds / dur) * 100);
+        if ($('miniProgress')) $('miniProgress').style.width = `${Math.min(100, (seconds / dur) * 100)}%`;
+      }
+    }
+    updatePlayPauseIcons(false, false);
+    return true;
+  }
+
+  function applyPendingResume(player, track) {
+    const pending = S.pendingResume;
+    if (!pending) return;
+    if (!track || pending.id !== track.id) {
+      S.pendingResume = null;
+      return;
+    }
+    const target = pending.seconds;
+    S.pendingResume = null;
+    const apply = () => {
+      try {
+        if (isFinite(player.duration) && player.duration > 0 && target < player.duration - 1) {
+          player.currentTime = target;
+        }
+      } catch {}
+    };
+    if (player.readyState >= 1) apply();
+    else player.addEventListener('loadedmetadata', apply, { once: true });
   }
 
   function cancelActiveCrossfade() {
@@ -264,15 +374,49 @@
   const silentLoop = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
   silentLoop.loop = true;
   silentLoop.volume = 0.01;
+  silentLoop.setAttribute('playsinline', '');
+  // Un audio conectado al DOM mantiene mejor la sesión en iOS que uno suelto.
+  try { document.body.appendChild(silentLoop); } catch {}
   function keepAudioAlive() {
     if (silentLoop.paused) {
       silentLoop.play().catch(() => {});
     }
   }
 
+  // Safari 16.4+: declara la sesión como reproducción para que iOS no pause el audio
+  // al cambiar de app, bloquear la pantalla o abrir el centro de control.
+  function setupAudioSession() {
+    try {
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    } catch {}
+    audioDecks.forEach((deck) => {
+      try {
+        deck.setAttribute('x-webkit-airplay', 'allow');
+        deck.disableRemotePlayback = false;
+      } catch {}
+    });
+  }
+
+  // Si iOS pausó el audio por pasar a segundo plano (sin que el usuario pausara),
+  // retómalo en cuanto vuelve a haber oportunidad.
+  function ensurePlaybackAlive() {
+    if (!S.isPlaying || userIntentionalPause) return;
+    keepAudioAlive();
+    if (isYtMode) {
+      try {
+        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
+          ytPlayer.playVideo();
+        }
+      } catch {}
+      return;
+    }
+    const p = getActivePlayer();
+    if (p && p.paused) p.play().catch(() => {});
+  }
+
   // Despertar la sesión de audio al primer toque físico en la pantalla
-  window.addEventListener('touchstart', keepAudioAlive, { passive: true });
-  window.addEventListener('click', keepAudioAlive);
+  window.addEventListener('touchstart', () => { setupAudioSession(); keepAudioAlive(); }, { passive: true });
+  window.addEventListener('click', () => { setupAudioSession(); keepAudioAlive(); });
 
   // --- Motor de Audio YouTube Web (Respaldo Infalible sin Errores 502) ---
   let isYtMode = false;
@@ -479,18 +623,36 @@
       stopAfterStreamFailures();
       return false;
     }
-    showToast(`Problema de audio. Reintentando (${consecutiveStreamFailures}/${MAX_STREAM_FAILURES})...`, 1800);
     return true;
   }
 
+  // Reintenta el proxy con una URL nueva antes de saltar al reproductor de YouTube.
+  // Los cortes suelen ser enlaces caducados de googlevideo: una segunda resolución
+  // (backup=1) casi siempre funciona y evita el mensaje de "reintentando".
   async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
       return;
     }
     if (S.queue[S.currentIndex] !== track) return;
-    if (!noteStreamFailure()) return;
 
+    const step = Number(track._fallbackStep) || 0;
+    if (step < 2) {
+      track._fallbackStep = step + 1;
+      delete track.streamUrl;
+      const p = getActivePlayer();
+      if (p) {
+        try {
+          p.src = buildStreamUrl(track, track._fallbackStep);
+          p.load();
+          const pr = p.play();
+          if (pr && pr.catch) pr.catch(() => {});
+          return;
+        } catch {}
+      }
+    }
+
+    if (!noteStreamFailure()) return;
     console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
     playWithYouTubeEngine(track);
   }
@@ -498,19 +660,24 @@
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
+      saveSession(true);
       if (isCrossfading) {
         cancelActiveCrossfade();
         const activeP = getActivePlayer();
         if (activeP) activeP.volume = S.audioNormalize ? 0.88 : 1;
       }
-      if (S.isPlaying && !userIntentionalPause) {
-        const activeP = getActivePlayer();
-        if (activeP && activeP.paused) {
-          activeP.play().catch(() => {});
-        }
-      }
+      ensurePlaybackAlive();
+    } else {
+      ensurePlaybackAlive();
     }
   });
+
+  // Al volver de otra app, del bloqueo o de la caché de navegación (bfcache).
+  window.addEventListener('pageshow', () => ensurePlaybackAlive());
+  window.addEventListener('focus', () => ensurePlaybackAlive());
+  // Guarda la sesión al salir; NO pausa el audio (iOS lo mantiene en segundo plano).
+  window.addEventListener('pagehide', () => saveSession(true));
+  window.addEventListener('beforeunload', () => saveSession(true));
 
   // --- Eventos del Reproductor HTML5 ---
   let isTransitioningTrack = false;
@@ -647,6 +814,9 @@
       if (S.syncedLyrics.length > 0 && !isBackground()) {
         syncLyricsWithTime(cur);
       }
+
+      // Guarda la posición cada ~4 s para retomar la sesión al reabrir la app.
+      saveSession();
     });
 
     // Errores o bloqueos en la conexión
@@ -789,6 +959,22 @@
     return next;
   }
 
+  // URL del proxy. `attempt` fuerza una resolución nueva en el servidor (backup=1)
+  // y `r` evita que Safari reutilice la respuesta fallida de la caché.
+  function buildStreamUrl(track, attempt = 0) {
+    const params = new URLSearchParams({
+      id: track.id,
+      itag: S.audioQuality,
+      title: track.title || '',
+      artist: track.artist || ''
+    });
+    if (attempt > 0) {
+      params.set('backup', String(Math.min(attempt, 4)));
+      params.set('r', String(Date.now()));
+    }
+    return `/api/stream?${params.toString()}`;
+  }
+
   function prewarmTracks(tracks) {
     // Desactivado: Las precargas masivas en cada búsqueda saturan el backend serverless
     // y provocan que YouTube marque la IP con "Inicia sesión para confirmar que no eres un bot".
@@ -805,7 +991,7 @@
     prewarmTracks([nextTrack]);
     if (nextTrack.streamUrl) return;
 
-    const targetUrl = `/api/stream?id=${encodeURIComponent(nextTrack.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(nextTrack.title || '')}&artist=${encodeURIComponent(nextTrack.artist || '')}`;
+    const targetUrl = buildStreamUrl(nextTrack);
     nextTrack.streamUrl = targetUrl;
 
     try {
@@ -1033,6 +1219,7 @@
     const track = S.queue[index];
     S.currentTrack = track;
     localStorage.setItem('fs_last_track', JSON.stringify(track));
+    saveSession(true, 0);
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
@@ -1071,7 +1258,7 @@
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
     // aunque la pista también tenga una URL de streaming precargada.
-    const streamUrl = offlineUrl || track.streamUrl || `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
+    const streamUrl = offlineUrl || track.streamUrl || buildStreamUrl(track);
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -1124,6 +1311,7 @@
 
         // Asignación directa y síncrona en iOS Safari
         inPlayer.src = streamUrl;
+        applyPendingResume(inPlayer, track);
         const playPromise = inPlayer.play();
         if (playPromise && playPromise.catch) {
           playPromise.catch((err) => {
@@ -1232,6 +1420,7 @@
     S.isPlaying = false;
     updatePlayPauseIcons(false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    saveSession(true);
   }
 
   function resumePlayback() {
@@ -3225,6 +3414,7 @@
 
   let suggestionTimer = null;
   let currentSearchResults = [];
+  let searchAbortController = null;
 
   function setupSearch() {
     const input = $('searchInput');
@@ -3363,6 +3553,11 @@
     results.classList.remove('hidden');
 
     if (!isContinuation) {
+      // Cancela la búsqueda anterior: si llega tarde no debe pisar los resultados nuevos.
+      if (searchAbortController) {
+        try { searchAbortController.abort(); } catch {}
+      }
+      searchAbortController = new AbortController();
       if (resultsList) resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando en YouTube Music...</div>';
       if (loadMoreWrap) loadMoreWrap.classList.add('hidden');
       S.searchContinuation = null;
@@ -3387,8 +3582,14 @@
         url += `&continuation=${encodeURIComponent(S.searchContinuation)}`;
       }
 
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        signal: isContinuation ? undefined : searchAbortController.signal
+      });
       const data = await res.json();
+
+      // Si el usuario sigue escribiendo, descarta esta respuesta.
+      const currentInput = $('searchInput');
+      if (!isContinuation && currentInput && currentInput.value.trim() !== String(query).trim()) return;
 
       S.searchContinuation = data.continuation || null;
 
@@ -3572,7 +3773,9 @@
         }
       }
 
-    } catch {
+    } catch (err) {
+      // Una búsqueda cancelada por otra más nueva no es un error.
+      if (err && err.name === 'AbortError') return;
       if (!isContinuation && resultsList) {
         resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm">Error al realizar la búsqueda</div>';
       }
@@ -3785,6 +3988,19 @@
     }
   }
 
+  function syncShuffleButton() {
+    const btn = $('playerShuffleBtn');
+    const badge = $('playerShuffleBadge');
+    if (!btn) return;
+    if (S.shuffleMode === 0) {
+      btn.className = 'relative p-2 text-zinc-400 hover:text-white press';
+      badge?.classList.add('hidden');
+    } else {
+      btn.className = 'relative p-2 text-emerald-400 has-active-dot press';
+      badge?.classList.toggle('hidden', S.shuffleMode !== 2);
+    }
+  }
+
   function bindEvents() {
     // Chips de categorías de Home
     $$('.chip-btn[data-chip]').forEach((chip) => {
@@ -3971,24 +4187,13 @@
 
     // Smart Shuffle ✨ (3 Estados: Off -> Normal -> Smart ✨)
     const shuffleBtn = $('playerShuffleBtn');
-    const shuffleBadge = $('playerShuffleBadge');
 
     shuffleBtn.addEventListener('click', () => {
       S.shuffleMode = (S.shuffleMode + 1) % 3;
-
-      if (S.shuffleMode === 0) {
-        shuffleBtn.className = 'relative p-2 text-zinc-400 hover:text-white press';
-        shuffleBadge.classList.add('hidden');
-        showToast('Aleatorio desactivado');
-      } else if (S.shuffleMode === 1) {
-        shuffleBtn.className = 'relative p-2 text-emerald-400 has-active-dot press';
-        shuffleBadge.classList.add('hidden');
-        showToast('Aleatorio normal activado');
-      } else {
-        shuffleBtn.className = 'relative p-2 text-emerald-400 has-active-dot press';
-        shuffleBadge.classList.remove('hidden');
-        showToast('✨ Smart Shuffle activado (Recomendaciones dinámicas)');
-      }
+      syncShuffleButton();
+      if (S.shuffleMode === 0) showToast('Aleatorio desactivado');
+      else if (S.shuffleMode === 1) showToast('Aleatorio normal activado');
+      else showToast('✨ Smart Shuffle activado (Recomendaciones dinámicas)');
     });
 
     // Repetición
@@ -4372,29 +4577,34 @@
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
     initYouTubeEngine();
+    setupAudioSession();
     updateGreeting();
     bindEvents();
     syncRepeatButton();
+    syncShuffleButton();
     setupSearch();
     renderLibrary();
     loadHomeContent('todo');
     initOfflineBlobs();
 
-    // Restaurar última canción escuchada en el Mini-Player (como Spotify)
-    try {
-      const savedTrack = localStorage.getItem('fs_last_track');
-      if (savedTrack) {
-        const lastTrack = JSON.parse(savedTrack);
-        if (lastTrack && lastTrack.id) {
-          S.currentTrack = lastTrack;
-          S.queue = [lastTrack];
-          S.currentIndex = 0;
-          showAndSyncMiniPlayer(lastTrack, false);
-          updatePlayPauseIcons(false);
+    // Restaurar la sesión completa (cola, pista, posición y ajustes). Si no hay
+    // sesión guardada, al menos muestra la última canción escuchada.
+    if (!restoreSession()) {
+      try {
+        const savedTrack = localStorage.getItem('fs_last_track');
+        if (savedTrack) {
+          const lastTrack = JSON.parse(savedTrack);
+          if (lastTrack && lastTrack.id) {
+            S.currentTrack = lastTrack;
+            S.queue = [lastTrack];
+            S.currentIndex = 0;
+            showAndSyncMiniPlayer(lastTrack, false);
+            updatePlayPauseIcons(false);
+          }
         }
+      } catch (e) {
+        console.warn('Error al restaurar última canción:', e);
       }
-    } catch (e) {
-      console.warn('Error al restaurar última canción:', e);
     }
 
     // Reproducción directa por URL (?track=VIDEO_ID)

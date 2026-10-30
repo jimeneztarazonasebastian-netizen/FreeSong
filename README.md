@@ -4,7 +4,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 
 ## ✨ Características
 
-- **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`).
+- **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`), reproduce en segundo plano al cambiar de app o bloquear el teléfono (`AudioSession` tipo `playback`) y conserva la cola, la canción y el segundo exacto al volver a abrir la app.
 - **Crossfade tipo Spotify Premium**: Doble deck de audio con fundido cruzado regulable (0 a 12 segundos) y curvas de volumen en S sin silencios entre canciones.
 - **Música y Streaming**: Búsqueda, reproducción completa de YouTube, Audius y tus propios archivos (MP3, M4A, FLAC).
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real.
@@ -32,8 +32,8 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 
 ## 🔊 Cómo funciona el streaming
 
-`api/stream.js` obtiene la URL directa del audio desde YouTube con los clientes `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. En streaming sirve fragmentos de 512 KB; con `full=1` entrega la pista completa (lo usan las descargas offline). Si todo falla responde `502`.
+`api/stream.js` obtiene la URL directa del audio desde YouTube con los clientes `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. En streaming sirve fragmentos de 512 KB; con `full=1` entrega la pista completa (lo usan las descargas offline). Las resoluciones simultáneas del mismo tema se comparten y las cookies/`visitorData` se guardan en caché para no castigar a YouTube en cada fragmento. Si un fragmento falla, el cliente pide una resolución nueva (`backup`) antes de pasar al motor de YouTube; si todo falla responde `502`.
 
 ### ⚠️ Limitación conocida
 
-YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso algunas canciones pueden no reproducirse desde el despliegue en la nube (en pruebas, 4 de 6). Cuando pasa, la app reintenta, avisa con un mensaje y salta a la siguiente (máximo 3 saltos seguidos). Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable. La solución definitiva requiere resolver el audio desde el propio dispositivo o usar un proxy con IP residencial.
+YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso algunas canciones pueden no reproducirse desde el despliegue en la nube. Cuando pasa, la app reintenta dos veces con una resolución nueva del proxy y solo después usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos). Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable. La solución definitiva requiere resolver el audio desde el propio dispositivo o usar un proxy con IP residencial.
