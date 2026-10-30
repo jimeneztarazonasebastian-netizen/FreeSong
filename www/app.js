@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.2.9 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.3.0 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1067,6 +1067,55 @@
     }
   }
 
+  // Descarga por fragmentos de 512 KB. Evita el límite de tamaño de respuesta de
+  // Vercel (una canción larga supera los 4.5 MB de `full=1`) y permite reintentar
+  // solo el fragmento que falló. Devuelve el blob completo ya verificado.
+  async function fetchAudioChunk(track, start, end) {
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      try {
+        const qs = new URLSearchParams({
+          id: track.id,
+          itag: S.audioQuality,
+          title: track.title || '',
+          artist: track.artist || ''
+        });
+        // Cada reintento pide una resolución nueva al proxy para evitar URLs caducadas.
+        if (attempt > 0) {
+          qs.set('backup', '1');
+          qs.set('r', String(Date.now()));
+        }
+        const res = await fetch(`/api/stream?${qs.toString()}`, {
+          headers: { Range: `bytes=${start}-${end}` },
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const buffer = await res.arrayBuffer();
+        const contentRange = res.headers.get('content-range') || '';
+        const rangeMatch = contentRange.match(/bytes\s+\d+-\d+\/(\d+)/i);
+        const totalBytes = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
+        const expected = totalBytes > 0 ? Math.min(end, totalBytes - 1) - start + 1 : 0;
+
+        if (buffer.byteLength < 1000) throw new Error('Fragmento vacío');
+        if (expected > 0 && buffer.byteLength < expected) {
+          throw new Error(`Fragmento incompleto (${buffer.byteLength}/${expected})`);
+        }
+        return { buffer, totalBytes, complete: res.status === 200 };
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastError || new Error('No se pudo descargar el fragmento');
+  }
+
   async function downloadTrack(track) {
     if (!track || !track.id) return;
     if (S.isDownloadingMap[track.id]) {
@@ -1077,18 +1126,53 @@
     showToast(`Descargando "${track.title}"...`, 3000);
 
     try {
-      // full=1 desactiva el recorte de 512 KB que usa el streaming por rangos.
-      const streamUrl = `/api/stream?id=${encodeURIComponent(track.id)}&itag=${S.audioQuality}&full=1&title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`;
-      const res = await fetch(streamUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const CHUNK_SIZE = 512 * 1024;
+      let parts = [];
+      let offset = 0;
+      let totalBytes = 0;
+      let lastProgress = -1;
+      let restarted = false;
 
-      const blob = await res.blob();
+      // Pide fragmentos consecutivos hasta cubrir el total que informa Content-Range.
+      while (totalBytes === 0 || offset < totalBytes) {
+        const end = offset + CHUNK_SIZE - 1;
+        const { buffer, totalBytes: total, complete } = await fetchAudioChunk(track, offset, end);
+
+        // Si el proxy resolvió otra calidad a mitad de la descarga, el archivo
+        // quedaría corrupto: empieza de cero una vez.
+        if (total > 0 && totalBytes > 0 && total !== totalBytes) {
+          if (restarted) throw new Error('La calidad del audio cambió durante la descarga');
+          restarted = true;
+          parts = [];
+          offset = 0;
+          totalBytes = 0;
+          lastProgress = -1;
+          continue;
+        }
+        if (total > 0) totalBytes = total;
+        parts.push(buffer);
+        offset += buffer.byteLength;
+
+        if (complete && !totalBytes) {
+          // El origen ignoró el Range y devolvió la canción entera de una vez.
+          totalBytes = offset;
+          break;
+        }
+        if (totalBytes > 0 && offset >= totalBytes) break;
+        if (buffer.byteLength < CHUNK_SIZE && totalBytes > 0 && offset < totalBytes) {
+          throw new Error(`Descarga incompleta (${offset}/${totalBytes} bytes)`);
+        }
+
+        const pct = totalBytes > 0 ? Math.min(99, Math.floor((offset / totalBytes) * 100)) : 0;
+        if (pct >= lastProgress + 10) {
+          lastProgress = pct;
+          showToast(`Descargando "${track.title}"... ${pct}%`, 1600);
+        }
+      }
+
+      const blob = new Blob(parts, { type: 'audio/mp4' });
       if (!blob || blob.size < 1000) throw new Error('Blob de audio inválido');
-
-      // Comprobar que llegó la canción completa usando el total de Content-Range.
-      const contentRange = res.headers.get('content-range') || '';
-      const totalBytes = parseInt((contentRange.split('/')[1] || '').trim(), 10);
-      if (totalBytes > 0 && blob.size < totalBytes) {
+      if (totalBytes > 0 && blob.size !== totalBytes) {
         throw new Error(`Descarga incompleta (${blob.size}/${totalBytes} bytes)`);
       }
 
@@ -1139,7 +1223,8 @@
       showToast(`✓ "${track.title}" descargada para escuchar offline`, 2800);
     } catch (err) {
       console.error('Error al descargar:', err);
-      showToast(`Error al descargar "${track.title}"`);
+      const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
+      showToast(`Error al descargar "${track.title}"${detail}`, 5000);
     } finally {
       delete S.isDownloadingMap[track.id];
     }
