@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.3.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.3.1 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -370,14 +370,20 @@
   }
 
   // --- Mantenedor de sesión de audio nativo en móviles (iOS Safari / Android) ---
-  // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit
+  // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit.
+  // En Android no hace falta y un segundo elemento de audio puede robar el foco al principal.
+  const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const silentLoop = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
   silentLoop.loop = true;
   silentLoop.volume = 0.01;
   silentLoop.setAttribute('playsinline', '');
   // Un audio conectado al DOM mantiene mejor la sesión en iOS que uno suelto.
-  try { document.body.appendChild(silentLoop); } catch {}
+  if (isIOSDevice) {
+    try { document.body.appendChild(silentLoop); } catch {}
+  }
   function keepAudioAlive() {
+    if (!isIOSDevice) return;
     if (silentLoop.paused) {
       silentLoop.play().catch(() => {});
     }

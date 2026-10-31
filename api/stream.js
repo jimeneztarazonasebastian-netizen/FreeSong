@@ -2,7 +2,8 @@
 // Resuelve URLs directas de googlevideo vía clientes nativos móviles (IOS / ANDROID)
 // Soporta AAC (itags 140/139), Opus (itags 251/250) y fallback de búsqueda automática
 import { Readable } from 'stream';
-import { fetchYt, getRunsText } from './_yt.js';
+import { fetchYt, getRunsText, normalizeCookieInput } from './_yt.js';
+import { resolveMwebAudio } from './_hls.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
@@ -36,6 +37,24 @@ const CLIENTS = [
       clientVersion: '21.26.364',
       osName: 'Android',
       osVersion: '11',
+      hl: 'es',
+      gl: 'US'
+    }
+  },
+  // Clientes alternativos: cuando YouTube marca la IP del servidor como bot,
+  // algunos de estos siguen entregando el audio sin cookies.
+  {
+    name: 'ANDROID_VR',
+    id: 28,
+    ua: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; en_US; Quest 3 Build/SQ3A.220605.009.A1) gzip',
+    context: {
+      clientName: 'ANDROID_VR',
+      clientVersion: '1.60.19',
+      deviceMake: 'Oculus',
+      deviceModel: 'Quest 3',
+      osName: 'Android',
+      osVersion: '12',
+      androidSdkVersion: 32,
       hl: 'es',
       gl: 'US'
     }
@@ -96,7 +115,8 @@ let cookiesRetryAt = 0;
 let cookiesPromise = null;
 
 function getVisitorCookies() {
-  if (process.env.YOUTUBE_COOKIE) return Promise.resolve(process.env.YOUTUBE_COOKIE);
+  const envCookie = normalizeCookieInput(process.env.YOUTUBE_COOKIE);
+  if (envCookie) return Promise.resolve(envCookie);
   if (cachedCookies && cookieExpiry > Date.now()) return Promise.resolve(cachedCookies);
   if (cookiesPromise) return cookiesPromise;
   if (cookiesRetryAt > Date.now()) return Promise.resolve('');
@@ -129,11 +149,14 @@ let cachedVisitorData = '';
 let visitorExpiry = 0;
 let visitorRetryAt = 0;
 let visitorPromise = null;
+// visitorData público de respaldo: si Vercel no puede leerlo (YouTube bloquea
+// la descarga de sw.js_data), la API de player al menos no recibe un contexto vacío.
+const FALLBACK_VISITOR_DATA = 'CgttZGswTS1XRDZSZyi0yo_XBjIKCgJDTxIEGgAgH2KpAgqmAkN0a0JDQVVT';
 
 function getVisitorData() {
   if (cachedVisitorData && visitorExpiry > Date.now()) return Promise.resolve(cachedVisitorData);
   if (visitorPromise) return visitorPromise;
-  if (visitorRetryAt > Date.now()) return Promise.resolve('');
+  if (visitorRetryAt > Date.now()) return Promise.resolve(FALLBACK_VISITOR_DATA);
 
   visitorPromise = (async () => {
     try {
@@ -154,11 +177,12 @@ function getVisitorData() {
       console.warn('[stream] visitorData fetch failed:', e.message);
     }
     visitorRetryAt = Date.now() + NEGATIVE_TTL_MS;
-    return '';
+    return FALLBACK_VISITOR_DATA;
   })().finally(() => { visitorPromise = null; });
 
   return visitorPromise;
 }
+
 
 function resolveWithClient(client, videoId, wantedItag) {
   const dedupeKey = `${client.name}:${videoId}:${wantedItag || ''}`;
@@ -179,6 +203,8 @@ function resolveWithClient(client, videoId, wantedItag) {
         'User-Agent': client.ua,
         'X-YouTube-Client-Name': String(client.id),
         'X-YouTube-Client-Version': client.context.clientVersion,
+        Origin: 'https://www.youtube.com',
+        Referer: 'https://www.youtube.com/',
         ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
         ...(cookies ? { Cookie: cookies } : {})
       },
@@ -213,8 +239,20 @@ function resolveWithClient(client, videoId, wantedItag) {
   return task;
 }
 
+// Comparte la resolución MWEB en curso entre los rangos que Safari pide a la vez.
+function resolveMweb(videoId, wantedItag) {
+  const dedupeKey = `MWEB:${videoId}:${wantedItag || ''}`;
+  const pending = pendingResolves.get(dedupeKey);
+  if (pending) return pending;
+  const task = resolveMwebAudio(videoId, wantedItag);
+  pendingResolves.set(dedupeKey, task);
+  task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
+  return task;
+}
+
 async function openUpstream(target, range) {
-  const cookies = await getVisitorCookies();
+  // La URL de MWEB ya va firmada: enviarle la cookie de la cuenta solo la infla.
+  const cookies = target.noCookie ? '' : await getVisitorCookies();
   // El timeout solo debe cubrir la espera de cabeceras. Antes abortaba también
   // el cuerpo a los 3 s y cortaba fragmentos de audio en conexiones lentas.
   const controller = new AbortController();
@@ -280,7 +318,20 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     }
   }
 
-  // 2. Resolver con clientes nativos (ANDROID y luego IOS)
+  // 2. MWEB: acepta la cookie de sesión y su URL de audio no exige PO token,
+  // así que funciona desde la IP de Vercel donde los clientes móviles se bloquean.
+  try {
+    const target = await resolveMweb(videoId, itag);
+    const resp = await openUpstream(target, range);
+    if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
+    urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+    return { upstream: resp, errors };
+  } catch (e) {
+    errors.push(`MWEB: ${e.message}`);
+    console.warn(`[stream] MWEB falló para ${videoId}: ${e.message}`);
+  }
+
+  // 3. Resolver con clientes nativos (ANDROID y luego IOS)
   for (const client of CLIENTS) {
     try {
       const target = await resolveWithClient(client, videoId, itag);
@@ -291,7 +342,6 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     } catch (e) {
       errors.push(`${client.name}: ${e.message}`);
       console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
-      if (e.isDead) break;
     }
   }
 
@@ -301,6 +351,14 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
       const altVideoId = await findAlternativeVideoId(title, artist, videoId);
       if (altVideoId && altVideoId !== videoId) {
         errors.push(`alt found: ${altVideoId}`);
+        try {
+          const target = await resolveMweb(altVideoId, itag);
+          const resp = await openUpstream(target, range);
+          urlCache.set(`${altVideoId}:${itag}`, { ...target, expires: Date.now() + URL_TTL_MS });
+          return { upstream: resp, errors };
+        } catch (e) {
+          errors.push(`alt MWEB: ${e.message}`);
+        }
         for (const client of CLIENTS) {
           try {
             const target = await resolveWithClient(client, altVideoId, itag);
@@ -320,6 +378,45 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   }
 
   return { upstream: null, errors };
+}
+
+function serveBuffer(buffer, req, res, node, startByte, endByte, full) {
+  const total = buffer.length;
+  let start = Number.isFinite(startByte) && startByte > 0 ? startByte : 0;
+  if (start >= total) start = 0;
+  let end = full ? total - 1 : Math.min(endByte, total - 1);
+  if (!Number.isFinite(end) || end < start) end = total - 1;
+  const slice = buffer.subarray(start, end + 1);
+
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+    'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+    'Content-Type': 'audio/aac',
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+    Vary: 'Range'
+  };
+
+  if (req.method === 'HEAD') {
+    headers['Content-Length'] = String(total);
+    if (node) {
+      res.statusCode = 200;
+      Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+      return res.end();
+    }
+    return new Response(null, { status: 200, headers });
+  }
+
+  headers['Content-Length'] = String(slice.length);
+  headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+
+  if (node) {
+    res.statusCode = 206;
+    Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+    return res.end(slice);
+  }
+  return new Response(slice, { status: 206, headers });
 }
 
 export default async function handler(req, res) {
@@ -372,9 +469,20 @@ export default async function handler(req, res) {
     ? 'bytes=0-1'
     : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
 
-  const { upstream, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
+  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
+
+  if (buffer) {
+    return serveBuffer(buffer, req, res, node, startByte, endByte, full);
+  }
+
   if (!upstream) {
-    return json(502, { error: 'No se pudo obtener el audio de esta canción', code: 'STREAM_UNAVAILABLE', details: errors });
+    const [vd, ck] = await Promise.all([getVisitorData(), getVisitorCookies()]);
+    return json(502, {
+      error: 'No se pudo obtener el audio de esta canción',
+      code: 'STREAM_UNAVAILABLE',
+      details: errors,
+      debug: { visitorData: vd ? vd.length : 0, cookies: ck ? ck.length : 0, cookieConfigured: !!process.env.YOUTUBE_COOKIE }
+    });
   }
 
   const rawType = (upstream.headers.get('content-type') || '').toLowerCase();
