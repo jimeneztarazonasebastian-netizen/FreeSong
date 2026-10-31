@@ -51,6 +51,36 @@ export async function fetchYt(endpoint, body, { timeoutMs = 8000, retries = 1 } 
   throw lastErr;
 }
 
+// Acepta el valor de la cookie de YouTube tal como header (`SID=...; HSID=...`),
+// como cookies.txt de Netscape o como JSON exportado por una extensión.
+export function normalizeCookieInput(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (value.startsWith('[') || value.startsWith('{')) {
+    try {
+      const data = JSON.parse(value);
+      const list = Array.isArray(data) ? data : (data.cookies || []);
+      return list
+        .filter((c) => c && c.name && c.value)
+        .map((c) => `${c.name}=${c.value}`)
+        .join('; ');
+    } catch {}
+  }
+  if (value.includes('\t')) {
+    return value
+      .split(/\r?\n/)
+      .filter((line) => line && (!line.trim().startsWith('#') || line.startsWith('#HttpOnly_')))
+      .map((line) => {
+        const clean = line.startsWith('#HttpOnly_') ? line.slice('#HttpOnly_'.length) : line;
+        const parts = clean.split('\t');
+        return parts.length >= 7 ? `${parts[5]}=${parts[6]}` : '';
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  return value.replace(/\r?\n/g, ' ').trim();
+}
+
 export function parseDuration(text) {
   if (!text) return { durationSeconds: 0, durationText: '' };
   const str = String(text).trim();

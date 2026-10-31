@@ -15,3 +15,7 @@ ios/App/build/
 Payload/
 .vercel
 .env*
+# Cookies de YouTube: nunca se suben al repositorio
+cookies.txt
+*youtube*cookies*.txt
+www.youtube.com_cookies.txt

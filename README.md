@@ -34,6 +34,16 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 
 `api/stream.js` obtiene la URL directa del audio desde YouTube con los clientes `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. En streaming sirve fragmentos de 512 KB; las descargas offline piden esos mismos fragmentos uno por uno y los unen en el dispositivo, así no chocan con el límite de tamaño de respuesta de Vercel ni pierden la descarga completa si falla un tramo (se reintenta solo ese fragmento). Las resoluciones simultáneas del mismo tema se comparten y las cookies/`visitorData` se guardan en caché para no castigar a YouTube en cada fragmento. Si un fragmento falla, el cliente pide una resolución nueva (`backup`) antes de pasar al motor de YouTube; si todo falla responde `502`.
 
-### ⚠️ Limitación conocida
+### ⚠️ Limitación conocida (IP de Vercel)
 
-YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso algunas canciones pueden no reproducirse desde el despliegue en la nube. Cuando pasa, la app reintenta dos veces con una resolución nueva del proxy y solo después usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos). Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable. La solución definitiva requiere resolver el audio desde el propio dispositivo o usar un proxy con IP residencial.
+YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso, sin configuración adicional, algunas canciones no se reproducen desde el despliegue en la nube. Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable.
+
+La solución que funciona en producción es darle a Vercel una **cookie de una sesión de YouTube iniciada**. El proxy la usa para resolver el audio y YouTube deja de responder con el bloqueo:
+
+1. Inicia sesión en YouTube (idealmente con una cuenta de Google secundaria).
+2. Exporta las cookies de `youtube.com` con una extensión tipo **Get cookies.txt LOCALLY** (formato `cookies.txt`).
+3. Guarda el archivo como `cookies.txt` en la carpeta del proyecto.
+4. Ejecuta `node scripts/set-cookie.mjs` (guarda `YOUTUBE_COOKIE` en Vercel sin mostrar la cookie).
+5. Ejecuta `vercel --prod --yes` y vuelve a abrir la app.
+
+La cookie caduca si cierras sesión o Google la invalida; en ese caso repite los pasos. Sin cookie, la app reintenta dos veces con una resolución nueva y luego usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos).
