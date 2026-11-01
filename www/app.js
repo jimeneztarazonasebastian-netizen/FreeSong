@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.3.3 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.3.4 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1208,8 +1208,14 @@
   }
 
   function prewarmTracks(tracks) {
-    // Desactivado: Las precargas masivas en cada búsqueda saturan el backend serverless
-    // y provocan que YouTube marque la IP con "Inicia sesión para confirmar que no eres un bot".
+    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
+    // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel)
+    const candidates = tracks.slice(0, 3).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
+    for (const t of candidates) {
+      resolveRelaySource(t.id, S.audioQuality).then((src) => {
+        if (src) rememberRelaySource(t, src);
+      }).catch(() => {});
+    }
   }
 
   function prefetchNextTrack() {
@@ -1526,6 +1532,11 @@
 
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false) {
+    isTransitioningTrack = false;
+    if (trackTransitionTimeout) {
+      clearTimeout(trackTransitionTimeout);
+      trackTransitionTimeout = null;
+    }
     if (index < 0 || index >= S.queue.length) {
       isTransitioningTrack = false;
       return;
@@ -1602,42 +1613,38 @@
         inPlayer.muted = false;
         inPlayer.volume = 0;
         inPlayer.playbackRate = S.playbackRate;
-        const playDirectly = (url) => {
-          try { inPlayer.currentTime = 0; } catch {}
-          inPlayer.src = url;
-          applyPendingResume(inPlayer, track);
-          const playPromise = inPlayer.play();
-          if (playPromise && playPromise.catch) {
-            playPromise.catch((err) => {
-              if (err.name !== 'AbortError') {
-                console.warn('inPlayer play error:', err);
-                S.isPlaying = false;
-                updatePlayPauseIcons(false, false);
-              }
-            });
-          }
-        };
+        inPlayer.src = streamUrl;
+        inPlayer.play().catch(() => {});
+        performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
+      } else {
+        cancelActiveCrossfade();
+        const inact = getInactivePlayer();
+        if (inact && inact !== inPlayer) {
+          try {
+            inact.pause();
+            inact.removeAttribute('src');
+            inact.load();
+            inact.volume = targetVolume;
+          } catch {}
+        }
+        inPlayer.muted = false;
+        inPlayer.volume = targetVolume;
+        inPlayer.playbackRate = S.playbackRate;
 
-        if (isDirectRelayUrl(streamUrl) || S.offlineBlobUrls.has(track.id)) {
-          playDirectly(streamUrl);
-        } else {
-          // Mostrar spinner de carga inmediatamente mientras resuelve el relay
-          updatePlayPauseIcons(true, true);
-          const thisToken = ++relayUpgradeToken;
-          Promise.race([
-            resolveRelaySource(track.id, S.audioQuality),
-            new Promise((r) => setTimeout(() => r(null), 1200))
-          ]).then((source) => {
-            if (thisToken !== relayUpgradeToken || S.queue[S.currentIndex] !== track || userIntentionalPause) return;
-            if (source && source.url) {
-              rememberRelaySource(track, source);
-              playDirectly(source.url);
-            } else {
-              playDirectly(buildStreamUrl(track));
+        // Reset de posición
+        try { inPlayer.currentTime = 0; } catch {}
+
+        // Asignación directa y 100% síncrona en iOS Safari
+        inPlayer.src = streamUrl;
+        applyPendingResume(inPlayer, track);
+        const playPromise = inPlayer.play();
+        if (playPromise && playPromise.catch) {
+          playPromise.catch((err) => {
+            if (err.name !== 'AbortError') {
+              console.warn('inPlayer play error:', err);
+              S.isPlaying = false;
+              updatePlayPauseIcons(false, false);
             }
-          }).catch(() => {
-            if (thisToken !== relayUpgradeToken || S.queue[S.currentIndex] !== track || userIntentionalPause) return;
-            playDirectly(buildStreamUrl(track));
           });
         }
       }
@@ -1783,6 +1790,11 @@
   }
 
   function playNext(immediate = true) {
+    isTransitioningTrack = false;
+    if (trackTransitionTimeout) {
+      clearTimeout(trackTransitionTimeout);
+      trackTransitionTimeout = null;
+    }
     const now = Date.now();
     // Bloqueo de seguridad de 300ms para evitar colisiones de clics rápidos
     if (now - lastSkipTimestamp < 300) return;
@@ -4049,6 +4061,15 @@
         $$('[data-search-idx]').forEach((el) => {
           if (el.dataset.searchBound) return;
           el.dataset.searchBound = '1';
+          el.addEventListener('pointerdown', () => {
+            const idx = parseInt(el.getAttribute('data-search-idx'), 10);
+            const t = currentSearchResults[idx];
+            if (t && t.id && !t.streamUrl) {
+              resolveRelaySource(t.id, S.audioQuality).then((src) => {
+                if (src) rememberRelaySource(t, src);
+              }).catch(() => {});
+            }
+          }, { passive: true });
           el.addEventListener('click', (e) => {
             if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
