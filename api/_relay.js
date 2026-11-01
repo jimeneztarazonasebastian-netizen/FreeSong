@@ -39,12 +39,12 @@ export async function resolveRelayAudio(videoId, wantedItag) {
   const order = preferred && all.includes(preferred) ? [preferred, ...all.filter((i) => i !== preferred)] : all;
   const errors = [];
 
-  for (const base of order) {
-    const until = badUntil.get(base) || 0;
-    if (until > Date.now()) {
-      errors.push(`${hostOf(base)}: en espera ${Math.ceil((until - Date.now()) / 1000)}s`);
-      continue;
-    }
+  // Si todas están marcadas como caídas (o solo hay una), se reintentan igual:
+  // un corte momentáneo no debe dejar la app sin audio durante minutos.
+  const healthy = order.filter((base) => (badUntil.get(base) || 0) <= Date.now());
+  const candidates = healthy.length ? healthy : order;
+
+  for (const base of candidates) {
     try {
       const target = await resolveFrom(base, videoId, wantedItag);
       preferred = base;
