@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.3.2 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.3.3 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -302,11 +302,17 @@
   function getEffectiveDuration(audioEl, track) {
     const official = (track && (track.duration || track.durationSeconds)) ? (track.duration || track.durationSeconds) : 0;
     const raw = audioEl ? (audioEl.duration || 0) : 0;
+    const rawValid = raw && !isNaN(raw) && raw > 0 && isFinite(raw);
 
+    // Si ambas estan disponibles, usar la que sea menor (la oficial puede ser
+    // un poco mas corta que el stream real, causando corte prematuro).
+    // Pero si difieren mucho (>10s), la oficial suele ser mas confiable.
+    if (official > 0 && rawValid) {
+      if (Math.abs(raw - official) < 10) return Math.max(official, Math.round(raw));
+      return official;
+    }
     if (official > 0) return official;
-    if (!raw || isNaN(raw) || raw <= 0) return 0;
-    // El bug de duración x2 de DASH ya no aplica al stream progresivo actual.
-    // Dividir aquí cortaba a la mitad cualquier canción de más de 3 min sin duración oficial.
+    if (!rawValid) return 0;
     return Math.round(raw);
   }
 
@@ -641,26 +647,70 @@
       return;
     }
     if (S.queue[S.currentIndex] !== track) return;
+    // Varios eventos 'error' pueden dispararse seguidos por el mismo corte.
+    if (track._recovering) return;
+    track._recovering = true;
 
-    const step = Number(track._fallbackStep) || 0;
-    if (step < 2) {
-      track._fallbackStep = step + 1;
-      delete track.streamUrl;
-      const p = getActivePlayer();
-      if (p) {
+    try {
+      const player = deck && deck === getActivePlayer() ? deck : getActivePlayer();
+      if (!player) return;
+
+      // Guarda la posición: un fallo a mitad de canción debe continuar donde iba.
+      let resumeAt = 0;
+      try {
+        if (isFinite(player.currentTime) && player.currentTime > 1) resumeAt = player.currentTime;
+      } catch {}
+      const knownDuration = getEffectiveDuration(player, track);
+      // Si el error llega cuando estamos cerca del final (< 3s), tratar como
+      // fin natural de la canción en vez de reiniciar desde 0.
+      if (resumeAt > 0 && knownDuration > 0 && resumeAt > knownDuration - 3) {
+        handleTrackFinished();
+        return;
+      }
+
+      const step = Number(track._fallbackStep) || 0;
+      if (step < 2) {
+        track._fallbackStep = step + 1;
+        delete track.streamUrl;
+        delete track._relayExpires;
+
+        // Primer reintento: URL directa nueva del relay (rápida, sin pasar por Vercel).
+        let nextUrl = '';
+        if (step === 0) {
+          const source = await resolveRelaySource(track.id, S.audioQuality).catch(() => null);
+          if (source) {
+            rememberRelaySource(track, source);
+            nextUrl = source.url;
+          }
+        }
+        if (!nextUrl) nextUrl = buildStreamUrl(track, track._fallbackStep);
+
+        if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+
         try {
-          p.src = buildStreamUrl(track, track._fallbackStep);
-          p.load();
-          const pr = p.play();
+          const seek = () => {
+            try {
+              if (resumeAt > 0 && (!isFinite(player.duration) || resumeAt < player.duration - 1)) {
+                player.currentTime = resumeAt;
+              }
+            } catch {}
+          };
+          if (resumeAt > 0) player.addEventListener('canplay', seek, { once: true });
+          player.src = nextUrl;
+          player.load();
+          if (resumeAt > 0) seek();
+          const pr = player.play();
           if (pr && pr.catch) pr.catch(() => {});
           return;
         } catch {}
       }
-    }
 
-    if (!noteStreamFailure()) return;
-    console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
-    playWithYouTubeEngine(track);
+      if (!noteStreamFailure()) return;
+      console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
+      playWithYouTubeEngine(track);
+    } finally {
+      track._recovering = false;
+    }
   }
 
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
@@ -721,10 +771,14 @@
         clearTimeout(streamWatchdogTimer);
         streamWatchdogTimer = null;
       }
-      if (S.queue[S.currentIndex]) {
-        S.queue[S.currentIndex]._fallbackStep = 0;
+      if (idx === activeDeckIdx && S.queue[S.currentIndex]) {
+        // Un arranque desde 0 sí es una reproducción limpia; una reanudación a
+        // mitad de canción conserva el nivel de fallback para no reintentar sin fin.
+        if (!deck.currentTime || deck.currentTime < 2) {
+          S.queue[S.currentIndex]._fallbackStep = 0;
+        }
       }
-      consecutiveStreamFailures = 0;
+      if (idx === activeDeckIdx) consecutiveStreamFailures = 0;
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -795,12 +849,7 @@
           prefetchNextTrack();
         }
 
-        // Corte exacto al final (evitar silencio de 3 minutos de DASH) con guardia de transición
-        if (cur >= dur - 0.8 && dur > 5 && !isTransitioningTrack) {
-          handleTrackFinished();
-          return;
-        }
-
+        // El fin natural de pista se gestiona por el evento 'ended' nativo del reproductor.
         // Crossfade adaptativo
         const timeLeft = dur - cur;
         if (
@@ -981,6 +1030,183 @@
     return `/api/stream?${params.toString()}`;
   }
 
+  // --- Relay directo desde el teléfono (arranque rápido) ---
+  // Pasar por /api/stream añade ~1-4 s por canción (resolución + función de Vercel).
+  // La instancia Invidious permite CORS en su API y en el audio, así que el propio
+  // navegador puede resolver y reproducir la URL directa. El proxy queda de respaldo.
+  const RELAY_DEFAULT_BASES = ['https://yt.chocolatemoo53.com'];
+  const RELAY_URL_TTL_MS = 20 * 60 * 1000;
+  const RELAY_PICK_CACHE_MAX = 150;
+  const RELAY_AUDIO_ITAGS = ['139', '140', '141', '249', '250', '251'];
+
+  let relayBases = RELAY_DEFAULT_BASES.slice();
+  let relayBasesRefreshStarted = false;
+  const relaySources = new Map(); // `${videoId}:${itag}` -> { url, size, expires }
+  const relayPending = new Map();
+  let relayUpgradeToken = 0;
+
+  // Devuelve la lista conocida al instante (el primer arranque no debe esperar a
+  // una función de Vercel). La lista del servidor se refresca en segundo plano.
+  function loadRelayBases() {
+    if (!relayBasesRefreshStarted) {
+      relayBasesRefreshStarted = true;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 2500);
+        fetch('/api/relay-info', { cache: 'no-store', signal: ctrl.signal })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            const list = Array.isArray(data && data.instances)
+              ? data.instances.filter((b) => /^https?:\/\//.test(String(b)))
+              : [];
+            if (list.length) relayBases = list;
+          })
+          .catch(() => {})
+          .finally(() => clearTimeout(timer));
+      } catch {}
+    }
+    return relayBases;
+  }
+
+  function relayAudioFormats(data) {
+    const list = data && Array.isArray(data.adaptiveFormats) ? data.adaptiveFormats : [];
+    return list.filter((f) => {
+      if (!f || !f.url) return false;
+      const mime = String(f.mimeType || f.type || '');
+      if (/^audio\//.test(mime)) return true;
+      if (RELAY_AUDIO_ITAGS.includes(String(f.itag))) return true;
+      try { return /audio/i.test(new URL(f.url).searchParams.get('mime') || ''); } catch { return false; }
+    });
+  }
+
+  function relaySizeOf(f) {
+    const declared = Number(f && (f.clen || f.contentLength || f.size));
+    if (declared > 0) return declared;
+    try { return Number(new URL(f.url).searchParams.get('clen')) || 0; } catch { return 0; }
+  }
+
+  // Devuelve { url, itag, size, relay, expires } o null. Deduplica peticiones
+  // simultáneas (Safari pide varios rangos de golpe) y cachea ~20 minutos.
+  async function resolveRelaySource(videoId, wantedItag) {
+    if (!videoId) return null;
+    const cacheKey = `${videoId}:${wantedItag || ''}`;
+    const cached = relaySources.get(cacheKey);
+    if (cached && cached.expires > Date.now()) return cached;
+    if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
+
+    const task = (async () => {
+      const bases = loadRelayBases();
+      for (const base of bases) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 6000);
+          let res;
+          try {
+            res = await fetch(`${base}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`, {
+              headers: { Accept: 'application/json' },
+              cache: 'no-store',
+              signal: ctrl.signal
+            });
+          } finally {
+            clearTimeout(timer);
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (!data || data.error) throw new Error(String((data && data.error) || 'respuesta vacía'));
+
+          const formats = relayAudioFormats(data);
+          if (!formats.length) throw new Error('sin formatos de audio');
+          const byItag = (n) => formats.find((f) => String(f.itag) === String(n));
+          const fmt = (wantedItag ? byItag(wantedItag) : null)
+            || byItag(140)
+            || byItag(139)
+            || formats.find((f) => /^audio\/mp4/.test(String(f.mimeType || f.type || '')))
+            || formats[0];
+          if (!fmt || !fmt.url) throw new Error('formato sin URL');
+
+          const host = new URL(fmt.url).host;
+          if (/googlevideo\.com$/i.test(host)) throw new Error('la instancia no proxea el audio');
+
+          const source = {
+            url: fmt.url,
+            itag: String(fmt.itag),
+            size: relaySizeOf(fmt),
+            relay: base,
+            expires: Date.now() + RELAY_URL_TTL_MS
+          };
+          relaySources.set(cacheKey, source);
+          if (relaySources.size > RELAY_PICK_CACHE_MAX) {
+            relaySources.delete(relaySources.keys().next().value);
+          }
+          return source;
+        } catch (err) {
+          console.warn(`[FreeSong] Relay ${base} falló para ${videoId}:`, err.message);
+        }
+      }
+      return null;
+    })().finally(() => relayPending.delete(cacheKey));
+
+    relayPending.set(cacheKey, task);
+    return task;
+  }
+
+  function isDirectRelayUrl(url) {
+    if (!url || !/^https:\/\//i.test(url)) return false;
+    // Ojo: las URLs del relay llevan `host=...googlevideo.com` en la query,
+    // así que hay que mirar solo el host real de la URL.
+    try { return !/googlevideo\.com$/i.test(new URL(url).host); } catch { return false; }
+  }
+
+  function rememberRelaySource(track, source) {
+    if (!track || !source || !source.url) return;
+    track.streamUrl = source.url;
+    track._relayExpires = source.expires;
+    track._relaySize = source.size || 0;
+  }
+
+  // URL lista para el <audio>: copia offline > relay directo vigente > proxy.
+  function getTrackStreamUrl(track) {
+    const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
+    if (offlineUrl) return offlineUrl;
+    if (track.streamUrl) {
+      if (!isDirectRelayUrl(track.streamUrl) || !(track._relayExpires > 0) || track._relayExpires > Date.now()) {
+        return track.streamUrl;
+      }
+      delete track.streamUrl;
+      delete track._relayExpires;
+      delete track._relaySize;
+    }
+    return buildStreamUrl(track);
+  }
+
+  // Si el proxy aún no logró sonar, cambia al relay directo en cuanto esté listo.
+  // Nunca corta una canción que ya empezó: solo actúa con currentTime ~0.
+  function upgradePlaybackToRelay(track, player) {
+    if (!track || !player || isYtMode || !S.isPlaying || userIntentionalPause) return;
+    if (isDirectRelayUrl(player.src)) return;
+    const token = ++relayUpgradeToken;
+
+    resolveRelaySource(track.id, S.audioQuality).then((source) => {
+      if (!source || token !== relayUpgradeToken) return;
+      if (S.queue[S.currentIndex] !== track || isYtMode || !S.isPlaying || userIntentionalPause) return;
+      if (player !== getActivePlayer()) return;
+
+      // Ya está sonando o tiene datos suficientes: no interrumpir.
+      if (player.currentTime > 0.3 || player.readyState >= 3) {
+        rememberRelaySource(track, source);
+        return;
+      }
+
+      rememberRelaySource(track, source);
+      try {
+        player.src = source.url;
+        player.load();
+        const pr = player.play();
+        if (pr && pr.catch) pr.catch(() => {});
+      } catch {}
+    }).catch(() => {});
+  }
+
   function prewarmTracks(tracks) {
     // Desactivado: Las precargas masivas en cada búsqueda saturan el backend serverless
     // y provocan que YouTube marque la IP con "Inicia sesión para confirmar que no eres un bot".
@@ -995,28 +1221,26 @@
     if (isDownloaded(nextTrack.id)) return;
 
     prewarmTracks([nextTrack]);
-    if (nextTrack.streamUrl) return;
 
-    const targetUrl = buildStreamUrl(nextTrack);
-    nextTrack.streamUrl = targetUrl;
+    // Resuelve la URL directa con antelación: al cambiar de canción ya estará
+    // lista y empezará en ~0,3 s en vez de esperar al proxy de Vercel.
+    resolveRelaySource(nextTrack.id, S.audioQuality).then((source) => {
+      if (!source) return;
+      rememberRelaySource(nextTrack, source);
 
-    try {
-      const link = document.createElement('link');
-      link.rel = 'preload';
-      link.as = 'fetch';
-      link.href = targetUrl;
-      link.crossOrigin = 'anonymous';
-      document.head.appendChild(link);
-    } catch {}
-
-    if (!isBackground() && !isIOS) {
-      const inact = getInactivePlayer();
-      if (inact && inact.paused) {
-        inact.src = targetUrl;
-        inact.preload = 'auto';
-        inact.muted = true;
+      if (!isBackground() && !isIOS) {
+        const inact = getInactivePlayer();
+        if (inact && inact.paused && !inact.dataset.prefetched) {
+          inact.dataset.prefetched = 'true';
+          inact.src = source.url;
+          inact.preload = 'auto';
+          inact.muted = true;
+        }
       }
-    }
+    }).catch(() => {});
+
+    // Respaldo inmediato por el proxy mientras se resuelve el relay.
+    if (!nextTrack.streamUrl) nextTrack.streamUrl = buildStreamUrl(nextTrack);
   }
 
   // --- Autoplay Continuo: Recomendaciones Infinitas (SimpMusic Engine via /api/queue) ---
@@ -1346,10 +1570,9 @@
     if ($('miniProgress')) $('miniProgress').style.width = '0%';
 
     // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
-    const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
     // aunque la pista también tenga una URL de streaming precargada.
-    const streamUrl = offlineUrl || track.streamUrl || buildStreamUrl(track);
+    const streamUrl = getTrackStreamUrl(track);
 
     // Actualizar UI y ambiente dinámico inmediatamente
     updatePlayerUI(track);
@@ -1379,39 +1602,42 @@
         inPlayer.muted = false;
         inPlayer.volume = 0;
         inPlayer.playbackRate = S.playbackRate;
-        inPlayer.src = streamUrl;
-        inPlayer.play().catch(() => {});
-        performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
-      } else {
-        cancelActiveCrossfade();
-        const inact = getInactivePlayer();
-        if (inact && inact !== inPlayer) {
-          try {
-            inact.pause();
-            inact.removeAttribute('src');
-            inact.load();
-            inact.volume = targetVolume;
-          } catch {}
-        }
-        inPlayer.muted = false;
-        inPlayer.volume = targetVolume;
-        inPlayer.playbackRate = S.playbackRate;
+        const playDirectly = (url) => {
+          try { inPlayer.currentTime = 0; } catch {}
+          inPlayer.src = url;
+          applyPendingResume(inPlayer, track);
+          const playPromise = inPlayer.play();
+          if (playPromise && playPromise.catch) {
+            playPromise.catch((err) => {
+              if (err.name !== 'AbortError') {
+                console.warn('inPlayer play error:', err);
+                S.isPlaying = false;
+                updatePlayPauseIcons(false, false);
+              }
+            });
+          }
+        };
 
-        // Reset de posición
-        try { inPlayer.currentTime = 0; } catch {}
-
-        // Asignación directa y síncrona en iOS Safari
-        inPlayer.src = streamUrl;
-        applyPendingResume(inPlayer, track);
-        const playPromise = inPlayer.play();
-        if (playPromise && playPromise.catch) {
-          playPromise.catch((err) => {
-            if (err.name !== 'AbortError') {
-              console.warn('inPlayer play error:', err);
-              // Limpiar spinner si falla la reproducción
-              S.isPlaying = false;
-              updatePlayPauseIcons(false, false);
+        if (isDirectRelayUrl(streamUrl) || S.offlineBlobUrls.has(track.id)) {
+          playDirectly(streamUrl);
+        } else {
+          // Mostrar spinner de carga inmediatamente mientras resuelve el relay
+          updatePlayPauseIcons(true, true);
+          const thisToken = ++relayUpgradeToken;
+          Promise.race([
+            resolveRelaySource(track.id, S.audioQuality),
+            new Promise((r) => setTimeout(() => r(null), 1200))
+          ]).then((source) => {
+            if (thisToken !== relayUpgradeToken || S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+            if (source && source.url) {
+              rememberRelaySource(track, source);
+              playDirectly(source.url);
+            } else {
+              playDirectly(buildStreamUrl(track));
             }
+          }).catch(() => {
+            if (thisToken !== relayUpgradeToken || S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+            playDirectly(buildStreamUrl(track));
           });
         }
       }
@@ -1430,6 +1656,11 @@
           handleStreamFailure(track, p);
         }
       }, 12000);
+
+      // Deja lista la siguiente canción (relay directo) sin competir con el arranque.
+      setTimeout(() => {
+        if (S.queue[S.currentIndex] === track && S.isPlaying) prefetchNextTrack();
+      }, 2000);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
