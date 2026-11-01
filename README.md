@@ -32,13 +32,23 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 
 ## 🔊 Cómo funciona el streaming
 
-`api/stream.js` obtiene la URL directa del audio desde YouTube con los clientes `IOS` y `ANDROID`, y la reenvía con soporte de `Range` para que Safari pueda saltar y precargar. En streaming sirve fragmentos de 512 KB; las descargas offline piden esos mismos fragmentos uno por uno y los unen en el dispositivo, así no chocan con el límite de tamaño de respuesta de Vercel ni pierden la descarga completa si falla un tramo (se reintenta solo ese fragmento). Las resoluciones simultáneas del mismo tema se comparten y las cookies/`visitorData` se guardan en caché para no castigar a YouTube en cada fragmento. Si un fragmento falla, el cliente pide una resolución nueva (`backup`) antes de pasar al motor de YouTube; si todo falla responde `502`.
+`api/stream.js` resuelve el audio en este orden:
 
-### ⚠️ Limitación conocida (IP de Vercel)
+1. **Caché en memoria** de una URL ya resuelta (evita pedir metadatos en cada fragmento).
+2. **Relay Invidious** (`api/_relay.js`): pide el vídeo a una instancia con `?local=true`, que resuelve el audio y además lo sirve desde su propia IP. Es la vía que funciona desde Vercel, porque el proxy solo reenvía bytes de la instancia y no toca `googlevideo` directamente.
+3. **MWEB con cookie** de YouTube (funciona cuando la IP del servidor no está bloqueada, por ejemplo en local).
+4. **HLS armado en memoria** (respaldo histórico).
+5. **Clientes nativos** `IOS` / `ANDROID` / `ANDROID_VR` y, si el vídeo original no está disponible, otra publicación de la misma canción.
 
-YouTube bloquea con frecuencia las IPs de los servidores de Vercel ("Sign in to confirm you're not a bot"), en todas las regiones. Por eso, sin configuración adicional, algunas canciones no se reproducen desde el despliegue en la nube. Desde una conexión residencial (por ejemplo `npm start` en tu PC) funciona de forma estable.
+El proxy sirve fragmentos de 512 KB con soporte de `Range`, así Safari puede saltar y precargar. Las descargas offline piden esos mismos fragmentos uno por uno y los unen en el dispositivo: no chocan con el límite de tamaño de respuesta de Vercel y, si falla un tramo, se reintenta solo ese fragmento. Las resoluciones simultáneas del mismo tema se comparten.
 
-La solución que funciona en producción es darle a Vercel una **cookie de una sesión de YouTube iniciada**. El proxy la usa para resolver el audio y YouTube deja de responder con el bloqueo:
+Las instancias del relay se pueden cambiar sin tocar el código con la variable `INVIDIOUS_INSTANCES` (lista separada por comas). Si tienes tu propia instancia de Invidious con `local: true`, ponla ahí.
+
+### ⚠️ Bloqueo de IP de YouTube
+
+YouTube responde `403` a las descargas de `googlevideo.com` desde las IPs de Vercel (y de casi cualquier nube) aunque la API de player funcione: el bloqueo es por reputación de IP. Por eso el audio viaja por el relay Invidious, que sí puede descargarlo.
+
+La cookie de YouTube (`YOUTUBE_COOKIE`) sigue siendo útil porque evita el `LOGIN_REQUIRED` de la API de player y permite la vía MWEB cuando el servidor no está bloqueado. Para actualizarla:
 
 1. Inicia sesión en YouTube (idealmente con una cuenta de Google secundaria).
 2. Exporta las cookies de `youtube.com` con una extensión tipo **Get cookies.txt LOCALLY** (formato `cookies.txt`).
@@ -46,4 +56,4 @@ La solución que funciona en producción es darle a Vercel una **cookie de una s
 4. Ejecuta `node scripts/set-cookie.mjs` (guarda `YOUTUBE_COOKIE` en Vercel sin mostrar la cookie).
 5. Ejecuta `vercel --prod --yes` y vuelve a abrir la app.
 
-La cookie caduca si cierras sesión o Google la invalida; en ese caso repite los pasos. Sin cookie, la app reintenta dos veces con una resolución nueva y luego usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos).
+La cookie caduca si cierras sesión o Google la invalida; en ese caso repite los pasos. Si el relay y la cookie fallan a la vez, la app reintenta dos veces con una resolución nueva y luego usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos).

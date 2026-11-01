@@ -3,7 +3,8 @@
 // Soporta AAC (itags 140/139), Opus (itags 251/250) y fallback de búsqueda automática
 import { Readable } from 'stream';
 import { fetchYt, getRunsText, normalizeCookieInput } from './_yt.js';
-import { resolveMwebAudio } from './_hls.js';
+import { getAudioBuffer, getCookie, resolveMwebAudio } from './_hls.js';
+import { resolveRelayAudio } from './_relay.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
@@ -239,17 +240,6 @@ function resolveWithClient(client, videoId, wantedItag) {
   return task;
 }
 
-// Comparte la resolución MWEB en curso entre los rangos que Safari pide a la vez.
-function resolveMweb(videoId, wantedItag) {
-  const dedupeKey = `MWEB:${videoId}:${wantedItag || ''}`;
-  const pending = pendingResolves.get(dedupeKey);
-  if (pending) return pending;
-  const task = resolveMwebAudio(videoId, wantedItag);
-  pendingResolves.set(dedupeKey, task);
-  task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
-  return task;
-}
-
 async function openUpstream(target, range) {
   // La URL de MWEB ya va firmada: enviarle la cookie de la cuenta solo la infla.
   const cookies = target.noCookie ? '' : await getVisitorCookies();
@@ -303,41 +293,88 @@ async function findAlternativeVideoId(title, artist, originalId) {
   return null;
 }
 
+// Comparte la resolución MWEB en curso entre los rangos que Safari pide a la vez.
+function resolveMweb(videoId, wantedItag) {
+  const dedupeKey = `MWEB:${videoId}:${wantedItag || ''}`;
+  const pending = pendingResolves.get(dedupeKey);
+  if (pending) return pending;
+  const task = resolveMwebAudio(videoId, wantedItag);
+  pendingResolves.set(dedupeKey, task);
+  task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
+  return task;
+}
+
+// Lo mismo para el relay: varios rangos simultáneos comparten una sola consulta.
+function resolveRelay(videoId, wantedItag) {
+  const dedupeKey = `RELAY:${videoId}:${wantedItag || ''}`;
+  const pending = pendingResolves.get(dedupeKey);
+  if (pending) return pending;
+  const task = resolveRelayAudio(videoId, wantedItag);
+  pendingResolves.set(dedupeKey, task);
+  task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
+  return task;
+}
+
+function cacheTarget(cacheKey, target) {
+  if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
+  urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+}
+
 async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '') {
   const cacheKey = `${videoId}:${itag}`;
   const errors = [];
 
-  // 1. Caché en memoria
+  // 1. URL ya resuelta: evita pedir metadatos en cada fragmento de la canción.
   const cached = urlCache.get(cacheKey);
   if (cached && cached.expires > Date.now() && !backupIndex) {
     try {
       return { upstream: await openUpstream(cached, range), errors };
     } catch (e) {
-      errors.push(`cache failed: ${e.message}`);
+      errors.push(`cache: ${e.message}`);
       urlCache.delete(cacheKey);
     }
   }
 
-  // 2. MWEB: acepta la cookie de sesión y su URL de audio no exige PO token,
-  // así que funciona desde la IP de Vercel donde los clientes móviles se bloquean.
+  // 2. Relay Invidious: la única vía que entrega audio desde la IP de Vercel.
   try {
-    const target = await resolveMweb(videoId, itag);
+    const target = await resolveRelay(videoId, itag);
     const resp = await openUpstream(target, range);
-    if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
-    urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+    cacheTarget(cacheKey, target);
     return { upstream: resp, errors };
   } catch (e) {
-    errors.push(`MWEB: ${e.message}`);
-    console.warn(`[stream] MWEB falló para ${videoId}: ${e.message}`);
+    errors.push(`relay: ${e.message}`);
+    console.warn(`[stream] relay falló para ${videoId}: ${e.message}`);
   }
 
-  // 3. Resolver con clientes nativos (ANDROID y luego IOS)
+  // 3. MWEB directo: funciona cuando la IP del servidor no está bloqueada
+  // (por ejemplo en local o en un host con IP residencial).
+  if (process.env.YOUTUBE_COOKIE && getCookie()) {
+    try {
+      const target = await resolveMweb(videoId, itag);
+      const resp = await openUpstream(target, range);
+      cacheTarget(cacheKey, target);
+      return { upstream: resp, errors };
+    } catch (e) {
+      errors.push(`mweb: ${e.message}`);
+      console.warn(`[stream] MWEB falló para ${videoId}: ${e.message}`);
+    }
+
+    // 4. HLS armado en memoria (respaldo histórico, también sujeto al bloqueo).
+    try {
+      const buffer = await getAudioBuffer(videoId);
+      return { buffer, errors };
+    } catch (e) {
+      errors.push(`hls: ${e.message}`);
+      console.warn(`[stream] HLS falló para ${videoId}: ${e.message}`);
+    }
+  }
+
+  // 5. Clientes nativos (suelen quedar en LOGIN_REQUIRED desde Vercel).
   for (const client of CLIENTS) {
     try {
       const target = await resolveWithClient(client, videoId, itag);
       const resp = await openUpstream(target, range);
-      if (urlCache.size >= CACHE_MAX) urlCache.delete(urlCache.keys().next().value);
-      urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
+      cacheTarget(cacheKey, target);
       return { upstream: resp, errors };
     } catch (e) {
       errors.push(`${client.name}: ${e.message}`);
@@ -345,32 +382,52 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     }
   }
 
-  // 3. Fallback inteligente inmediato: buscar versión alternativa si el ID original falló
+  // 6. Otra publicación de la misma canción (el vídeo original puede estar caído).
   if (title || artist) {
     try {
       const altVideoId = await findAlternativeVideoId(title, artist, videoId);
-      if (altVideoId && altVideoId !== videoId) {
+      if (!altVideoId || altVideoId === videoId) {
+        errors.push('alt not found or same as original');
+      } else {
         errors.push(`alt found: ${altVideoId}`);
+        const altKey = `${altVideoId}:${itag}`;
+
         try {
-          const target = await resolveMweb(altVideoId, itag);
+          const target = await resolveRelay(altVideoId, itag);
           const resp = await openUpstream(target, range);
-          urlCache.set(`${altVideoId}:${itag}`, { ...target, expires: Date.now() + URL_TTL_MS });
+          cacheTarget(altKey, target);
           return { upstream: resp, errors };
         } catch (e) {
-          errors.push(`alt MWEB: ${e.message}`);
+          errors.push(`alt relay: ${e.message}`);
         }
+
+        if (process.env.YOUTUBE_COOKIE && getCookie()) {
+          try {
+            const target = await resolveMweb(altVideoId, itag);
+            const resp = await openUpstream(target, range);
+            cacheTarget(altKey, target);
+            return { upstream: resp, errors };
+          } catch (e) {
+            errors.push(`alt mweb: ${e.message}`);
+          }
+          try {
+            const buffer = await getAudioBuffer(altVideoId);
+            return { buffer, errors };
+          } catch (e) {
+            errors.push(`alt hls: ${e.message}`);
+          }
+        }
+
         for (const client of CLIENTS) {
           try {
             const target = await resolveWithClient(client, altVideoId, itag);
             const resp = await openUpstream(target, range);
-            urlCache.set(`${altVideoId}:${itag}`, { ...target, expires: Date.now() + URL_TTL_MS });
+            cacheTarget(altKey, target);
             return { upstream: resp, errors };
           } catch (e) {
             errors.push(`alt ${client.name}: ${e.message}`);
           }
         }
-      } else {
-        errors.push(`alt not found or same as original`);
       }
     } catch (e) {
       errors.push(`alt search error: ${e.message}`);
