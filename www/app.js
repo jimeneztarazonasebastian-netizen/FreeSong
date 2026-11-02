@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.3.4 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.3.5 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -782,6 +782,14 @@
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+
+      // Con la canción ya sonando, deja resuelta la siguiente (relay directo)
+      // sin competir con el arranque de la actual.
+      if (idx === activeDeckIdx && !isYtMode) {
+        setTimeout(() => {
+          if (S.isPlaying && !isYtMode && S.queue[S.currentIndex]) prefetchNextTrack();
+        }, 1500);
+      }
     });
 
     deck.addEventListener('pause', () => {
@@ -1151,10 +1159,17 @@
   }
 
   function isDirectRelayUrl(url) {
-    if (!url || !/^https:\/\//i.test(url)) return false;
+    if (!url) return false;
     // Ojo: las URLs del relay llevan `host=...googlevideo.com` en la query,
-    // así que hay que mirar solo el host real de la URL.
-    try { return !/googlevideo\.com$/i.test(new URL(url).host); } catch { return false; }
+    // así que hay que mirar solo el host real. Las del proxy `/api/stream`
+    // son locales al despliegue y no cuentan como relay directo.
+    try {
+      const u = new URL(url, window.location.href);
+      if (u.pathname === '/api/stream') return false;
+      return !/googlevideo\.com$/i.test(u.host);
+    } catch {
+      return false;
+    }
   }
 
   function rememberRelaySource(track, source) {
@@ -1236,8 +1251,10 @@
 
       if (!isBackground() && !isIOS) {
         const inact = getInactivePlayer();
-        if (inact && inact.paused && !inact.dataset.prefetched) {
-          inact.dataset.prefetched = 'true';
+        // La marca guarda QUÉ pista está precargada: un booleano impedía
+        // precargar la siguiente canción después del primer cambio de pista.
+        if (inact && inact.paused && inact.dataset.prefetchedId !== nextTrack.id) {
+          inact.dataset.prefetchedId = nextTrack.id;
           inact.src = source.url;
           inact.preload = 'auto';
           inact.muted = true;
@@ -1604,6 +1621,7 @@
 
     delete inPlayer.dataset.retried;
     delete inPlayer.dataset.prefetched;
+    delete inPlayer.dataset.prefetchedId;
 
     // Configurar volumen de normalización y velocidad
     const targetVolume = S.audioNormalize ? 0.88 : 1.0;
@@ -1624,6 +1642,7 @@
             inact.pause();
             inact.removeAttribute('src');
             inact.load();
+            delete inact.dataset.prefetchedId;
             inact.volume = targetVolume;
           } catch {}
         }
@@ -1652,6 +1671,13 @@
       S.isPlaying = true;
       updatePlayPauseIcons(true);
 
+      // Si el proxy tarda, salta al relay directo en cuanto resuelva. Se hace
+      // DESPUÉS del play() síncrono y de marcar S.isPlaying: no bloquea el gesto
+      // de iOS ni retrasa el audio, y solo actúa si la pista aún no empezó.
+      if (!shouldCrossfade && !isDirectRelayUrl(streamUrl)) {
+        upgradePlaybackToRelay(track, inPlayer);
+      }
+
       // Iniciar Watchdog calibrado de 12 segundos contra canciones trabadas en 0:00 / 0:00
       if (streamWatchdogTimer) clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = setTimeout(() => {
@@ -1663,11 +1689,6 @@
           handleStreamFailure(track, p);
         }
       }, 12000);
-
-      // Deja lista la siguiente canción (relay directo) sin competir con el arranque.
-      setTimeout(() => {
-        if (S.queue[S.currentIndex] === track && S.isPlaying) prefetchNextTrack();
-      }, 2000);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
@@ -4948,6 +4969,17 @@
       } catch (e) {
         console.warn('Error al restaurar última canción:', e);
       }
+    }
+
+    // Deja resuelta la URL directa de la pista en pantalla (y la siguiente) para
+    // que el primer toque en Reproducir arranque por relay sin esperar a Vercel.
+    if (S.currentTrack && S.currentTrack.id) {
+      const upcoming = [S.currentTrack];
+      const nextIdx = getNextIndex();
+      if (nextIdx >= 0 && nextIdx !== S.currentIndex && S.queue[nextIdx]) {
+        upcoming.push(S.queue[nextIdx]);
+      }
+      prewarmTracks(upcoming);
     }
 
     // Reproducción directa por URL (?track=VIDEO_ID)

@@ -514,7 +514,7 @@ export default async function handler(req, res) {
   // Esto garantiza que cada petición en Vercel responda en <150ms y termine limpiamente
   // evitando el timeout de 10s de Vercel y evitando el bloqueo de Google en rangos abiertos.
   // Con full=1 (descargas) se pide la pista completa de una sola vez.
-  const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB (aprox 2.2 min de audio) // 512 KB
+  const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB (aprox 2.2 min de audio)
   const rawRange = (req.headers && req.headers.range) || 'bytes=0-';
   const rangeMatch = rawRange.match(/bytes=(\d+)-(\d+)?/);
   const startByte = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
