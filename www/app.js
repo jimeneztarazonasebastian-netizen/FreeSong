@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.4.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.5.0 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -119,13 +119,19 @@
     activeChip: 'todo',
     activePlayerSubTab: 'track', // 'track', 'queue', 'lyrics', 'similar'
     libFilter: 'likes', // 'likes', 'downloads', 'playlists', 'history', 'stats'
+    libSearch: '',
     openPlaylistId: null, // playlist abierta en el detalle de la biblioteca
     libSort: 'recent',
     menuTargetTrack: null,
     sleepTimerMinutes: null,
     sleepTimerEndTrack: false,
     sleepTimerInterval: null,
-    sleepTimerRemainingSec: 0
+    sleepTimerRemainingSec: 0,
+    // Personalización visual y táctil (todo se guarda en fs_visual_v1)
+    auroraEnabled: true,
+    auroraIntensity: 0.55,
+    haptics: true,
+    audioFade: true
   };
 
   // Cargar configuración guardada
@@ -133,6 +139,48 @@
   if (savedXf !== null) S.crossfade = savedXf === 'true';
   const savedXfDur = localStorage.getItem('fs_crossfade_dur');
   if (savedXfDur) S.crossfadeDuration = parseInt(savedXfDur, 10);
+
+  // --- Preferencias visuales y táctiles (personalizables) ---
+  const VISUAL_KEY = 'fs_visual_v1';
+  try {
+    const visual = JSON.parse(localStorage.getItem(VISUAL_KEY) || '{}') || {};
+    if (typeof visual.aurora === 'boolean') S.auroraEnabled = visual.aurora;
+    if (typeof visual.auroraIntensity === 'number') S.auroraIntensity = Math.max(0.1, Math.min(1, visual.auroraIntensity));
+    if (typeof visual.haptics === 'boolean') S.haptics = visual.haptics;
+    if (typeof visual.fade === 'boolean') S.audioFade = visual.fade;
+  } catch {}
+
+  function saveVisualPrefs() {
+    try {
+      localStorage.setItem(VISUAL_KEY, JSON.stringify({
+        aurora: S.auroraEnabled,
+        auroraIntensity: S.auroraIntensity,
+        haptics: S.haptics,
+        fade: S.audioFade
+      }));
+    } catch {}
+  }
+
+  function applyVisualSettings() {
+    document.body.dataset.aurora = S.auroraEnabled ? 'on' : 'off';
+    const aurora = $('auroraBg');
+    if (aurora) {
+      aurora.style.setProperty('--aurora-opacity', String(S.auroraIntensity));
+      aurora.style.setProperty('--aurora-speed', S.auroraIntensity > 0.75 ? '16s' : S.auroraIntensity < 0.35 ? '34s' : '24s');
+    }
+  }
+
+  // Pulso táctil: Android/Chrome lo soporta; en iOS el sistema no expone vibración,
+  // así que simplemente no hace nada (la opción queda guardada).
+  function haptic(kind = 'light') {
+    if (!S.haptics) return;
+    try {
+      if (!navigator.vibrate) return;
+      if (kind === 'success') navigator.vibrate([10, 30, 14]);
+      else if (kind === 'medium') navigator.vibrate(16);
+      else navigator.vibrate(9);
+    } catch {}
+  }
 
   // --- Motor de Audio HTML5 Nativo (Doble Deck para Seamless Playback) ---
   const audioDecks = [
@@ -373,7 +421,20 @@
     const g = f(8);
     const b = f(4);
 
+    // Segundo tono (complementario) para el fondo Aurora: crea el efecto mesh.
+    const h2 = (h + 55) % 360;
+    const a2 = (s * Math.min(l, 100 - l)) / 100;
+    const f2 = (n) => {
+      const k = (n + h2 / 30) % 12;
+      const color = l - a2 * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round((255 * color) / 100);
+    };
+    const r2 = f2(0);
+    const g2 = f2(8);
+    const b2 = f2(4);
+
     document.documentElement.style.setProperty('--ambient-glow', `rgba(${r}, ${g}, ${b}, 0.32)`);
+    document.documentElement.style.setProperty('--ambient-glow-2', `rgba(${r2}, ${g2}, ${b2}, 0.26)`);
     document.documentElement.style.setProperty('--mini-ambient', `rgba(${r}, ${g}, ${b}, 0.22)`);
     document.documentElement.style.setProperty('--tint', `${r} ${g} ${b}`);
   }
@@ -1532,21 +1593,38 @@
     }
   }
 
+  async function downloadTracksList(tracks, label = 'la lista') {
+    const list = (tracks || []).filter((t) => t && t.id);
+    if (list.length === 0) {
+      showToast('No hay canciones para descargar');
+      return;
+    }
+    const pending = list.filter((t) => !isDownloaded(t.id));
+    if (pending.length === 0) {
+      showToast(`✓ ${label} ya está descargada`);
+      return;
+    }
+    showToast(`Descargando ${pending.length} canciones de ${label}…`, 3000);
+    let done = 0;
+    let failed = 0;
+    for (const t of pending) {
+      try {
+        await downloadTrack(t);
+        done++;
+      } catch {
+        failed++;
+      }
+    }
+    haptic('success');
+    showToast(`✓ ${done} descargadas${failed ? `, ${failed} fallaron` : ''}`, 3200);
+  }
+
   async function downloadAllFavorites() {
     if (!S.favorites || S.favorites.length === 0) {
       showToast('No tienes canciones favoritas para descargar');
       return;
     }
-    const pending = S.favorites.filter((f) => !isDownloaded(f.id));
-    if (pending.length === 0) {
-      showToast('✓ Todas tus canciones favoritas ya están descargadas');
-      return;
-    }
-    showToast(`Descargando ${pending.length} canciones favoritas...`, 3000);
-    for (const t of pending) {
-      await downloadTrack(t);
-    }
-    showToast(`✓ Todas tus favoritas (${pending.length}) descargadas`);
+    await downloadTracksList(S.favorites, 'tus favoritas');
   }
 
   function updateDownloadButton(track) {
@@ -1761,6 +1839,46 @@
     fadeInterval = window.crossfadeInterval;
   }
 
+  // --- Micro-fundido de volumen al pausar/reanudar (80 ms) ---
+  let microFadeTimer = null;
+
+  function cancelMicroFade() {
+    if (microFadeTimer) {
+      clearInterval(microFadeTimer);
+      microFadeTimer = null;
+    }
+  }
+
+  function getTargetVolume() {
+    return S.audioNormalize ? 0.88 : 1.0;
+  }
+
+  function rampVolume(deck, from, to, ms, onDone) {
+    cancelMicroFade();
+    if (!deck) {
+      if (onDone) onDone();
+      return;
+    }
+    if (!S.audioFade || ms <= 0) {
+      try { deck.volume = to; } catch {}
+      if (onDone) onDone();
+      return;
+    }
+    const steps = Math.max(1, Math.round(ms / 10));
+    let step = 0;
+    try { deck.volume = from; } catch {}
+    microFadeTimer = setInterval(() => {
+      step++;
+      const p = step / steps;
+      try { deck.volume = from + (to - from) * p; } catch {}
+      if (step >= steps) {
+        cancelMicroFade();
+        try { deck.volume = to; } catch {}
+        if (onDone) onDone();
+      }
+    }, 10);
+  }
+
   function pausePlayback() {
     userIntentionalPause = true;
     isTransitioningTrack = false;
@@ -1776,7 +1894,16 @@
       try { ytPlayer.pauseVideo(); } catch {}
     }
     const p = getActivePlayer();
-    if (p) p.pause();
+    if (p && !p.paused) {
+      const fromVol = p.volume;
+      // 80 ms de fundido: quita el corte seco de un equipo barato.
+      rampVolume(p, fromVol, 0, 80, () => {
+        try { p.pause(); } catch {}
+        try { p.volume = fromVol || getTargetVolume(); } catch {}
+      });
+    } else if (p) {
+      try { p.pause(); } catch {}
+    }
     const inact = getInactivePlayer();
     if (inact) inact.pause();
     S.isPlaying = false;
@@ -1810,7 +1937,23 @@
         }
       }
       p.playbackRate = S.playbackRate;
-      p.play().catch(() => {});
+      const targetVol = getTargetVolume();
+      if (S.audioFade) {
+        try { p.volume = 0; } catch {}
+      } else {
+        try { p.volume = targetVol; } catch {}
+      }
+      // play() síncrono: iOS exige que ocurra dentro del gesto del usuario.
+      let playPromise = null;
+      try {
+        playPromise = p.play();
+      } catch {}
+      if (playPromise && playPromise.catch) {
+        playPromise.catch(() => {
+          try { p.volume = targetVol; } catch {}
+        });
+      }
+      if (S.audioFade) rampVolume(p, 0, targetVol, 80);
       S.isPlaying = true;
       updatePlayPauseIcons(true);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -1818,6 +1961,7 @@
   }
 
   function togglePlayPause() {
+    haptic('light');
     if (S.isPlaying) pausePlayback();
     else resumePlayback();
   }
@@ -1832,6 +1976,7 @@
     // Bloqueo de seguridad de 300ms para evitar colisiones de clics rápidos
     if (now - lastSkipTimestamp < 300) return;
     lastSkipTimestamp = now;
+    haptic('light');
 
     userIntentionalPause = false;
     if (S.queue.length === 0) {
@@ -1857,6 +2002,7 @@
     // Bloqueo de seguridad de 300ms para clics rápidos
     if (now - lastSkipTimestamp < 300) return;
     lastSkipTimestamp = now;
+    haptic('light');
 
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
@@ -2786,7 +2932,7 @@
   }
 
   async function startArtistRadio(artist, trackId = null) {
-    showToast(`Creando Radio de ${artist}...`);
+    showToast(trackId ? 'Creando radio de esta canción...' : `Creando Radio de ${artist}...`);
     try {
       let tracks = [];
       if (trackId) {
@@ -2802,7 +2948,9 @@
       if (tracks.length > 0) {
         S.queue = [...tracks];
         playTrack(0, true);
-        showToast(`Radio de ${artist} iniciada (${S.queue.length} canciones)`);
+        showToast(trackId
+          ? `Radio iniciada (${S.queue.length} canciones)`
+          : `Radio de ${artist} iniciada (${S.queue.length} canciones)`);
       } else {
         showToast('No se pudieron obtener pistas para la radio');
       }
@@ -3202,8 +3350,12 @@
   function openFullPlayer() {
     const sheet = $('fullPlayerSheet');
     if (!sheet.classList.contains('translate-y-full')) return;
+    // Limpia cualquier transform inline que haya dejado el gesto de arrastre.
+    sheet.style.transition = '';
+    sheet.style.transform = '';
     sheet.classList.remove('translate-y-full');
     pushModalState('player');
+    haptic('light');
     if (S.activePlayerSubTab === 'lyrics') {
       setTimeout(() => {
         if (!isLyricsVisible()) return;
@@ -3222,6 +3374,8 @@
       sheet.classList.add('translate-y-full');
       popModalState();
     }
+    sheet.style.transition = '';
+    sheet.style.transform = '';
     const cur = S.queue[S.currentIndex] || S.currentTrack;
     if (cur) {
       showAndSyncMiniPlayer(cur, false);
@@ -3277,9 +3431,11 @@
     const idx = S.favorites.findIndex((f) => f.id === track.id);
     if (idx >= 0) {
       S.favorites.splice(idx, 1);
+      haptic('light');
       showToast('Eliminada de Tus Me Gusta');
     } else {
       S.favorites.unshift(track);
+      haptic('success');
       showToast('Agregada a Tus Me Gusta ❤️');
     }
     localStorage.setItem('fs_favorites', JSON.stringify(S.favorites));
@@ -3371,6 +3527,30 @@
   }
 
   // --- Renderizado de la Cola (Siguiente) ---
+  function moveQueueItem(from, to) {
+    if (from === to) return false;
+    if (from < 0 || from >= S.queue.length || to < 0 || to >= S.queue.length) return false;
+    const current = S.queue[S.currentIndex];
+    const [item] = S.queue.splice(from, 1);
+    S.queue.splice(to, 0, item);
+    // Reubicar el índice de la pista que suena sin tocar el audio.
+    if (current) S.currentIndex = S.queue.indexOf(current);
+    return true;
+  }
+
+  function removeQueueAt(index) {
+    if (index < 0 || index >= S.queue.length) return;
+    if (index === S.currentIndex) {
+      showToast('No puedes quitar la canción que está sonando');
+      return;
+    }
+    S.queue.splice(index, 1);
+    if (index < S.currentIndex) S.currentIndex--;
+    renderQueue();
+    saveSession(true);
+    haptic('light');
+  }
+
   function renderQueue() {
     const container = $('queueList');
     const nowPlayingWrap = $('queueNowPlaying');
@@ -3415,29 +3595,27 @@
     }
 
     container.innerHTML = upcoming.map(({ track: t, idx }) => `
-      <div class="flex items-center justify-between p-2 rounded-xl hover:bg-zinc-900 cursor-pointer press group" data-queue-idx="${idx}">
-        <div class="flex items-center gap-2.5 min-w-0 flex-1">
-          <img src="${t.thumbnail}" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" />
-          <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
-            <div class="flex items-center gap-1.5 mt-0.5">
-              ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-              <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
-            </div>
+      <div class="queue-row flex items-center justify-between p-2 rounded-xl hover:bg-zinc-900 border border-transparent cursor-pointer press" data-queue-idx="${idx}">
+        <button type="button" data-queue-drag="${idx}" class="queue-drag-handle shrink-0 mr-1 text-zinc-500 hover:text-emerald-400 press" aria-label="Mantén pulsado y arrastra para reordenar" title="Arrastrar para reordenar">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>
+            <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+            <circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>
+          </svg>
+        </button>
+        <img src="${t.thumbnail}" alt="" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" loading="lazy" />
+        <div class="min-w-0 flex-1 ml-2.5">
+          <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
+            <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
           </div>
         </div>
-        <div class="flex items-center gap-1 shrink-0 ml-2">
-          ${t.durationText ? `<span class="text-[10px] font-mono text-zinc-500 mr-1">${t.durationText}</span>` : ''}
-          <button data-queue-up="${idx}" class="p-1 text-zinc-400 hover:text-emerald-400 press" title="Subir en cola">
-            <svg class="w-3.5 h-3.5"><use href="#i-arrow-up"/></svg>
-          </button>
-          <button data-queue-down="${idx}" class="p-1 text-zinc-400 hover:text-emerald-400 press" title="Bajar en cola">
-            <svg class="w-3.5 h-3.5"><use href="#i-arrow-down"/></svg>
-          </button>
-          <button data-queue-more="${idx}" class="p-1 text-zinc-400 hover:text-white press" aria-label="Opciones">
+        <div class="flex items-center gap-0.5 shrink-0 ml-2">
+          <button data-queue-more="${idx}" class="p-1.5 text-zinc-400 hover:text-white press" aria-label="Opciones">
             <svg class="w-4 h-4"><use href="#i-more"/></svg>
           </button>
-          <button data-queue-del="${idx}" aria-label="Quitar de cola" class="p-1 text-zinc-500 hover:text-red-400 press">
+          <button data-queue-del="${idx}" aria-label="Quitar de la cola" class="p-1.5 text-zinc-500 hover:text-red-400 press">
             <svg class="w-4 h-4"><use href="#i-close"/></svg>
           </button>
         </div>
@@ -3446,35 +3624,10 @@
 
     $$('[data-queue-idx]').forEach((el) => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('[data-queue-del]') || e.target.closest('[data-queue-more]') || e.target.closest('[data-queue-up]') || e.target.closest('[data-queue-down]')) return;
+        if (Date.now() < queueClickSuppressUntil) return;
+        if (e.target.closest('[data-queue-del]') || e.target.closest('[data-queue-more]') || e.target.closest('[data-queue-drag]')) return;
         const i = parseInt(el.getAttribute('data-queue-idx'), 10);
         playTrack(i, true);
-      });
-    });
-
-    $$('[data-queue-up]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const i = parseInt(btn.getAttribute('data-queue-up'), 10);
-        if (i > S.currentIndex + 1) {
-          const temp = S.queue[i];
-          S.queue[i] = S.queue[i - 1];
-          S.queue[i - 1] = temp;
-          renderQueue();
-        }
-      });
-    });
-
-    $$('[data-queue-down]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const i = parseInt(btn.getAttribute('data-queue-down'), 10);
-        if (i < S.queue.length - 1) {
-          const temp = S.queue[i];
-          S.queue[i] = S.queue[i + 1];
-          S.queue[i + 1] = temp;
-          renderQueue();
-        }
       });
     });
 
@@ -3490,15 +3643,154 @@
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const i = parseInt(delBtn.getAttribute('data-queue-del'), 10);
-        if (i >= 0 && i < S.queue.length) {
-          S.queue.splice(i, 1);
-          renderQueue();
-        }
+        removeQueueAt(i);
       });
     });
   }
 
+  // --- Gestos de la cola: arrastrar para reordenar y deslizar a la izquierda para quitar ---
+  let queueClickSuppressUntil = 0;
+  let queueGesturesBound = false;
+
+  function setupQueueGestures() {
+    const container = $('queueList');
+    if (!container || queueGesturesBound) return;
+    queueGesturesBound = true;
+
+    let drag = null;
+
+    container.addEventListener('pointerdown', (e) => {
+      const handle = e.target.closest('[data-queue-drag]');
+      if (!handle) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      const row = handle.closest('[data-queue-idx]');
+      if (!row) return;
+      drag = {
+        row,
+        handle,
+        fromIdx: parseInt(row.getAttribute('data-queue-idx'), 10),
+        targetIdx: parseInt(row.getAttribute('data-queue-idx'), 10),
+        startY: e.clientY,
+        pointerId: e.pointerId,
+        moved: false
+      };
+      try { handle.setPointerCapture(e.pointerId); } catch {}
+      row.classList.add('queue-row-dragging');
+      e.preventDefault();
+    });
+
+    container.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const dy = e.clientY - drag.startY;
+      if (Math.abs(dy) > 4) drag.moved = true;
+      drag.row.style.transform = `translateY(${dy}px)`;
+      // La fila arrastrada sigue al dedo, así que no puede ser su propio destino:
+      // se busca la fila cuyo rango vertical contiene el puntero (ignorándola).
+      const siblings = Array.from(container.querySelectorAll('[data-queue-idx]')).filter((r) => r !== drag.row);
+      let hit = siblings.find((r) => {
+        const b = r.getBoundingClientRect();
+        return e.clientY >= b.top && e.clientY <= b.bottom;
+      });
+      if (!hit && siblings.length) {
+        // Fuera de la lista: elige la fila más cercana al puntero.
+        hit = siblings.reduce((best, r) => {
+          const b = r.getBoundingClientRect();
+          const dist = Math.abs(e.clientY - (b.top + b.height / 2));
+          return !best || dist < best.dist ? { r, dist } : best;
+        }, null)?.r;
+      }
+      if (hit) {
+        const idx = parseInt(hit.getAttribute('data-queue-idx'), 10);
+        if (idx !== drag.targetIdx) {
+          drag.targetIdx = idx;
+          siblings.forEach((r) => r.classList.remove('queue-drop-target'));
+          hit.classList.add('queue-drop-target');
+        }
+      }
+    });
+
+    const finishDrag = (e) => {
+      if (!drag) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== drag.pointerId) return;
+      const { row, fromIdx, targetIdx, moved } = drag;
+      drag = null;
+      row.style.transform = '';
+      row.classList.remove('queue-row-dragging');
+      container.querySelectorAll('[data-queue-idx]').forEach((r) => r.classList.remove('queue-drop-target'));
+      if (!moved) return;
+      queueClickSuppressUntil = Date.now() + 350;
+      if (targetIdx === fromIdx || targetIdx <= S.currentIndex) return;
+      if (moveQueueItem(fromIdx, targetIdx)) {
+        haptic('medium');
+        renderQueue();
+        saveSession(true);
+        showToast('Cola reordenada');
+      }
+    };
+
+    container.addEventListener('pointerup', finishDrag);
+    container.addEventListener('pointercancel', finishDrag);
+
+    // Deslizar una fila a la izquierda para quitarla de la cola.
+    let swipe = null;
+
+    container.addEventListener('touchstart', (e) => {
+      if (!e.touches || !e.touches.length) return;
+      const row = e.target.closest('[data-queue-idx]');
+      if (!row || e.target.closest('button')) return;
+      const t = e.touches[0];
+      swipe = { row, x: t.clientX, y: t.clientY, active: false };
+    }, { passive: true });
+
+    container.addEventListener('touchmove', (e) => {
+      if (!swipe || !e.touches || !e.touches.length) return;
+      const t = e.touches[0];
+      const dx = t.clientX - swipe.x;
+      const dy = t.clientY - swipe.y;
+      if (!swipe.active) {
+        if (Math.abs(dx) < 10) return;
+        if (Math.abs(dx) < Math.abs(dy) * 1.4) {
+          swipe = null;
+          return;
+        }
+        swipe.active = true;
+        swipe.row.style.transition = 'none';
+      }
+      if (dx < 0) swipe.row.style.transform = `translateX(${Math.max(dx, -110)}px)`;
+    }, { passive: true });
+
+    container.addEventListener('touchend', (e) => {
+      if (!swipe) return;
+      const { row, active } = swipe;
+      const endX = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientX : swipe.x;
+      const dx = endX - swipe.x;
+      swipe = null;
+      row.style.transition = '';
+      if (!active) return;
+      queueClickSuppressUntil = Date.now() + 350;
+      if (dx < -70) {
+        const idx = parseInt(row.getAttribute('data-queue-idx'), 10);
+        row.style.transform = 'translateX(-110%)';
+        row.style.opacity = '0';
+        haptic('light');
+        setTimeout(() => removeQueueAt(idx), 150);
+      } else {
+        row.style.transform = '';
+      }
+    });
+  }
+
   // --- Biblioteca Avanzada: Filtros, Ordenación y Playlists ---
+  function libraryQuery() {
+    return String(S.libSearch || '').trim().toLowerCase();
+  }
+
+  function matchesLibraryQuery(track, q) {
+    if (!q) return true;
+    const haystack = `${track?.title || ''} ${track?.artist || ''}`.toLowerCase();
+    return haystack.includes(q);
+  }
+
   function getFilteredLibraryTracks() {
     let list = [];
     if (S.libFilter === 'history') {
@@ -3514,6 +3806,9 @@
     } else if (S.libSort === 'artist') {
       list.sort((a, b) => (a.artist || '').localeCompare(b.artist || ''));
     }
+
+    const q = libraryQuery();
+    if (q) list = list.filter((t) => matchesLibraryQuery(t, q));
     return list;
   }
 
@@ -3525,6 +3820,16 @@
     $('libStatsWrap').classList.toggle('hidden', S.libFilter !== 'stats');
     // En Playlists la lista de playlists/detalle trae sus propios botones de reproducción
     $('libActionsBar').classList.toggle('hidden', S.libFilter === 'stats' || S.libFilter === 'playlists');
+
+    // El buscador no tiene sentido en la cápsula sonora ni en la lista de playlists cerrada.
+    const searchWrap = $('libSearchWrap');
+    if (searchWrap) {
+      const hideSearch = S.libFilter === 'stats' || (S.libFilter === 'playlists' && !S.openPlaylistId);
+      searchWrap.classList.toggle('hidden', hideSearch);
+    }
+    const searchInput = $('libSearchInput');
+    if (searchInput && searchInput.value !== S.libSearch) searchInput.value = S.libSearch;
+    $('libSearchClear')?.classList.toggle('hidden', !S.libSearch);
 
     // Actualizar botones de filtro
     const filterMap = [
@@ -3539,12 +3844,15 @@
       if (btn) btn.classList.toggle('active', S.libFilter === key);
     });
 
+    const filtering = !!libraryQuery();
+    const noMatch = 'Ninguna canción coincide con tu búsqueda en la biblioteca.';
+
     if (S.libFilter === 'likes') {
-      renderTrackList($('libLikedList'), getFilteredLibraryTracks(), 'Aún no tienes canciones favoritas. Toca el corazón en cualquier canción.');
+      renderTrackList($('libLikedList'), getFilteredLibraryTracks(), filtering ? noMatch : 'Aún no tienes canciones favoritas. Toca el corazón en cualquier canción.');
     } else if (S.libFilter === 'downloads') {
-      renderTrackList($('libDownloadsList'), getFilteredLibraryTracks(), 'No tienes canciones descargadas. Toca ⬇️ en cualquier canción o "Descargar favoritas" para escuchar offline.');
+      renderTrackList($('libDownloadsList'), getFilteredLibraryTracks(), filtering ? noMatch : 'No tienes canciones descargadas. Toca ⬇️ en cualquier canción o "Descargar favoritas" para escuchar offline.');
     } else if (S.libFilter === 'history') {
-      renderTrackList($('libHistoryList'), getFilteredLibraryTracks(), 'El historial de reproducción está vacío.');
+      renderTrackList($('libHistoryList'), getFilteredLibraryTracks(), filtering ? noMatch : 'El historial de reproducción está vacío.');
     } else if (S.libFilter === 'playlists') {
       renderUserPlaylists();
     } else if (S.libFilter === 'stats') {
@@ -3694,6 +4002,136 @@
     }
   }
 
+  // --- Importador de playlists de Spotify / YouTube ---
+  function setImportStatus(message, isError = false) {
+    const el = $('importPlaylistStatus');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.textContent = message;
+    el.classList.toggle('text-red-400', isError);
+    el.classList.toggle('text-emerald-400', !isError);
+    el.classList.toggle('bg-red-500/10', isError);
+    el.classList.toggle('bg-emerald-500/10', !isError);
+    el.classList.toggle('border-red-500/25', isError);
+    el.classList.toggle('border-emerald-500/25', !isError);
+  }
+
+  function openImportPlaylistModal() {
+    const modal = $('importPlaylistModal');
+    if (!modal || !modal.classList.contains('hidden')) return;
+    $('importPlaylistUrl').value = '';
+    $('importPlaylistStatus').classList.add('hidden');
+    const startBtn = $('importPlaylistStartBtn');
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.textContent = 'Importar';
+    }
+    modal.classList.remove('hidden');
+    pushModalState('importPlaylist');
+    setTimeout(() => $('importPlaylistUrl')?.focus(), 280);
+  }
+
+  function closeImportPlaylistModal() {
+    const modal = $('importPlaylistModal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    popModalState();
+  }
+
+  async function importPlaylistFromUrl() {
+    const urlEl = $('importPlaylistUrl');
+    const startBtn = $('importPlaylistStartBtn');
+    if (!urlEl || !startBtn) return;
+
+    const raw = urlEl.value.trim();
+    if (!/^https?:\/\//i.test(raw)) {
+      setImportStatus('Pega un enlace válido que empiece por https://', true);
+      return;
+    }
+
+    startBtn.disabled = true;
+    startBtn.textContent = 'Importando…';
+    setImportStatus('Leyendo la playlist…');
+
+    try {
+      const res = await fetch(`/api/import?url=${encodeURIComponent(raw)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || 'No se pudo leer la playlist');
+
+      const source = Array.isArray(data.tracks) ? data.tracks : [];
+      if (source.length === 0) throw new Error('La playlist está vacía o es privada');
+
+      // Limita para no encadenar cientos de búsquedas desde el móvil.
+      const limit = Math.min(source.length, 80);
+      const results = new Array(limit);
+      let next = 0;
+      let done = 0;
+
+      const worker = async () => {
+        while (next < limit) {
+          const i = next++;
+          const item = source[i];
+          if (!item) continue;
+          if (item.id) {
+            results[i] = item;
+          } else {
+            try {
+              const q = `${item.title || ''} ${item.artist || ''}`.trim();
+              if (q) {
+                const sr = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+                const sd = await sr.json();
+                const best = Array.isArray(sd.tracks) ? sd.tracks[0] : null;
+                if (best && best.id) results[i] = best;
+              }
+            } catch {}
+          }
+          done++;
+          if (done === limit || done % 2 === 0) {
+            setImportStatus(`Buscando canciones… ${done}/${limit}`);
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(5, limit) }, () => worker()));
+
+      const tracks = [];
+      const seen = new Set();
+      for (const t of results) {
+        if (!t || !t.id || seen.has(t.id)) continue;
+        seen.add(t.id);
+        tracks.push(t);
+      }
+      if (tracks.length === 0) throw new Error('No se encontró ninguna canción en YouTube');
+
+      const pl = {
+        id: Date.now().toString(),
+        name: (data.name || 'Playlist importada').slice(0, 60),
+        tracks
+      };
+      S.playlists.push(pl);
+      savePlaylists();
+      S.libFilter = 'playlists';
+      S.openPlaylistId = pl.id;
+      S.libSearch = '';
+      renderLibrary();
+      closeImportPlaylistModal();
+      haptic('success');
+      const countText = tracks.length === 1 ? '1 canción' : `${tracks.length} canciones`;
+      showToast(`✓ ${pl.name}: ${countText}`, 3600);
+      if (source.length > limit) {
+        setTimeout(() => showToast(`Se importaron las primeras ${limit} de ${source.length} canciones`, 3600), 1200);
+      }
+    } catch (err) {
+      setImportStatus(err.message || 'No se pudo importar la playlist', true);
+    } finally {
+      if (startBtn.isConnected) {
+        startBtn.disabled = false;
+        startBtn.textContent = 'Importar';
+      }
+    }
+  }
+
+
   // mode: 'save' (guardar `customTrack` o la actual), 'create' (solo crear) o 'rename'
   function openPlaylistModal(customTrack, options = {}) {
     const mode = options.mode || 'save';
@@ -3789,8 +4227,16 @@
       listEl.innerHTML = '<p class="text-zinc-500 text-xs py-4 text-center">Crea tu primera playlist pulsando "+ Nueva playlist"</p>';
       return;
     }
-    listEl.innerHTML = S.playlists.map((pl, idx) => `
-      <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 border border-zinc-800/60 hover:bg-zinc-800 cursor-pointer press" data-pl-idx="${idx}">
+
+    const q = libraryQuery();
+    const visible = q ? S.playlists.filter((pl) => pl.name.toLowerCase().includes(q)) : S.playlists;
+    if (visible.length === 0) {
+      listEl.innerHTML = '<p class="text-zinc-500 text-xs py-4 text-center">Ninguna playlist coincide con la búsqueda.</p>';
+      return;
+    }
+
+    listEl.innerHTML = visible.map((pl) => `
+      <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 border border-zinc-800/60 hover:bg-zinc-800 cursor-pointer press" data-pl-open="${esc(pl.id)}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <div class="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm shrink-0">
             ${esc(pl.name.slice(0, 2).toUpperCase())}
@@ -3801,26 +4247,27 @@
           </div>
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-2">
-          <button data-pl-play="${idx}" aria-label="Reproducir ${esc(pl.name)}" class="w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center press shadow-sm">
+          <button data-pl-play="${esc(pl.id)}" aria-label="Reproducir ${esc(pl.name)}" class="w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center press shadow-sm">
             <svg class="w-4 h-4"><use href="#i-play"/></svg>
           </button>
         </div>
       </div>
     `).join('');
 
-    listEl.querySelectorAll('[data-pl-idx]').forEach((el) => {
+    listEl.querySelectorAll('[data-pl-open]').forEach((el) => {
       el.addEventListener('click', () => {
-        const pl = S.playlists[parseInt(el.getAttribute('data-pl-idx'), 10)];
+        const pl = S.playlists.find((p) => p.id === el.getAttribute('data-pl-open'));
         if (!pl) return;
         S.openPlaylistId = pl.id;
-        renderUserPlaylists();
+        S.libSearch = '';
+        renderLibrary();
       });
     });
 
     listEl.querySelectorAll('[data-pl-play]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const pl = S.playlists[parseInt(btn.getAttribute('data-pl-play'), 10)];
+        const pl = S.playlists.find((p) => p.id === btn.getAttribute('data-pl-play'));
         if (pl && pl.tracks.length > 0) {
           S.queue = [...pl.tracks];
           playTrack(0, true);
@@ -3833,6 +4280,8 @@
 
   function renderPlaylistDetail(pl) {
     const detailEl = $('libPlaylistContent');
+    const q = libraryQuery();
+    const visible = q ? pl.tracks.filter((t) => matchesLibraryQuery(t, q)) : pl.tracks;
     detailEl.innerHTML = `
       <div class="space-y-3">
         <button id="plBackBtn" class="flex items-center gap-1 text-xs font-bold text-zinc-400 hover:text-white press" aria-label="Volver a mis playlists">
@@ -3841,7 +4290,7 @@
         </button>
         <div>
           <h3 class="text-lg font-bold text-white break-words">${esc(pl.name)}</h3>
-          <p class="text-[11px] text-zinc-400">${pl.tracks.length} canciones</p>
+          <p class="text-[11px] text-zinc-400">${q ? `${visible.length} de ${pl.tracks.length} canciones` : `${pl.tracks.length} canciones`}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <button id="plPlayBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 text-black font-bold text-xs press shadow-md">
@@ -3849,6 +4298,9 @@
           </button>
           <button id="plShuffleBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs press">
             <svg class="w-4 h-4"><use href="#i-shuffle"/></svg><span>Aleatorio</span>
+          </button>
+          <button id="plDownloadBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-emerald-400 font-bold text-xs press" title="Descargar toda la playlist">
+            <svg class="w-4 h-4"><use href="#i-download"/></svg><span>Descargar</span>
           </button>
           <button id="plRenameBtn" class="px-3.5 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-bold text-xs press">Renombrar</button>
           <button id="plDeleteBtn" aria-label="Eliminar playlist" class="px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 font-bold text-xs press">${TRASH_SVG}</button>
@@ -3859,7 +4311,8 @@
 
     $('plBackBtn').addEventListener('click', () => {
       S.openPlaylistId = null;
-      renderUserPlaylists();
+      S.libSearch = '';
+      renderLibrary();
     });
 
     $('plPlayBtn').addEventListener('click', () => {
@@ -3874,6 +4327,8 @@
       playTrack(0, true);
       showToast('Reproduciendo en aleatorio');
     });
+
+    $('plDownloadBtn').addEventListener('click', () => downloadTracksList(pl.tracks, pl.name));
 
     $('plRenameBtn').addEventListener('click', () => {
       openPlaylistModal(null, { mode: 'rename', playlistId: pl.id, currentName: pl.name });
@@ -3902,9 +4357,9 @@
 
     renderTrackList(
       $('plDetailTracks'),
-      pl.tracks,
-      'Esta playlist está vacía. Agrega canciones desde el menú ⋮ de cualquier tema.',
-      { onRemove: (idx) => removeTrackFromPlaylist(pl.id, pl.tracks[idx].id) }
+      visible,
+      q ? 'Ninguna canción de esta playlist coincide con la búsqueda.' : 'Esta playlist está vacía. Agrega canciones desde el menú ⋮ de cualquier tema.',
+      { onRemove: (idx) => removeTrackFromPlaylist(pl.id, visible[idx].id) }
     );
   }
 
@@ -4624,14 +5079,29 @@
   }
 
   // --- Temporizador de Apagado (Sleep Timer) ---
+  function setSleepBadge(label) {
+    const badge = $('sleepTimerBadge');
+    const text = $('sleepTimerText');
+    const playerBadge = $('playerSleepBadge');
+    const playerText = $('playerSleepText');
+    if (badge) badge.classList.remove('hidden');
+    if (text) text.textContent = label;
+    if (playerBadge) playerBadge.classList.remove('hidden');
+    if (playerText) playerText.textContent = label;
+  }
+
+  function hideSleepBadges() {
+    $('sleepTimerBadge')?.classList.add('hidden');
+    $('playerSleepBadge')?.classList.add('hidden');
+  }
+
   function startSleepTimer(minutes) {
     clearSleepTimer();
 
     if (minutes === 'end_track') {
       S.sleepTimerEndTrack = true;
       S.sleepTimerMinutes = 'end_track';
-      $('sleepTimerBadge').classList.remove('hidden');
-      $('sleepTimerText').textContent = '1 can';
+      setSleepBadge('1 can');
       closeSleepTimerModal();
       showToast('Temporizador: al terminar esta canción');
       return;
@@ -4647,8 +5117,7 @@
 
     S.sleepTimerMinutes = minNum;
     S.sleepTimerRemainingSec = minNum * 60;
-    $('sleepTimerBadge').classList.remove('hidden');
-    $('sleepTimerText').textContent = `${minNum}m`;
+    setSleepBadge(`${minNum}m`);
 
     S.sleepTimerInterval = setInterval(() => {
       S.sleepTimerRemainingSec--;
@@ -4659,7 +5128,7 @@
       } else {
         const m = Math.floor(rem / 60);
         const s = rem % 60;
-        $('sleepTimerText').textContent = m > 0 ? `${m}m` : `${s}s`;
+        setSleepBadge(m > 0 ? `${m}m` : `${s}s`);
       }
     }, 1000);
 
@@ -4673,7 +5142,7 @@
     S.sleepTimerMinutes = null;
     S.sleepTimerEndTrack = false;
     S.sleepTimerRemainingSec = 0;
-    $('sleepTimerBadge').classList.add('hidden');
+    hideSleepBadges();
   }
 
   function openSleepTimerModal() {
@@ -4693,6 +5162,7 @@
   // --- Navegación entre pestañas ---
   function switchTab(tab) {
     closeArtistProfile();
+    if (S.activeTab !== tab) haptic('light');
     S.activeTab = tab;
     $('viewHome').classList.toggle('hidden', tab !== 'home');
     $('viewSearch').classList.toggle('hidden', tab !== 'search');
@@ -4985,9 +5455,10 @@
 
     $('menuArtistRadioBtn').addEventListener('click', () => {
       if (S.menuTargetTrack) {
-        const artist = S.menuTargetTrack.artist;
+        const track = S.menuTargetTrack;
         closeSongMenu();
-        startArtistRadio(artist);
+        haptic('light');
+        startArtistRadio(track.artist, track.id);
       }
     });
 
@@ -5050,11 +5521,21 @@
     });
 
     // Filtros de Biblioteca
-    $('libFilterLikes').addEventListener('click', () => { S.libFilter = 'likes'; renderLibrary(); });
-    $('libFilterDownloads')?.addEventListener('click', () => { S.libFilter = 'downloads'; renderLibrary(); });
-    $('libFilterPlaylists').addEventListener('click', () => { S.libFilter = 'playlists'; renderLibrary(); });
-    $('libFilterHistory').addEventListener('click', () => { S.libFilter = 'history'; renderLibrary(); });
-    $('libFilterStats').addEventListener('click', () => { S.libFilter = 'stats'; renderLibrary(); });
+    const setLibFilter = (key) => {
+      S.libFilter = key;
+      S.libSearch = '';
+      S.openPlaylistId = null;
+      const input = $('libSearchInput');
+      if (input) input.value = '';
+      $('libSearchClear')?.classList.add('hidden');
+      haptic('light');
+      renderLibrary();
+    };
+    $('libFilterLikes').addEventListener('click', () => setLibFilter('likes'));
+    $('libFilterDownloads')?.addEventListener('click', () => setLibFilter('downloads'));
+    $('libFilterPlaylists').addEventListener('click', () => setLibFilter('playlists'));
+    $('libFilterHistory').addEventListener('click', () => setLibFilter('history'));
+    $('libFilterStats').addEventListener('click', () => setLibFilter('stats'));
     $('libDownloadAllBtn')?.addEventListener('click', downloadAllFavorites);
 
     // Modo "Tu DJ IA ✨"
@@ -5083,6 +5564,10 @@
       } else {
         showToast('No hay canciones en la colección');
       }
+    });
+    $('collectionDownloadAllBtn')?.addEventListener('click', () => {
+      const title = $('collectionHeroTitle')?.textContent || 'esta colección';
+      downloadTracksList(currentCollectionTracks, title);
     });
     $('collectionShareBtn')?.addEventListener('click', () => {
       const title = $('collectionHeroTitle')?.textContent || 'Colección';
@@ -5196,6 +5681,7 @@
 
     // Sleep Timer modal events
     $('sleepTimerBadge').addEventListener('click', openSleepTimerModal);
+    $('playerSleepBadge')?.addEventListener('click', openSleepTimerModal);
     $('settingSleepTimerBtn').addEventListener('click', openSleepTimerModal);
     $('sleepTimerCloseBtn').addEventListener('click', closeSleepTimerModal);
     $('sleepTimerModal').addEventListener('click', (e) => {
@@ -5211,10 +5697,50 @@
 
     // Playlist modal events
     $('libNewPlaylistBtn').addEventListener('click', () => {
-      S.libFilter = 'playlists';
-      S.openPlaylistId = null;
-      renderLibrary();
+      setLibFilter('playlists');
       openPlaylistModal(null, { mode: 'create' });
+    });
+
+    // Buscador dentro de la biblioteca
+    const libSearchInput = $('libSearchInput');
+    if (libSearchInput) {
+      let libSearchTimer = null;
+      libSearchInput.addEventListener('input', () => {
+        S.libSearch = libSearchInput.value;
+        $('libSearchClear')?.classList.toggle('hidden', !S.libSearch.trim());
+        clearTimeout(libSearchTimer);
+        // Pequeño debounce: evita re-renderizar en cada tecla en móviles lentos.
+        libSearchTimer = setTimeout(renderLibrary, 120);
+      });
+      libSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          libSearchInput.blur();
+          renderLibrary();
+        }
+      });
+    }
+    $('libSearchClear')?.addEventListener('click', () => {
+      S.libSearch = '';
+      if (libSearchInput) libSearchInput.value = '';
+      $('libSearchClear')?.classList.add('hidden');
+      renderLibrary();
+      libSearchInput?.focus();
+    });
+
+    // Importador de playlists (Spotify / YouTube)
+    $('libImportBtn')?.addEventListener('click', openImportPlaylistModal);
+    $('importPlaylistCloseBtn')?.addEventListener('click', closeImportPlaylistModal);
+    $('importPlaylistCancelBtn')?.addEventListener('click', closeImportPlaylistModal);
+    $('importPlaylistStartBtn')?.addEventListener('click', importPlaylistFromUrl);
+    $('importPlaylistModal')?.addEventListener('click', (e) => {
+      if (e.target.id === 'importPlaylistModal') closeImportPlaylistModal();
+    });
+    $('importPlaylistUrl')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        importPlaylistFromUrl();
+      }
     });
 
     $('playlistModalCloseBtn').addEventListener('click', closePlaylistModal);
@@ -5251,6 +5777,58 @@
       xfLabel.textContent = `${S.crossfadeDuration} segundos`;
       localStorage.setItem('fs_crossfade_dur', S.crossfadeDuration.toString());
     });
+
+    // Ajustes de aspecto personalizables (aurora, haptics, micro-fundido)
+    const auroraToggle = $('settingAuroraToggle');
+    const auroraRange = $('settingAuroraRange');
+    const auroraLabel = $('auroraIntensityLabel');
+    const auroraWrap = $('auroraSliderWrap');
+    const hapticsToggle = $('settingHapticsToggle');
+    const fadeToggle = $('settingFadeToggle');
+
+    if (auroraToggle) {
+      auroraToggle.checked = S.auroraEnabled;
+      auroraWrap?.classList.toggle('hidden', !S.auroraEnabled);
+      auroraToggle.addEventListener('change', () => {
+        S.auroraEnabled = auroraToggle.checked;
+        auroraWrap?.classList.toggle('hidden', !S.auroraEnabled);
+        saveVisualPrefs();
+        applyVisualSettings();
+        haptic('light');
+      });
+    }
+
+    if (auroraRange) {
+      auroraRange.value = Math.round(S.auroraIntensity * 100);
+      if (auroraLabel) auroraLabel.textContent = `${Math.round(S.auroraIntensity * 100)}%`;
+      auroraRange.addEventListener('input', () => {
+        const pct = parseInt(auroraRange.value, 10);
+        S.auroraIntensity = Math.max(0.1, Math.min(1, pct / 100));
+        if (auroraLabel) auroraLabel.textContent = `${pct}%`;
+        applyVisualSettings();
+        saveVisualPrefs();
+      });
+    }
+
+    if (hapticsToggle) {
+      hapticsToggle.checked = S.haptics;
+      hapticsToggle.addEventListener('change', () => {
+        S.haptics = hapticsToggle.checked;
+        saveVisualPrefs();
+        if (S.haptics) haptic('success');
+      });
+    }
+
+    if (fadeToggle) {
+      fadeToggle.checked = S.audioFade;
+      fadeToggle.addEventListener('change', () => {
+        S.audioFade = fadeToggle.checked;
+        saveVisualPrefs();
+        haptic('light');
+      });
+    }
+
+    applyVisualSettings();
 
     // Ajustes de Normalización, Autoplay y Calidad
     $('settingNormalizeToggle').checked = S.audioNormalize;
@@ -5320,6 +5898,7 @@
 
     // Gestos táctiles
     setupGestures();
+    setupQueueGestures();
   }
 
   // --- Saludo Dinámico según la hora ---
@@ -5344,6 +5923,11 @@
     const plModal = $('playlistModal');
     if (plModal && !plModal.classList.contains('hidden')) {
       closePlaylistModal();
+      return true;
+    }
+    const importModal = $('importPlaylistModal');
+    if (importModal && !importModal.classList.contains('hidden')) {
+      closeImportPlaylistModal();
       return true;
     }
     const sleepModal = $('sleepTimerModal');

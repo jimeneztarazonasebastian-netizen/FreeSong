@@ -18,6 +18,13 @@
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
+  <!-- Fondo Aurora personalizable (degradado mesh animado) -->
+  <div id="auroraBg" class="aurora-bg" aria-hidden="true">
+    <span class="aurora-blob aurora-1"></span>
+    <span class="aurora-blob aurora-2"></span>
+    <span class="aurora-blob aurora-3"></span>
+  </div>
+
   <!-- Íconos SVG -->
   <svg xmlns="http://www.w3.org/2000/svg" class="hidden" aria-hidden="true">
     <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.79-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></symbol>
@@ -263,12 +270,19 @@
       <!-- PESTAÑA: BIBLIOTECA -->
       <section id="viewLibrary" class="hidden space-y-4 pt-2">
         <!-- Encabezado de Biblioteca con botón de nueva playlist -->
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2">
           <h2 class="text-xl font-bold text-white tracking-tight">Tu Biblioteca</h2>
-          <button id="libNewPlaylistBtn" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full press">
-            <svg class="w-4 h-4"><use href="#i-plus"/></svg>
-            <span>Nueva playlist</span>
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button id="libImportBtn" class="flex items-center gap-1.5 text-xs font-bold text-zinc-200 bg-zinc-900 border border-zinc-700 px-3 py-1.5 rounded-full press">
+              <svg class="w-4 h-4"><use href="#i-download"/></svg>
+              <span>Importar</span>
+            </button>
+            <button id="libNewPlaylistBtn" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full press">
+              <svg class="w-4 h-4"><use href="#i-plus"/></svg>
+              <span class="hidden sm:inline">Nueva playlist</span>
+              <span class="sm:hidden">Nueva</span>
+            </button>
+          </div>
         </div>
 
         <!-- Filtros Rápidos de Biblioteca (Pills estilo Spotify) -->
@@ -278,6 +292,15 @@
           <button id="libFilterPlaylists" class="chip-btn">Playlists 📂</button>
           <button id="libFilterHistory" class="chip-btn">Historial 🕒</button>
           <button id="libFilterStats" class="chip-btn">Cápsula Sonora 📊</button>
+        </div>
+
+        <!-- Buscador dentro de la biblioteca (favoritos, descargas, historial y playlists) -->
+        <div id="libSearchWrap" class="relative">
+          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><use href="#i-search"/></svg>
+          <input id="libSearchInput" type="search" inputmode="search" autocomplete="off" placeholder="Buscar en tu biblioteca…" class="w-full bg-zinc-900/80 border border-zinc-800 rounded-2xl pl-9 pr-10 py-2.5 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500/70" />
+          <button id="libSearchClear" type="button" class="hidden absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white press" aria-label="Borrar búsqueda">
+            <svg class="w-4 h-4"><use href="#i-close"/></svg>
+          </button>
         </div>
 
         <!-- Barra de Reproducción y Ordenación rápida -->
@@ -426,6 +449,55 @@
           </div>
         </div>
 
+        <!-- Personalización visual y táctil -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3.5">
+          <div>
+            <p class="font-bold text-sm text-white">Aspecto y sensación</p>
+            <p class="text-xs text-zinc-400">Personaliza el fondo, los pulsos táctiles y el fundido de sonido.</p>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Fondo Aurora animado</p>
+              <p class="text-xs text-zinc-400">Degradado mesh que respira con el color de cada canción.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingAuroraToggle" type="checkbox" class="sr-only peer" checked />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+
+          <div id="auroraSliderWrap" class="space-y-1.5">
+            <div class="flex justify-between text-xs font-mono text-zinc-400">
+              <span>Intensidad del fondo:</span>
+              <span id="auroraIntensityLabel" class="text-emerald-400 font-bold">55%</span>
+            </div>
+            <input id="settingAuroraRange" type="range" min="10" max="100" step="5" value="55" class="w-full accent-emerald-500 cursor-pointer" />
+          </div>
+
+          <div class="flex items-center justify-between pt-2 border-t border-zinc-800/60">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Pulsos táctiles (haptics)</p>
+              <p class="text-xs text-zinc-400">Vibración suave al dar me gusta, cambiar de canción o abrir pestañas. Disponible en Android y navegadores compatibles.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingHapticsToggle" type="checkbox" class="sr-only peer" checked />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+
+          <div class="flex items-center justify-between pt-2 border-t border-zinc-800/60">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Micro-fundido al pausar</p>
+              <p class="text-xs text-zinc-400">Suaviza 80 ms el volumen al pausar o reanudar, sin cortes bruscos.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input id="settingFadeToggle" type="checkbox" class="sr-only peer" checked />
+              <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+        </div>
+
         <!-- Copia de Seguridad: Exportar e Importar Biblioteca -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3">
           <div>
@@ -447,7 +519,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.4.0 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.5.0 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -511,6 +583,10 @@
         </button>
         <div class="text-center">
           <p class="text-[10px] uppercase font-bold tracking-widest text-zinc-400">Reproduciendo desde tu cola</p>
+          <button id="playerSleepBadge" type="button" class="hidden flex mt-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 items-center gap-1 press" aria-label="Temporizador de apagado activo">
+            <svg class="w-3 h-3"><use href="#i-timer"/></svg>
+            <span id="playerSleepText">30m</span>
+          </button>
         </div>
         <button id="playerMenuBtn" class="p-2 -mr-2 text-zinc-300 hover:text-white press" aria-label="Menú y temporizador">
           <svg class="w-6 h-6"><use href="#i-more"/></svg>
@@ -694,7 +770,7 @@
           </button>
           <button id="menuArtistRadioBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
             <svg class="w-5 h-5 text-emerald-400"><use href="#i-radio"/></svg>
-            <span>Ir a la Radio del Artista (20 canciones)</span>
+            <span>Iniciar radio de esta canción</span>
           </button>
           <button id="menuSleepTimerBtn" class="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-zinc-800 transition press text-left">
             <svg class="w-5 h-5 text-zinc-400"><use href="#i-timer"/></svg>
@@ -816,6 +892,9 @@
             <svg class="w-5 h-5"><use href="#i-shuffle"/></svg>
             <span>Aleatorio</span>
           </button>
+          <button id="collectionDownloadAllBtn" class="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-emerald-400 flex items-center justify-center press shrink-0" aria-label="Descargar toda la colección" title="Descargar toda la colección">
+            <svg class="w-5 h-5"><use href="#i-download"/></svg>
+          </button>
         </div>
 
         <!-- Lista de Canciones de la Colección -->
@@ -895,6 +974,29 @@
       </div>
     </div>
 
+    <!-- Modal: Importar playlist desde Spotify o YouTube -->
+    <div id="importPlaylistModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <div class="sheet-slide-up bg-zinc-900 border border-zinc-800 rounded-3xl p-5 w-full max-w-sm space-y-4 shadow-2xl" style="padding-bottom: max(20px, env(safe-area-inset-bottom));">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-download"/></svg>
+            <h3 class="font-bold text-white text-base">Importar playlist</h3>
+          </div>
+          <button id="importPlaylistCloseBtn" type="button" aria-label="Cerrar importador" class="p-1 text-zinc-400 hover:text-white press">
+            <svg class="w-5 h-5"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <p class="text-xs text-zinc-400">Pega el enlace público de una playlist de Spotify, YouTube o YouTube Music. Buscaremos cada canción y crearemos una playlist en tu biblioteca.</p>
+        <input id="importPlaylistUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://open.spotify.com/playlist/…" class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500" />
+        <div id="importPlaylistStatus" class="hidden text-[11px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-3 py-2"></div>
+        <div class="grid grid-cols-2 gap-2">
+          <button id="importPlaylistCancelBtn" class="py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-xs font-bold text-zinc-300 press">Cancelar</button>
+          <button id="importPlaylistStartBtn" class="py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-black press">Importar</button>
+        </div>
+        <p class="text-[10px] text-zinc-500 leading-relaxed">La playlist de Spotify debe ser pública. La importación puede tardar según el número de canciones.</p>
+      </div>
+    </div>
+
     <!-- Notificación Toast flotante -->
     <div id="toastNotification" class="fixed top-5 left-1/2 -translate-x-1/2 z-[60] bg-zinc-900/95 border border-emerald-500/40 text-emerald-300 text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl backdrop-blur-md flex items-center gap-2 transition-all duration-300 opacity-0 pointer-events-none translate-y-[-10px]">
       <span id="toastText">Mensaje</span>
@@ -910,6 +1012,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.4.0"></script>
+  <script src="app.js?v=3.5.0"></script>
 </body>
 </html>
