@@ -447,7 +447,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.3.5 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.4.0 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -570,16 +570,27 @@
       </div>
 
       <!-- Vista 3: Letras sincronizadas -->
-      <div id="sheetLyricsView" class="hidden flex-1 overflow-y-auto px-4 py-4 space-y-3 text-center no-scrollbar">
-        <div class="flex items-center justify-center pt-1">
-          <button id="btnShareLyrics" class="px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold hover:bg-emerald-500 hover:text-black transition press flex items-center gap-1.5 shadow-sm">
+      <div id="sheetLyricsView" class="hidden flex-1 min-h-0 relative">
+        <div id="lyricsScroll" class="relative h-full overflow-y-auto no-scrollbar px-3">
+          <div id="lyricsContainer" class="lyrics-container">
+            <p class="text-zinc-500 text-sm">Buscando letra sincronizada...</p>
+          </div>
+        </div>
+
+        <!-- Ajuste fino de sincronía + compartir verso -->
+        <div class="lyrics-toolbar">
+          <div class="lyrics-sync" role="group" aria-label="Ajustar sincronía de la letra">
+            <button id="lyricSyncDown" type="button" class="lyric-sync-btn" aria-label="Retrasar la letra">−</button>
+            <button id="lyricSyncValue" type="button" class="lyric-sync-value" title="Toca para reiniciar la sincronía">0 s</button>
+            <button id="lyricSyncUp" type="button" class="lyric-sync-btn" aria-label="Adelantar la letra">+</button>
+          </div>
+          <button id="btnShareLyrics" type="button" class="lyrics-share">
             <svg class="w-4 h-4"><use href="#i-share"/></svg>
-            <span>Compartir verso en historia ✨</span>
+            <span>Historia</span>
           </button>
         </div>
-        <div id="lyricsContainer" class="space-y-4 py-4">
-          <p class="text-zinc-500 text-sm">Buscando letra sincronizada...</p>
-        </div>
+
+        <button id="lyricsJumpBack" type="button" class="lyrics-jump-back hidden">Volver a la letra</button>
       </div>
 
       <!-- Vista 4: Canciones Similares / Relacionadas -->
@@ -899,6 +910,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.3.5"></script>
+  <script src="app.js?v=3.4.0"></script>
 </body>
 </html>

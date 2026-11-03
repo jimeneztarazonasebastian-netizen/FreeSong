@@ -319,11 +319,164 @@ body[data-playing="true"] .track-row[data-current="true"]:hover .t-eq { display:
 .press { transition: transform .12s ease; }
 .press:active { transform: scale(.96); }
 
-/* Letras sincronizadas */
-.lyric-line { transition: color .25s ease, opacity .25s ease; }
-.lyric-line[data-state="past"] { color: rgb(244 244 245 / .55); }
-.lyric-line[data-state="current"] { color: #fff; }
-.lyric-line[data-state="future"] { color: rgb(244 244 245 / .3); }
+/* ---- Letras sincronizadas (karaoke) ---- */
+/* La letra NO cambia de tamaño al activarse: así no hay reflujo ni saltos.
+   El avance se pinta con --lp sobre una copia del texto recortada (barrido). */
+#lyricsScroll {
+  position: relative;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.lyrics-container { padding-block: 45vh; }
+
+.lyric-line {
+  --lp: 0;
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: .34rem .2rem;
+  font-size: clamp(1.02rem, 4.5vw, 1.32rem);
+  line-height: 1.35;
+  font-weight: 700;
+  text-align: center;
+  text-wrap: balance;
+  color: rgb(244 244 245 / .3);
+  cursor: pointer;
+  transition: color .28s ease, text-shadow .28s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.lyric-line[data-state="past"] { color: rgb(244 244 245 / .5); }
+.lyric-line[data-state="current"] {
+  color: #fff;
+  text-shadow: 0 0 28px rgb(255 255 255 / .16);
+}
+.lyric-line:active { opacity: .75; }
+
+.lyric-text { display: block; }
+.lyric-fill {
+  position: absolute;
+  inset: 0;
+  padding: inherit;
+  color: #4ade80;
+  text-shadow: 0 0 22px rgb(16 185 129 / .5);
+  pointer-events: none;
+  -webkit-clip-path: inset(0 calc((1 - var(--lp)) * 100%) 0 0);
+  clip-path: inset(0 calc((1 - var(--lp)) * 100%) 0 0);
+}
+
+.lyrics-toolbar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .5rem .6rem 1.1rem;
+  background: linear-gradient(to bottom, rgb(9 9 11 / .96) 34%, rgb(9 9 11 / .72) 68%, transparent);
+}
+.lyrics-sync {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+  padding: .12rem .22rem;
+  border-radius: 9999px;
+  background: rgb(39 39 42 / .85);
+  border: 1px solid rgb(63 63 70 / .8);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.lyric-sync-btn {
+  width: 1.85rem;
+  height: 1.85rem;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  color: #d4d4d8;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform .12s ease, background .2s ease, color .2s ease;
+}
+.lyric-sync-btn:active { transform: scale(.9); background: rgb(16 185 129 / .22); color: #34d399; }
+.lyric-sync-value {
+  min-width: 3.1rem;
+  padding: 0 .1rem;
+  font-size: .66rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #a1a1aa;
+}
+.lyric-sync-value[data-dirty="true"] { color: #34d399; }
+.lyrics-share {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .36rem .62rem;
+  border-radius: 9999px;
+  font-size: .68rem;
+  font-weight: 800;
+  color: #6ee7b7;
+  background: rgb(16 185 129 / .16);
+  border: 1px solid rgb(16 185 129 / .35);
+  transition: transform .12s ease;
+}
+.lyrics-share:active { transform: scale(.94); }
+
+.lyrics-jump-back {
+  position: absolute;
+  bottom: .6rem;
+  left: 50%;
+  z-index: 11;
+  padding: .45rem 1rem;
+  border-radius: 9999px;
+  font-size: .72rem;
+  font-weight: 800;
+  color: #052e21;
+  background: #34d399;
+  box-shadow: 0 8px 24px rgb(16 185 129 / .4);
+  transform: translateX(-50%);
+}
+.lyrics-jump-back.hidden { display: none; }
+
+.lyrics-note {
+  padding-bottom: .7rem;
+  font-size: .62rem;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: #71717a;
+}
+.lyrics-chip {
+  padding: .4rem .9rem;
+  border-radius: 9999px;
+  font-size: .72rem;
+  font-weight: 800;
+  color: #34d399;
+  border: 1px solid rgb(16 185 129 / .35);
+}
+.lyrics-chip:active { transform: scale(.95); }
+
+.lyrics-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: .8rem;
+  padding: 1rem 1.6rem;
+}
+.lyrics-skeleton span {
+  height: .8rem;
+  border-radius: 9999px;
+  background: #27272a;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.lyrics-skeleton span:nth-child(2),
+.lyrics-skeleton span:nth-child(5) { width: 82%; margin-inline: auto; }
+.lyrics-skeleton span:nth-child(3),
+.lyrics-skeleton span:nth-child(6) { width: 64%; margin-inline: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lyric-line { transition: none; }
+}
 
 /* Esqueletos de carga */
 @keyframes shimmer { 0% { opacity: .45; } 50% { opacity: .8; } 100% { opacity: .45; } }
