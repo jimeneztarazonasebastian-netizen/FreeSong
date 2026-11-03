@@ -1,10 +1,20 @@
-// api/health.js - Diagnóstico del motor de reproducción (sin secretos).
+// api/health.js - Diagnóstico del motor de reproducción y configuración de relays.
 // Devuelve si YouTube Music (InnerTube) responde, cuántas instancias de relay
 // hay configuradas y si existe la cookie de YouTube. No expone valores sensibles.
+// También atiende /api/relay-info mediante rewrite para no exceder el límite de 12 funciones de Vercel Hobby.
 import { fetchYt, SEARCH_FILTERS, sendJson } from './_yt.js';
 import { relayInstances } from './_relay.js';
 
 export default async function handler(req, res) {
+  const urlObj = new URL(req.url, 'http://localhost');
+  const relays = relayInstances();
+
+  // Si se solicita información de relays (/api/relay-info o ?relay=1)
+  if (urlObj.searchParams.get('relay') === '1' || urlObj.pathname.includes('relay')) {
+    const body = { instances: relays };
+    return sendJson(res, body, 200, 300);
+  }
+
   const started = Date.now();
 
   // Chequeo real y ligero: la misma ruta que usa la búsqueda de la app.
@@ -23,7 +33,6 @@ export default async function handler(req, res) {
   }
   const latencyMs = Date.now() - started;
 
-  const relays = relayInstances();
   const hosts = relays.map((u) => {
     try { return new URL(u).host; } catch { return u; }
   });
@@ -45,7 +54,8 @@ export default async function handler(req, res) {
     },
     relays: {
       configured: relays.length,
-      hosts
+      hosts,
+      instances: relays
     },
     cookieConfigured
   }, 200, 0);

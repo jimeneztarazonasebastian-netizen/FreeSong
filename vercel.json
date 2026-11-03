@@ -9,6 +9,12 @@
       "memory": 1024
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/relay-info",
+      "destination": "/api/health?relay=1"
+    }
+  ],
   "headers": [
     {
       "source": "/sw.js",
