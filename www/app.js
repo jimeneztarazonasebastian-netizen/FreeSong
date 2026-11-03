@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.5.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.6.0 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -131,7 +131,8 @@
     auroraEnabled: true,
     auroraIntensity: 0.55,
     haptics: true,
-    audioFade: true
+    audioFade: true,
+    lastBackup: localStorage.getItem('fs_last_backup') || null
   };
 
   // Cargar configuración guardada
@@ -694,7 +695,7 @@
     isTransitioningTrack = false;
     updatePlayPauseIcons(false, false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-    showToast('No se pudo reproducir esta canción. Revisa tu conexión e inténtalo de nuevo.', 3200);
+    showToast('El motor de audio no responde (posible bloqueo de YouTube). Compruébalo en Ajustes → Estado del servicio.', 4400);
   }
 
   // Devuelve false si ya se superó el máximo de fallos seguidos (y detiene la reproducción).
@@ -3411,6 +3412,9 @@
     if (playerPlayBtn) {
       playerPlayBtn.innerHTML = isLoading ? bigSpinnerSvg : (playing ? bigPauseSvg : bigPlaySvg);
     }
+
+    const miniEq = $('miniEq');
+    if (miniEq) miniEq.style.display = (playing && !isLoading) ? 'flex' : 'none';
   }
 
   function updateLikeButton(track) {
@@ -4364,6 +4368,52 @@
   }
 
   // --- Exportar e Importar Biblioteca (Copia de Seguridad JSON) ---
+  const BACKUP_KEY = 'fs_last_backup';
+  const BACKUP_REMINDER_DAYS = 14;
+
+  function recordBackup() {
+    const now = new Date().toISOString();
+    try { localStorage.setItem(BACKUP_KEY, now); } catch {}
+    S.lastBackup = now;
+    renderBackupStatus();
+  }
+
+  function backupAgeDays() {
+    const iso = S.lastBackup || localStorage.getItem(BACKUP_KEY);
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (!isFinite(t)) return null;
+    return Math.floor((Date.now() - t) / 86400000);
+  }
+
+  function renderBackupStatus() {
+    const el = $('backupStatusText');
+    if (!el) return;
+    const days = backupAgeDays();
+    const overdue = days === null || days > BACKUP_REMINDER_DAYS;
+    if (days === null) {
+      el.textContent = 'Última copia: nunca';
+    } else if (days <= 0) {
+      el.textContent = 'Última copia: hoy';
+    } else {
+      el.textContent = `Última copia: hace ${days} ${days === 1 ? 'día' : 'días'}`;
+    }
+    el.classList.toggle('text-zinc-500', !overdue);
+    el.classList.toggle('text-amber-400', overdue);
+    if (overdue) {
+      el.textContent += ' · Recomendado exportar';
+    }
+  }
+
+  function maybeRemindBackup() {
+    const hasData = (S.favorites && S.favorites.length) || (S.playlists && S.playlists.length) || (S.downloads && S.downloads.length);
+    if (!hasData) return;
+    const days = backupAgeDays();
+    if (days === null || days > BACKUP_REMINDER_DAYS) {
+      showToast('💾 Hace tiempo que no haces una copia de seguridad. La tienes en Ajustes → Copia de Seguridad.', 4200);
+    }
+  }
+
   function exportLibraryBackup() {
     const backupData = {
       favorites: S.favorites,
@@ -4373,7 +4423,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.0.0'
+      version: '3.6.0'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -4384,6 +4434,7 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 2000);
+    recordBackup();
     showToast('Copia de seguridad descargada');
   }
 
@@ -4426,6 +4477,59 @@
     };
     reader.readAsText(file);
     e.target.value = '';
+  }
+
+  // --- Estado del servicio (diagnóstico del motor de audio) ---
+  function setHealthStatus(state, text, detail) {
+    const dot = $('healthDot');
+    const textEl = $('healthText');
+    const detailEl = $('healthDetail');
+    if (dot) {
+      dot.className = 'w-2.5 h-2.5 rounded-full mt-0.5 shrink-0 ' + (
+        state === 'ok' ? 'bg-emerald-500' :
+        state === 'warn' ? 'bg-amber-500' :
+        state === 'bad' ? 'bg-red-500' : 'bg-zinc-600'
+      );
+    }
+    if (textEl) textEl.textContent = text;
+    if (detailEl) detailEl.textContent = detail || '';
+  }
+
+  async function checkServiceHealth() {
+    const btn = $('healthCheckBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Comprobando…';
+    }
+    setHealthStatus('checking', 'Comprobando…', 'Contactando con el motor de reproducción…');
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const engine = data.engine || {};
+      const relays = (data.relays && data.relays.hosts) || [];
+      const relayText = relays.length
+        ? (relays.length === 1 ? relays[0] : `${relays.length} relays`)
+        : 'sin relays';
+      const cookieText = data.cookieConfigured ? 'cookie ✓' : 'sin cookie';
+
+      if (data.ok) {
+        setHealthStatus('ok', 'Todo en orden',
+          `Motor: ${engine.latencyMs != null ? engine.latencyMs + ' ms' : 'ok'} · ${relayText} · ${cookieText}`);
+      } else {
+        const why = [];
+        if (!engine.reachable) why.push('motor sin respuesta');
+        if (!relays.length) why.push('sin relays');
+        setHealthStatus('bad', 'El motor tiene problemas',
+          (why.length ? why.join(' y ') : 'estado desconocido') + '. Inténtalo de nuevo en unos minutos.');
+      }
+    } catch {
+      setHealthStatus('bad', 'No se pudo comprobar', 'Fallo de red al contactar con /api/health.');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Comprobar';
+      }
+    }
   }
 
   // --- Modo "Tu DJ IA ✨" (Estilo Spotify AI DJ) ---
@@ -5859,6 +5963,9 @@
     $('btnImportBackup').addEventListener('click', () => $('importBackupFileInput').click());
     $('importBackupFileInput').addEventListener('change', handleImportBackup);
 
+    // Estado del servicio (diagnóstico del motor de audio)
+    $('healthCheckBtn')?.addEventListener('click', checkServiceHealth);
+
     // Restablecer datos
     $('btnClearData').addEventListener('click', async () => {
       if (confirm('¿Deseas restablecer todos tus datos locales (favoritos, historial, playlists y descargas)?')) {
@@ -6011,6 +6118,13 @@
     renderLibrary();
     loadHomeContent('todo');
     initOfflineBlobs();
+
+    // Estado de la copia de seguridad y recordatorio si hace tiempo no se exporta.
+    renderBackupStatus();
+    setTimeout(maybeRemindBackup, 1800);
+
+    // Diagnóstico automático y silencioso del motor de audio (solo actualiza el panel).
+    setTimeout(checkServiceHealth, 3000);
 
     // Restaurar la sesión completa (cola, pista, posición y ajustes). Si no hay
     // sesión guardada, al menos muestra la última canción escuchada.
