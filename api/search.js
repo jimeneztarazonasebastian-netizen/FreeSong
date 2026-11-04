@@ -19,6 +19,12 @@ export default async function handler(req, res) {
           params: SEARCH_FILTERS[type] || SEARCH_FILTERS.songs
         };
 
+    // La búsqueda alternativa (sin palabras vacías) arranca YA, en paralelo con
+    // la original: si hace falta usarla, la respuesta no espera dos viajes.
+    const isTrackType = type === 'songs' || type === 'videos';
+    const altPlan = !continuation && isTrackType ? alternateSearchQuery(query) : null;
+    const altPromise = altPlan ? startAlternateSearch(altPlan, type) : null;
+
     const data = await fetchYt('search', body);
 
     // Si es continuación
@@ -48,9 +54,18 @@ export default async function handler(req, res) {
     const lastSec = secList[secList.length - 1] || {};
     const shelf = lastSec.musicShelfRenderer || lastSec.itemSectionRenderer || {};
     const rawItems = shelf.contents || [];
-    const nextToken = shelf.continuations?.[0]?.nextContinuationData?.continuation || null;
+    let nextToken = shelf.continuations?.[0]?.nextContinuationData?.continuation || null;
 
-    const items = parseShelfItems(rawItems, type);
+    let items = parseShelfItems(rawItems, type);
+
+    // YouTube Music falla con conectores ("candy de plan b", "la cancion de...")
+    // y devuelve resultados de otra canción. Si los resultados no cubren todas
+    // las palabras importantes, se usa la búsqueda alternativa ya lanzada.
+    if (isTrackType) {
+      const improved = await improveTrackSearch(altPlan, altPromise, type, items, nextToken);
+      items = improved.items;
+      nextToken = improved.nextToken;
+    }
 
     const result = {
       type,
@@ -73,6 +88,103 @@ export default async function handler(req, res) {
   } catch (err) {
     return sendJson(res, { error: err.message, items: [], tracks: [] }, 500);
   }
+}
+
+// Palabras de relleno que YouTube Music interpreta mal dentro de una búsqueda.
+const SEARCH_STOP_WORDS = new Set([
+  'de', 'del', 'la', 'el', 'los', 'las', 'lo', 'un', 'una', 'unos', 'unas',
+  'y', 'e', 'o', 'u', 'con', 'sin', 'para', 'por', 'en', 'al', 'a', 'que',
+  'mi', 'mis', 'tu', 'tus', 'su', 'sus', 'es', 'son', 'the', 'of', 'and',
+  'ft', 'feat', 'featuring', 'cancion', 'canciones', 'song', 'songs',
+  'musica', 'music', 'video', 'busca', 'buscar', 'busco', 'pon', 'ponme',
+  'reproduce', 'quiero', 'escuchar', 'algo', 'tema'
+]);
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function significantSearchTokens(query) {
+  return normalizeSearchText(query)
+    .replace(/[^\p{L}\p{N}']+/gu, ' ')
+    .split(/\s+/)
+    .filter((token) => token && !SEARCH_STOP_WORDS.has(token));
+}
+
+// Cuántas palabras importantes de la consulta aparecen en el mejor resultado.
+// Solo se miran los primeros puestos: si la coincidencia buena está en el
+// puesto 12, el usuario seguirá viendo primero la canción equivocada.
+const SEARCH_COVERAGE_WINDOW = 5;
+
+function tokenMatches(words, haystack, token) {
+  if (words.has(token)) return true;
+  // Evita falsos positivos con palabras cortas ("b" dentro de "Pitbull").
+  return token.length >= 4 && haystack.includes(token);
+}
+
+function searchCoverage(items, tokens, limit = SEARCH_COVERAGE_WINDOW) {
+  if (!Array.isArray(items) || !items.length || !tokens.length) return 0;
+  let best = 0;
+  for (const item of items.slice(0, limit)) {
+    const haystack = normalizeSearchText(`${item.title || item.name || ''} ${item.artist || ''} ${item.album || ''} ${item.author || ''}`);
+    const words = new Set(haystack.replace(/[^\p{L}\p{N}']+/gu, ' ').split(/\s+/).filter(Boolean));
+    let hits = 0;
+    for (const token of tokens) {
+      if (tokenMatches(words, haystack, token)) hits++;
+    }
+    if (hits > best) best = hits;
+    if (best === tokens.length) break;
+  }
+  return best;
+}
+
+function searchShelfFrom(data) {
+  const secList = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+  const lastSec = secList[secList.length - 1] || {};
+  const shelf = lastSec.musicShelfRenderer || lastSec.itemSectionRenderer || {};
+  return {
+    rawItems: shelf.contents || [],
+    nextToken: shelf.continuations?.[0]?.nextContinuationData?.continuation || null
+  };
+}
+
+// Consulta alternativa sin palabras vacías, o null si no hace falta.
+function alternateSearchQuery(query) {
+  const tokens = significantSearchTokens(query);
+  if (tokens.length < 2) return null;
+  const normalized = tokens.join(' ');
+  if (normalizeSearchText(normalized) === normalizeSearchText(query)) return null;
+  return { tokens, query: normalized };
+}
+
+function startAlternateSearch(plan, type) {
+  return fetchYt('search', {
+    query: plan.query,
+    params: SEARCH_FILTERS[type] || SEARCH_FILTERS.songs
+  }, { timeoutMs: 6000, retries: 0 })
+    .then(searchShelfFrom)
+    .catch(() => null);
+}
+
+// Si los resultados originales no cubren todas las palabras importantes de la
+// consulta, usa la búsqueda alternativa cuando cubre más.
+async function improveTrackSearch(plan, altPromise, type, items, nextToken) {
+  if (!plan) return { items, nextToken };
+  const originalCoverage = searchCoverage(items, plan.tokens);
+  if (originalCoverage >= plan.tokens.length) return { items, nextToken };
+
+  let alt = null;
+  try { alt = await altPromise; } catch {}
+  if (!alt) return { items, nextToken };
+
+  const altItems = parseShelfItems(alt.rawItems, type);
+  if (altItems.length && searchCoverage(altItems, plan.tokens) > originalCoverage) {
+    return { items: altItems, nextToken: alt.nextToken };
+  }
+  return { items, nextToken };
 }
 
 function parseShelfItems(rawList, expectedType) {

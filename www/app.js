@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.6.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.7.0 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1122,6 +1122,49 @@
   const relayPending = new Map();
   let relayUpgradeToken = 0;
 
+  // Caché en disco de URLs ya resueltas: al reabrir la app la primera canción
+  // arranca al instante en vez de esperar ~3 s a la resolución en frío.
+  const RELAY_DISK_CACHE_KEY = 'fs_relay_urls_v1';
+  const RELAY_DISK_CACHE_MAX = 40;
+
+  function loadRelayDiskCache() {
+    try {
+      const raw = localStorage.getItem(RELAY_DISK_CACHE_KEY);
+      if (!raw) return;
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries)) return;
+      const now = Date.now();
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+        const key = entry[0];
+        const src = entry[1];
+        if (typeof key !== 'string' || !src || !src.url || !(src.expires > now + 60 * 1000)) continue;
+        if (relaySources.size >= RELAY_DISK_CACHE_MAX) break;
+        relaySources.set(key, src);
+      }
+    } catch {}
+  }
+
+  let relayDiskSaveTimer = 0;
+  function saveRelayDiskCacheSoon() {
+    if (relayDiskSaveTimer) return;
+    relayDiskSaveTimer = setTimeout(() => {
+      relayDiskSaveTimer = 0;
+      try {
+        const now = Date.now();
+        const entries = [];
+        for (const [key, src] of relaySources) {
+          if (!src || !(src.expires > now + 60 * 1000)) continue;
+          entries.push([key, src]);
+          if (entries.length >= RELAY_DISK_CACHE_MAX) break;
+        }
+        localStorage.setItem(RELAY_DISK_CACHE_KEY, JSON.stringify(entries));
+      } catch {}
+    }, 400);
+  }
+
+  loadRelayDiskCache();
+
   // Devuelve la lista conocida al instante (el primer arranque no debe esperar a
   // una función de Vercel). La lista del servidor se refresca en segundo plano.
   function loadRelayBases() {
@@ -1215,6 +1258,7 @@
           if (relaySources.size > RELAY_PICK_CACHE_MAX) {
             relaySources.delete(relaySources.keys().next().value);
           }
+          saveRelayDiskCacheSoon();
           return source;
         } catch (err) {
           console.warn(`[FreeSong] Relay ${base} falló para ${videoId}:`, err.message);
@@ -1293,8 +1337,9 @@
 
   function prewarmTracks(tracks) {
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
-    // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel)
-    const candidates = tracks.slice(0, 3).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
+    // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
+    // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
+    const candidates = tracks.slice(0, 6).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
     for (const t of candidates) {
       resolveRelaySource(t.id, S.audioQuality).then((src) => {
         if (src) rememberRelaySource(t, src);
@@ -2540,7 +2585,14 @@
     });
   }
 
-  // --- Compartir Verso de Letra en Imagen (Canvas 2D para Historias de Instagram / WhatsApp) ---
+  // --- Compartir Verso de Letra en Historia 9:16 (1080 × 1920) ---
+  // Instagram, WhatsApp y TikTok usan formato vertical. La tarjeta cuadrada
+  // anterior se recortaba; ahora se genera completa y con vista previa antes
+  // de compartir (también evita perder el gesto de usuario en iOS).
+  const STORY_W = 1080;
+  const STORY_H = 1920;
+  const STORY_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -2549,25 +2601,6 @@
     ctx.arcTo(x, y + h, x, y, r);
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
-  }
-
-  function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
-    const words = text.split(' ');
-    let line = '';
-    let curY = y;
-    for (let n = 0; n < words.length; n++) {
-      const testLine = line + words[n] + ' ';
-      const metrics = ctx.measureText(testLine);
-      if (metrics.width > maxWidth && n > 0) {
-        ctx.fillText(line, x, curY);
-        line = words[n] + ' ';
-        curY += lineHeight;
-        if (curY > y + lineHeight * 3) break;
-      } else {
-        line = testLine;
-      }
-    }
-    ctx.fillText(line, x, curY);
   }
 
   function downloadBlob(blob, filename) {
@@ -2581,6 +2614,392 @@
     setTimeout(() => URL.revokeObjectURL(u), 2000);
   }
 
+  function storyShareHost() {
+    const host = window.location.hostname;
+    if (!host || host === 'localhost' || host === '127.0.0.1') return 'freesong-pied.vercel.app';
+    return host;
+  }
+
+  function trackShareUrl(track) {
+    return `${window.location.origin}/?track=${encodeURIComponent(track.id)}`;
+  }
+
+  function wrapCanvasLines(ctx, text, maxWidth) {
+    const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    if (!words.length) return [];
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(test).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function fitCanvasLines(ctx, text, maxWidth, maxLines, sizes, weight = '800') {
+    let chosen = { size: sizes[sizes.length - 1], lines: [] };
+    for (const size of sizes) {
+      ctx.font = `${weight} ${size}px ${STORY_FONT}`;
+      const lines = wrapCanvasLines(ctx, text, maxWidth);
+      chosen = { size, lines };
+      if (lines.length <= maxLines) break;
+    }
+    if (chosen.lines.length > maxLines) {
+      chosen.lines = chosen.lines.slice(0, maxLines);
+      const last = chosen.lines[maxLines - 1] || '';
+      chosen.lines[maxLines - 1] = `${last.replace(/[.,;:!?]+$/, '')}…`;
+    }
+    return chosen;
+  }
+
+  function drawCenteredLines(ctx, lines, centerX, firstBaseline, lineHeight) {
+    lines.forEach((line, i) => ctx.fillText(line, centerX, firstBaseline + i * lineHeight));
+  }
+
+  function loadCanvasImage(src, timeoutMs = 2500) {
+    return new Promise((resolve) => {
+      if (!src) return resolve(null);
+      const img = new Image();
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      img.crossOrigin = 'anonymous';
+      img.onload = () => finish(img.naturalWidth ? img : null);
+      img.onerror = () => finish(null);
+      setTimeout(() => finish(null), timeoutMs);
+      img.src = src;
+    });
+  }
+
+  async function loadStoryCover(track) {
+    const sources = [];
+    if (track.id) {
+      // Versiones grandes y sin barras negras; la portada cuadrada de la app
+      // (120 px) queda como último recurso por su baja resolución.
+      sources.push(`https://i.ytimg.com/vi/${track.id}/maxresdefault.jpg`);
+      sources.push(`https://i.ytimg.com/vi/${track.id}/hq720.jpg`);
+    }
+    if (track.thumbnail) sources.push(track.thumbnail);
+    if (track.id) sources.push(`https://i.ytimg.com/vi/${track.id}/mqdefault.jpg`);
+    const unique = [...new Set(sources)];
+    if (!unique.length) return null;
+    // Se piden en paralelo: la primera que cargue gana. YouTube a veces limita
+    // el host principal (429) y las portadas de i.ytimg siguen disponibles.
+    const results = await Promise.all(unique.map((src) => loadCanvasImage(src, 2400)));
+    return results.find(Boolean) || null;
+  }
+
+  // Dibuja la portada recortada al centro (object-fit: cover) sin deformarla.
+  function drawCoverFit(ctx, img, x, y, w, h) {
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return;
+    const scale = Math.max(w / iw, h / ih);
+    const sw = w / scale;
+    const sh = h / scale;
+    ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
+  }
+
+  async function buildStoryCard(track, verse, nextVerse) {
+    const canvas = document.createElement('canvas');
+    canvas.width = STORY_W;
+    canvas.height = STORY_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    // Fondo degradado profundo
+    const bg = ctx.createLinearGradient(0, 0, STORY_W, STORY_H);
+    bg.addColorStop(0, '#062019');
+    bg.addColorStop(0.45, '#04120d');
+    bg.addColorStop(1, '#010604');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, STORY_W, STORY_H);
+
+    // Resplandores esmeralda
+    let glow = ctx.createRadialGradient(160, 300, 20, 160, 300, 620);
+    glow.addColorStop(0, 'rgba(16, 185, 129, 0.30)');
+    glow.addColorStop(1, 'rgba(16, 185, 129, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, STORY_W, STORY_H);
+
+    glow = ctx.createRadialGradient(980, 1500, 20, 980, 1500, 720);
+    glow.addColorStop(0, 'rgba(52, 211, 153, 0.16)');
+    glow.addColorStop(1, 'rgba(52, 211, 153, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, STORY_W, STORY_H);
+
+    const vignette = ctx.createRadialGradient(540, 960, 280, 540, 960, 1150);
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.5)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, STORY_W, STORY_H);
+
+    const centerX = STORY_W / 2;
+
+    // Marca superior
+    ctx.save();
+    roundRect(ctx, 96, 210, 64, 64, 20);
+    ctx.fillStyle = '#10b981';
+    ctx.fill();
+    ctx.fillStyle = '#04120d';
+    ctx.font = `900 34px ${STORY_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FS', 128, 244);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 36px ${STORY_FONT}`;
+    ctx.fillText('FreeSong', 180, 236);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.font = `600 22px ${STORY_FONT}`;
+    ctx.fillText('MÚSICA CON LETRA', 180, 270);
+
+    const pillW = 156;
+    const pillH = 54;
+    const pillX = STORY_W - 96 - pillW;
+    const pillY = 216;
+    roundRect(ctx, pillX, pillY, pillW, pillH, 27);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.14)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.42)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#6ee7b7';
+    ctx.font = `800 22px ${STORY_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('HISTORIA', pillX + pillW / 2, pillY + pillH / 2 + 1);
+    ctx.restore();
+
+    // Portada con sombra
+    const cover = await loadStoryCover(track);
+    const coverSize = 520;
+    const coverX = (STORY_W - coverSize) / 2;
+    const coverY = 320;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+    ctx.shadowBlur = 70;
+    ctx.shadowOffsetY = 28;
+    ctx.fillStyle = '#0b1512';
+    roundRect(ctx, coverX, coverY, coverSize, coverSize, 48);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    roundRect(ctx, coverX, coverY, coverSize, coverSize, 48);
+    ctx.clip();
+    if (cover) {
+      drawCoverFit(ctx, cover, coverX, coverY, coverSize, coverSize);
+    } else {
+      ctx.fillStyle = '#0f1c17';
+      ctx.fillRect(coverX, coverY, coverSize, coverSize);
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.55)';
+      ctx.font = `900 220px ${STORY_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('♪', centerX, coverY + coverSize / 2 + 10);
+    }
+    ctx.restore();
+
+    ctx.save();
+    roundRect(ctx, coverX, coverY, coverSize, coverSize, 48);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.restore();
+
+    // Título + artista (centrados y ajustados)
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+
+    const title = fitCanvasLines(ctx, track.title || 'Canción', 880, 2, [58, 52, 46, 40], '800');
+    const titleLineHeight = Math.round(title.size * 1.18);
+    let cursorY = 920;
+    ctx.fillStyle = '#ffffff';
+    drawCenteredLines(ctx, title.lines, centerX, cursorY, titleLineHeight);
+    cursorY += title.lines.length * titleLineHeight + 8;
+
+    const artistText = String(track.artist || 'Artista desconocido').replace(/\s*-\s*Topic$/i, '');
+    const artist = fitCanvasLines(ctx, artistText, 820, 1, [36, 32, 28], '600');
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    drawCenteredLines(ctx, artist.lines, centerX, cursorY + 30, 40);
+    cursorY += 74;
+
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
+    roundRect(ctx, centerX - 42, cursorY + 6, 84, 6, 3);
+    ctx.fill();
+    cursorY += 50;
+    ctx.restore();
+
+    // Verso principal
+    const verseText = String(verse || track.title || '').trim();
+    const verseFit = fitCanvasLines(ctx, verseText, 840, 4, [52, 47, 42, 38], '800');
+    const verseLineHeight = Math.round(verseFit.size * 1.24);
+
+    const hasNext = !!(nextVerse && nextVerse !== verseText);
+    const nextFit = hasNext ? fitCanvasLines(ctx, nextVerse, 800, 2, [36, 32, 28], '600') : null;
+    const nextLineHeight = nextFit ? Math.round(nextFit.size * 1.24) : 0;
+
+    // El bloque de letra se centra en el espacio libre: un verso corto no deja
+    // un hueco enorme entre la letra y la marca del pie.
+    const blockTop = cursorY + 120;
+    const blockBottom = 1690;
+    const blockHeight = verseFit.lines.length * verseLineHeight
+      + (nextFit ? 44 + nextFit.lines.length * nextLineHeight : 0);
+    const verseY = blockTop + Math.max(0, (blockBottom - blockTop - blockHeight) / 2);
+
+    // Comilla decorativa
+    ctx.save();
+    ctx.font = 'bold 130px Georgia, serif';
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+    ctx.textAlign = 'left';
+    ctx.fillText('“', 112, verseY - 46);
+    ctx.restore();
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#f4f4f5';
+    drawCenteredLines(ctx, verseFit.lines, centerX, verseY, verseLineHeight);
+    ctx.restore();
+
+    // Segundo verso (siguiente línea de la letra)
+    if (nextFit) {
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#34d399';
+      drawCenteredLines(ctx, nextFit.lines, centerX, verseY + verseFit.lines.length * verseLineHeight + 44, nextLineHeight);
+      ctx.restore();
+    }
+
+    // Pie de marca
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.font = `600 24px ${STORY_FONT}`;
+    ctx.fillText('ESCUCHANDO EN', centerX, 1772);
+    ctx.fillStyle = '#6ee7b7';
+    ctx.font = `800 34px ${STORY_FONT}`;
+    ctx.fillText(storyShareHost(), centerX, 1818);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
+    ctx.font = `500 22px ${STORY_FONT}`;
+    ctx.fillText('FreeSong · Reproductor web premium', centerX, 1858);
+    ctx.restore();
+
+    return await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  }
+
+  const storyShareState = { url: '', blob: null, file: null, filename: '', title: '', text: '' };
+
+  function closeStoryShareModal() {
+    const modal = $('storyShareModal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    if (storyShareState.url) {
+      URL.revokeObjectURL(storyShareState.url);
+      storyShareState.url = '';
+    }
+    storyShareState.blob = null;
+    storyShareState.file = null;
+    popModalState();
+  }
+
+  function canShareStoryFile(file) {
+    try {
+      return !!(navigator.canShare && file && navigator.canShare({ files: [file] }));
+    } catch {
+      return false;
+    }
+  }
+
+  function openStoryShareModal(blob, track, verse) {
+    const modal = $('storyShareModal');
+    if (!modal || !blob) return;
+
+    if (storyShareState.url) URL.revokeObjectURL(storyShareState.url);
+    const objectUrl = URL.createObjectURL(blob);
+    const filename = `freesong-${track.id}-historia.png`;
+    let file = blob;
+    try {
+      file = new File([blob], filename, { type: 'image/png' });
+    } catch {}
+
+    storyShareState.url = objectUrl;
+    storyShareState.blob = blob;
+    storyShareState.file = file;
+    storyShareState.filename = filename;
+    storyShareState.title = `${track.title} · FreeSong`;
+    storyShareState.text = `"${verse}" — ${track.title} de ${track.artist || 'Artista'}\n${trackShareUrl(track)}`;
+
+    const img = $('storySharePreview');
+    if (img) img.src = objectUrl;
+
+    const canNative = canShareStoryFile(file);
+    const nativeBtn = $('storyShareNativeBtn');
+    const downloadBtn = $('storyShareDownloadBtn');
+    const hint = $('storyShareHint');
+    if (nativeBtn) nativeBtn.classList.toggle('hidden', !canNative);
+    if (downloadBtn) downloadBtn.classList.toggle('col-span-2', !canNative);
+    if (hint) {
+      hint.textContent = canNative
+        ? 'Vista previa 1080 × 1920. Toca «Compartir» y elige Instagram, WhatsApp o TikTok.'
+        : 'Vista previa 1080 × 1920. Descarga la imagen o mantén pulsada la vista previa para guardarla en Fotos.';
+    }
+
+    modal.classList.remove('hidden');
+    pushModalState('storyShare');
+    haptic('light');
+  }
+
+  async function shareStoryNative() {
+    if (!storyShareState.file || !storyShareState.blob) return;
+    try {
+      if (!canShareStoryFile(storyShareState.file)) {
+        downloadBlob(storyShareState.blob, storyShareState.filename);
+        showToast('Imagen descargada para compartir');
+        return;
+      }
+      await navigator.share({
+        files: [storyShareState.file],
+        title: storyShareState.title,
+        text: storyShareState.text
+      });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      showToast('No se pudo abrir Compartir. Usa «Descargar».', 3200);
+    }
+  }
+
+  async function copyStoryImage() {
+    if (!storyShareState.blob) return;
+    try {
+      if (!(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem)) {
+        throw new Error('sin soporte');
+      }
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': storyShareState.blob })
+      ]);
+      showToast('✓ Imagen copiada al portapapeles');
+    } catch {
+      try {
+        await navigator.clipboard.writeText(storyShareState.text);
+        showToast('Texto copiado (la imagen no está disponible en este navegador)');
+      } catch {
+        showToast('No se pudo copiar la imagen');
+      }
+    }
+  }
+
   async function shareLyricsCard() {
     const track = S.currentIndex >= 0 ? S.queue[S.currentIndex] : null;
     if (!track) {
@@ -2588,6 +3007,7 @@
       return;
     }
 
+    // Se comparte el verso que está sonando y, si existe, el siguiente.
     let line1 = '';
     let line2 = '';
     if (S.syncedLyrics && S.syncedLyrics.length > 0 && S.currentLyricIdx >= 0) {
@@ -2595,151 +3015,19 @@
       line2 = S.syncedLyrics[S.currentLyricIdx + 1]?.text || '';
     }
     if (!line1) {
-      line1 = track.title;
-      line2 = track.artist || '';
+      const firstSynced = (S.syncedLyrics || []).find((l) => l && l.text && l.text.trim());
+      line1 = firstSynced ? firstSynced.text : track.title;
+      line2 = firstSynced ? '' : (track.artist || '');
     }
 
-    showToast('Generando tarjeta de historia...', 1800);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 1080;
-    canvas.height = 1080;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Fondo degradado profundo Spotify
-    const bgGrad = ctx.createLinearGradient(0, 0, 1080, 1080);
-    bgGrad.addColorStop(0, '#091c14');
-    bgGrad.addColorStop(0.5, '#050c09');
-    bgGrad.addColorStop(1, '#020403');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, 1080, 1080);
-
-    // Resplandor esmeralda central
-    const glow = ctx.createRadialGradient(540, 480, 50, 540, 480, 500);
-    glow.addColorStop(0, 'rgba(16, 185, 129, 0.22)');
-    glow.addColorStop(0.6, 'rgba(16, 185, 129, 0.05)');
-    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, 1080, 1080);
-
-    // Tarjeta Glassmorphic
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 2;
-    roundRect(ctx, 80, 80, 920, 920, 48);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-
-    // Portada de la canción
-    let coverLoaded = false;
-    const coverImg = new Image();
-    coverImg.crossOrigin = 'anonymous';
-    coverImg.src = track.thumbnail;
+    showToast('Generando tarjeta de historia…', 1400);
     try {
-      await new Promise((res) => {
-        coverImg.onload = () => res();
-        coverImg.onerror = () => res();
-        setTimeout(res, 1200);
-      });
-      coverLoaded = coverImg.naturalWidth > 0;
-    } catch {}
-
-    // Encabezado Marca FreeSong
-    ctx.save();
-    ctx.font = 'bold 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#10b981';
-    ctx.fillText('FreeSong 🎵', 140, 160);
-
-    ctx.font = '500 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
-    ctx.fillText('LETRAS EN VIVO', 140, 195);
-    ctx.restore();
-
-    // Miniatura de Portada
-    const coverX = 140;
-    const coverY = 240;
-    const coverSize = 130;
-    if (coverLoaded) {
-      ctx.save();
-      roundRect(ctx, coverX, coverY, coverSize, coverSize, 24);
-      ctx.clip();
-      ctx.drawImage(coverImg, coverX, coverY, coverSize, coverSize);
-      ctx.restore();
-    } else {
-      ctx.save();
-      ctx.fillStyle = '#18181b';
-      roundRect(ctx, coverX, coverY, coverSize, coverSize, 24);
-      ctx.fill();
-      ctx.restore();
+      const blob = await buildStoryCard(track, line1, line2);
+      if (!blob) throw new Error('sin imagen');
+      openStoryShareModal(blob, track, line1);
+    } catch {
+      showToast('No se pudo generar la imagen de la historia');
     }
-
-    // Título y Artista
-    ctx.save();
-    ctx.font = 'bold 38px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    const cleanTitle = track.title.length > 28 ? track.title.slice(0, 26) + '...' : track.title;
-    ctx.fillText(cleanTitle, 300, 300);
-
-    ctx.font = '500 26px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#a1a1aa';
-    const cleanArtist = (track.artist || 'Artista').length > 34 ? (track.artist || '').slice(0, 32) + '...' : (track.artist || '');
-    ctx.fillText(cleanArtist, 300, 345);
-    ctx.restore();
-
-    // Comillas decorativas
-    ctx.save();
-    ctx.font = 'bold 110px Georgia, serif';
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
-    ctx.fillText('“', 140, 480);
-    ctx.restore();
-
-    // Verso principal
-    ctx.save();
-    ctx.font = 'bold 50px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#f4f4f5';
-    wrapText(ctx, line1, 140, 560, 800, 68);
-
-    if (line2 && line2 !== line1) {
-      ctx.font = '600 38px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      ctx.fillStyle = '#34d399';
-      wrapText(ctx, line2, 140, 720, 800, 54);
-    }
-    ctx.restore();
-
-    // Marca de agua pie
-    ctx.save();
-    ctx.font = '500 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.textAlign = 'right';
-    ctx.fillText('Escuchando en freesong.app', 940, 930);
-    ctx.restore();
-
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        showToast('Error al generar la imagen');
-        return;
-      }
-      const file = new File([blob], `freesong-${track.id}-verso.png`, { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: `${track.title} - FreeSong`,
-            text: `"${line1}" — ${track.title} de ${track.artist}`
-          });
-        } catch (err) {
-          if (err.name !== 'AbortError') {
-            downloadBlob(blob, file.name);
-          }
-        }
-      } else {
-        downloadBlob(blob, file.name);
-        showToast('✓ Imagen descargada para compartir');
-      }
-    }, 'image/png');
   }
 
   // --- Subpestaña "Similares" Robusta ---
@@ -3269,7 +3557,7 @@
         return;
       }
 
-      prewarmTracks(tracks.slice(0, 2));
+      prewarmTracks(tracks.slice(0, 4));
 
       $('collectionTracksList').innerHTML = tracks.map((t, idx) => `
         <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-coll-idx="${idx}">
@@ -4410,6 +4698,13 @@
     if (!hasData) return;
     const days = backupAgeDays();
     if (days === null || days > BACKUP_REMINDER_DAYS) {
+      // Como mucho un recordatorio cada 3 días: abrir la app a diario no debe
+      // convertirse en un aviso constante.
+      try {
+        const last = Number(localStorage.getItem('fs_backup_reminder_at') || 0);
+        if (last && Date.now() - last < 3 * 86400000) return;
+        localStorage.setItem('fs_backup_reminder_at', String(Date.now()));
+      } catch {}
       showToast('💾 Hace tiempo que no haces una copia de seguridad. La tienes en Ajustes → Copia de Seguridad.', 4200);
     }
   }
@@ -4423,7 +4718,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.6.0'
+      version: '3.7.0'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -4532,6 +4827,15 @@
     }
   }
 
+  // El diagnóstico se hace al abrir Ajustes (no al arrancar): así no compite
+  // con la primera canción ni gasta invocaciones de más en cada apertura.
+  let lastHealthCheckAt = 0;
+  function maybeCheckServiceHealth() {
+    if (Date.now() - lastHealthCheckAt < 10 * 60 * 1000) return;
+    lastHealthCheckAt = Date.now();
+    checkServiceHealth();
+  }
+
   // --- Modo "Tu DJ IA ✨" (Estilo Spotify AI DJ) ---
   const DJ_VIBES = [
     { name: 'Urbano & Reggaetón', query: 'reggaeton 2024 exitos perreo' },
@@ -4611,7 +4915,7 @@
       }
 
       if (data.shelves[0]?.items?.length > 0) {
-        prewarmTracks(data.shelves[0].items.slice(0, 2));
+        prewarmTracks(data.shelves[0].items.slice(0, 4));
       }
 
       renderQuickAccess();
@@ -5050,7 +5354,7 @@
         `).join('');
       } else {
         // canciones o videos
-        prewarmTracks(items.slice(0, 2));
+        prewarmTracks(items.slice(0, 6));
         html = items.map((t, idx) => {
           const globalIdx = startIdx + idx;
           return `
@@ -5283,6 +5587,10 @@
     if (tab === 'library') {
       renderLibrary();
     }
+    if (tab === 'settings') {
+      renderBackupStatus();
+      maybeCheckServiceHealth();
+    }
   }
 
   // --- Gestos Táctiles (Swipe en Carátula y Sheet) ---
@@ -5490,6 +5798,14 @@
 
     // Botón Compartir Verso en Historia (Canvas)
     $('btnShareLyrics')?.addEventListener('click', shareLyricsCard);
+    $('storyShareCloseBtn')?.addEventListener('click', closeStoryShareModal);
+    $('storyShareNativeBtn')?.addEventListener('click', shareStoryNative);
+    $('storyShareDownloadBtn')?.addEventListener('click', () => {
+      if (!storyShareState.blob) return;
+      downloadBlob(storyShareState.blob, storyShareState.filename);
+      showToast('✓ Imagen descargada para compartir');
+    });
+    $('storyShareCopyBtn')?.addEventListener('click', copyStoryImage);
     setupLyricsView();
 
     // Botón Limpiar Cola
@@ -6042,6 +6358,11 @@
       closeSleepTimerModal();
       return true;
     }
+    const storyModal = $('storyShareModal');
+    if (storyModal && !storyModal.classList.contains('hidden')) {
+      closeStoryShareModal();
+      return true;
+    }
     const fullPlayer = $('fullPlayerSheet');
     if (fullPlayer && !fullPlayer.classList.contains('translate-y-full')) {
       closeFullPlayer();
@@ -6122,9 +6443,6 @@
     // Estado de la copia de seguridad y recordatorio si hace tiempo no se exporta.
     renderBackupStatus();
     setTimeout(maybeRemindBackup, 1800);
-
-    // Diagnóstico automático y silencioso del motor de audio (solo actualiza el panel).
-    setTimeout(checkServiceHealth, 3000);
 
     // Restaurar la sesión completa (cola, pista, posición y ajustes). Si no hay
     // sesión guardada, al menos muestra la última canción escuchada.

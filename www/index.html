@@ -538,7 +538,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.6.0 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.7.0 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -970,6 +970,38 @@
       </div>
     </div>
 
+    <!-- Modal: Compartir historia (vista previa 9:16) -->
+    <div id="storyShareModal" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 w-full max-w-sm space-y-3 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-400"><use href="#i-share"/></svg>
+            <h3 class="font-bold text-white text-base">Compartir historia</h3>
+          </div>
+          <button id="storyShareCloseBtn" type="button" aria-label="Cerrar vista previa" class="p-1 text-zinc-400 hover:text-white active:scale-95 transition cursor-pointer">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="rounded-2xl overflow-hidden bg-black border border-zinc-800">
+          <img id="storySharePreview" alt="Vista previa de la historia para compartir" class="w-full max-h-[48vh] object-contain" />
+        </div>
+        <p id="storyShareHint" class="text-[11px] text-zinc-500 leading-relaxed">Vista previa 1080 × 1920 lista para Instagram, WhatsApp o TikTok.</p>
+        <div class="grid grid-cols-2 gap-2">
+          <button id="storyShareNativeBtn" type="button" class="px-3 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black press">
+            Compartir
+          </button>
+          <button id="storyShareDownloadBtn" type="button" class="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-white press">
+            Descargar
+          </button>
+        </div>
+        <button id="storyShareCopyBtn" type="button" class="w-full px-3 py-2.5 rounded-xl bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-300 press">
+          Copiar imagen
+        </button>
+      </div>
+    </div>
+
     <!-- Modal: Guardar en Playlist -->
     <div id="playlistModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
       <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
@@ -1038,6 +1070,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.6.0"></script>
+  <script src="app.js?v=3.7.0"></script>
 </body>
 </html>

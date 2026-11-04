@@ -19,9 +19,14 @@ createServer(async (req, res) => {
   try {
     const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (urlPath.startsWith('/api/')) {
-      const apiName = urlPath.replace('/api/', '').split('?')[0];
       // Imita los helpers que Vercel agrega a req/res en las funciones /api
       const parsed = new URL(req.url, 'http://x');
+      let apiName = urlPath.replace('/api/', '').split('?')[0];
+      // Mismo rewrite que vercel.json: /api/relay-info -> /api/health?relay=1
+      if (apiName === 'relay-info') {
+        apiName = 'health';
+        parsed.searchParams.set('relay', '1');
+      }
       req.query = Object.fromEntries(parsed.searchParams);
       res.status = (code) => { res.statusCode = code; return res; };
       res.send = (body) => { res.end(body); return res; };
