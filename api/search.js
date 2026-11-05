@@ -190,7 +190,7 @@ async function improveTrackSearch(plan, altPromise, type, items, nextToken) {
 function parseShelfItems(rawList, expectedType) {
   const items = [];
   const seen = new Set();
-  const seenSongs = new Set();
+  const seenSongs = new Map();
 
   for (const item of rawList) {
     const r = item.musicResponsiveListItemRenderer;
@@ -281,13 +281,14 @@ function parseShelfItems(rawList, expectedType) {
 
       // YouTube Music devuelve a veces la misma grabación subida dos veces
       // (mismo título, artista y duración). Mostrarla una sola vez evita que el
-      // usuario elija justo la copia que falla en su red.
+      // usuario elija justo la copia que falla en su red. Si una es la pista de
+      // audio oficial (ATV) y la otra un vídeo, nos quedamos con la de audio:
+      // suele reproducirse de forma más fiable y rápida.
       const songKey = `${normalizeSearchText(title)}|${normalizeSearchText(artist)}|${durSec ? Math.round(durSec / 2) : 0}`;
       const hasVariant = /\b(remix|cover|live|en vivo|sped up|slowed|instrumental|karaoke)\b/i.test(title);
-      if (!hasVariant && seenSongs.has(songKey)) continue;
-      if (!hasVariant) seenSongs.add(songKey);
+      const isAtv = col0[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType === 'MUSIC_VIDEO_TYPE_ATV';
 
-      items.push({
+      const songItem = {
         type: 'song',
         id: videoId,
         videoId: videoId,
@@ -298,7 +299,21 @@ function parseShelfItems(rawList, expectedType) {
         durationSeconds: durSec,
         durationText: durText,
         thumbnail: thumb
-      });
+      };
+
+      if (!hasVariant) {
+        const previous = seenSongs.get(songKey);
+        if (previous) {
+          if (isAtv && !previous.isAtv) {
+            items[previous.index] = songItem;
+            previous.isAtv = true;
+          }
+          continue;
+        }
+        seenSongs.set(songKey, { index: items.length, isAtv });
+      }
+
+      items.push(songItem);
     }
   }
 

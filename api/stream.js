@@ -466,6 +466,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
           const target = await resolveRelay(altVideoId, itag);
           const resp = await openUpstream(target, range);
           cacheTarget(altKey, target);
+          cacheTarget(cacheKey, target);
           return { upstream: resp, errors };
         } catch (e) {
           errors.push(`alt relay: ${e.message}`);
@@ -476,6 +477,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
             const target = await resolveMweb(altVideoId, itag);
             const resp = await openUpstream(target, range);
             cacheTarget(altKey, target);
+            cacheTarget(cacheKey, target);
             return { upstream: resp, errors };
           } catch (e) {
             errors.push(`alt mweb: ${e.message}`);
@@ -493,6 +495,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
             const target = await resolveWithClient(client, altVideoId, itag);
             const resp = await openUpstream(target, range);
             cacheTarget(altKey, target);
+            cacheTarget(cacheKey, target);
             return { upstream: resp, errors };
           } catch (e) {
             errors.push(`alt ${client.name}: ${e.message}`);
