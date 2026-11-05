@@ -3,13 +3,28 @@
 // hay configuradas y si existe la cookie de YouTube. No expone valores sensibles.
 // También atiende /api/relay-info mediante rewrite para no exceder el límite de 12 funciones de Vercel Hobby.
 import { fetchYt, SEARCH_FILTERS, sendJson } from './_yt.js';
-import { relayInstances } from './_relay.js';
+import { relayInstances, resolveRelayAudio } from './_relay.js';
 
 export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const relays = relayInstances();
 
-  // PRUEBA TEMPORAL: listar pistas de un álbum desde la IP de Vercel.
+  // PRUEBA TEMPORAL: resolver audio de un vídeo vía relay desde la IP de Vercel.
+  if (urlObj.searchParams.get('probe') === 'relay') {
+    const ids = (urlObj.searchParams.get('id') || '').split(',').filter(Boolean).slice(0, 6);
+    const out = [];
+    for (const id of ids) {
+      const started = Date.now();
+      try {
+        const target = await resolveRelayAudio(id, '140');
+        out.push({ id, ok: true, ms: Date.now() - started, host: new URL(target.url).host, size: target.size });
+      } catch (e) {
+        out.push({ id, ok: false, ms: Date.now() - started, error: String(e && e.message || e) });
+      }
+    }
+    return sendJson(res, { ok: true, out }, 200, 0);
+  }
+
   if (urlObj.searchParams.get('probe') === 'album') {
     const browseId = urlObj.searchParams.get('id') || '';
     const needle = (urlObj.searchParams.get('q') || '').toLowerCase();
