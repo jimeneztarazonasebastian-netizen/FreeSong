@@ -4,7 +4,7 @@
 import { Readable } from 'stream';
 import { fetchYt, getRunsText, normalizeCookieInput, parseDuration } from './_yt.js';
 import { getAudioBuffer, getCookie, resolveMwebAudio } from './_hls.js';
-import { resolveRelayAudio } from './_relay.js';
+import { resolveRelayAudio, relayInstances } from './_relay.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
@@ -273,8 +273,9 @@ async function openUpstream(target, range) {
 // IMPORTANTE: solo se acepta un resultado que sea REALMENTE la misma canción.
 // Antes se devolvía el primer resultado distinto y eso reproducía otra pista
 // (p. ej. buscar "Candy Plan B" terminaba sirviendo "Sexo, Sudor y Calor").
-const TITLE_VARIANTS_RE = /\b(remix|cover|live|en vivo|sped up|slowed|reverb|instrumental|karaoke|tribute|parody)\b/i;
+const TITLE_VARIANTS_RE = /\b(remix|cover|live|en vivo|sped up|slowed|reverb|instrumental|karaoke|tribute|parody|letra|lyrics|lyric)\b/i;
 const TITLE_NOISE_RE = /\b(official|videoclip|video|audio|visualizer|lyric|lyrics|letra|hd|hq|4k|8k|remaster(?:ed)?|version)\b/gi;
+const RELAY_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15';
 
 function normalizeSongText(value) {
   return String(value || '')
@@ -296,9 +297,19 @@ function coreSongTitle(value) {
 function isSameSongCandidate(candidateTitle, candidateArtist, title, artist, candidateDuration, duration) {
   const candidateCore = coreSongTitle(candidateTitle);
   const originalCore = coreSongTitle(title);
-  if (!candidateCore || !originalCore || candidateCore !== originalCore) return false;
+  const artistCore = coreSongTitle(artist);
+  if (!candidateCore || !originalCore) return false;
 
-  // Una versión (remix, cover, directo...) no sustituye a la canción original.
+  // Algunos canales titulan "Artista - Canción" (o al revés). Quita el nombre
+  // del artista del título antes de comparar el núcleo.
+  const cores = new Set([originalCore]);
+  if (artistCore) {
+    cores.add(`${artistCore} ${originalCore}`);
+    cores.add(`${originalCore} ${artistCore}`);
+  }
+  if (!cores.has(candidateCore)) return false;
+
+  // Una versión (remix, cover, directo, letra...) no sustituye a la original.
   if (TITLE_VARIANTS_RE.test(candidateTitle) && !TITLE_VARIANTS_RE.test(title)) return false;
 
   if (duration > 0 && candidateDuration > 0) {
@@ -309,10 +320,57 @@ function isSameSongCandidate(candidateTitle, candidateArtist, title, artist, can
   const candidateArtistNorm = normalizeSongText(candidateArtist);
   const originalArtistNorm = normalizeSongText(artist);
   if (!originalArtistNorm) return true;
-  if (!candidateArtistNorm) return false;
+
+  // El canal puede ser el sello (Pina Records) en vez del artista; si el
+  // título ya contiene al artista, la canción es la correcta.
+  const titleHasArtist = new RegExp(`(^|\\s)${originalArtistNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(candidateCore);
+
+  if (!candidateArtistNorm) return titleHasArtist;
   return candidateArtistNorm === originalArtistNorm
     || candidateArtistNorm.includes(originalArtistNorm)
-    || originalArtistNorm.includes(candidateArtistNorm);
+    || originalArtistNorm.includes(candidateArtistNorm)
+    || titleHasArtist;
+}
+
+// Busca la misma canción en la instancia Invidious. Su búsqueda se ejecuta
+// desde la región de la instancia y encuentra copias de audio que YouTube no
+// muestra a la IP de Vercel (p. ej. el audio oficial de "Candy" de Plan B).
+async function findInvidiousAlternatives(videoId, title, artist, duration) {
+  if (!title) return [];
+  const query = `${title} ${artist || ''}`.trim();
+  const found = [];
+
+  for (const base of relayInstances().slice(0, 2)) {
+    try {
+      const res = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {
+        headers: { 'User-Agent': RELAY_UA, Accept: 'application/json' },
+        signal: AbortSignal.timeout(3000)
+      });
+      if (!res.ok) continue;
+      const list = await res.json();
+      if (!Array.isArray(list)) continue;
+
+      for (const item of list) {
+        const vid = item && item.videoId;
+        if (!vid || vid === videoId || found.some((f) => f.id === vid)) continue;
+        const candidateTitle = String(item.title || '');
+        const candidateArtist = String(item.author || '');
+        const candidateDuration = Number(item.lengthSeconds) || 0;
+        if (!isSameSongCandidate(candidateTitle, candidateArtist, title, artist, candidateDuration, duration)) continue;
+
+        // La pista de audio oficial y la duración exacta suenan igual que la
+        // canción pedida; el videoclip puede llevar intro/silencio extra.
+        found.push({
+          id: vid,
+          diff: duration > 0 && candidateDuration > 0 ? Math.abs(candidateDuration - duration) : 999,
+          isAudio: /\baudio\b|audio oficial|official audio/i.test(candidateTitle) ? 0 : 1
+        });
+      }
+    } catch {}
+  }
+
+  found.sort((a, b) => a.diff - b.diff || a.isAudio - b.isAudio);
+  return found.slice(0, 3).map((f) => f.id);
 }
 
 async function findAlternativeVideoId(title, artist, originalId, duration = 0) {
@@ -390,7 +448,54 @@ function cacheTarget(cacheKey, target) {
   urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
 }
 
-async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '', duration = 0) {
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Resuelve en cuanto una de las vías consigue audio; null si todas fallan.
+function firstSuccess(tasks) {
+  return new Promise((resolve) => {
+    let pending = tasks.length;
+    let finished = false;
+    for (const task of tasks) {
+      task.then((result) => {
+        if (finished) return;
+        if (result && result.ok) {
+          finished = true;
+          resolve(result);
+        } else if (--pending === 0) {
+          resolve(null);
+        }
+      }).catch(() => {
+        if (!finished && --pending === 0) resolve(null);
+      });
+    }
+  });
+}
+
+async function tryAltCandidates(altIds, itag, range, cacheKey, state, errors) {
+  for (const altId of altIds.slice(0, 3)) {
+    if (state.done) return { ok: false };
+    const altKey = `${altId}:${itag}`;
+    try {
+      const target = await resolveRelay(altId, itag);
+      if (state.done) return { ok: false };
+      const resp = await openUpstream(target, range);
+      if (state.done) {
+        try { await resp.body?.cancel(); } catch {}
+        return { ok: false };
+      }
+      cacheTarget(altKey, target);
+      cacheTarget(cacheKey, target);
+      return { ok: true, upstream: resp };
+    } catch (e) {
+      errors.push(`alt ${altId}: ${e.message}`);
+    }
+  }
+  return { ok: false };
+}
+
+async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '', duration = 0, prewarm = false) {
   const cacheKey = `${videoId}:${itag}`;
   const errors = [];
 
@@ -405,16 +510,49 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     }
   }
 
-  // 2. Relay Invidious: la única vía que entrega audio desde la IP de Vercel.
-  try {
-    const target = await resolveRelay(videoId, itag);
-    const resp = await openUpstream(target, range);
-    cacheTarget(cacheKey, target);
-    return { upstream: resp, errors };
-  } catch (e) {
-    errors.push(`relay: ${e.message}`);
-    console.warn(`[stream] relay falló para ${videoId}: ${e.message}`);
-  }
+  // 2. Carrera: relay del vídeo original contra una copia alternativa.
+  //    El vídeo original de un music video suele tardar ~4 s en rendirse desde
+  //    Vercel; la copia de audio se encuentra en ~2 s por la búsqueda de
+  //    Invidious (que corre en otra región) y se sirve por el mismo relay.
+  const state = { done: false };
+
+  const primaryTask = (async () => {
+    try {
+      const target = await resolveRelay(videoId, itag);
+      if (state.done) return { ok: false };
+      const resp = await openUpstream(target, range);
+      if (state.done) {
+        try { await resp.body?.cancel(); } catch {}
+        return { ok: false };
+      }
+      state.done = true;
+      cacheTarget(cacheKey, target);
+      return { ok: true, upstream: resp };
+    } catch (e) {
+      errors.push(`relay: ${e.message}`);
+      return { ok: false };
+    }
+  })();
+
+  const altTask = (title || artist)
+    ? (async () => {
+        // En el precalentamiento no hay usuario esperando: ve directo a la copia.
+        await delay(prewarm ? 0 : 1200);
+        if (state.done) return { ok: false };
+        const altIds = await findInvidiousAlternatives(videoId, title, artist, duration);
+        if (!altIds.length) {
+          errors.push('invidious alt not found');
+          return { ok: false };
+        }
+        return tryAltCandidates(altIds, itag, range, cacheKey, state, errors);
+      })()
+    : Promise.resolve({ ok: false });
+
+  const winner = await firstSuccess([primaryTask, altTask]);
+  if (winner) return { upstream: winner.upstream, errors };
+
+  // Un precalentamiento fallido no debe encadenar los respaldos lentos.
+  if (prewarm) return { upstream: null, errors };
 
   // 3. MWEB directo: funciona cuando la IP del servidor no está bloqueada
   // (por ejemplo en local o en un host con IP residencial).
@@ -560,6 +698,7 @@ export default async function handler(req, res) {
   const title = param('title') || '';
   const artist = param('artist') || '';
   const duration = Math.max(0, parseInt(param('dur') || '0', 10) || 0);
+  const prewarm = param('prewarm') === '1';
   // full=1 se usa para descargas: devuelve la pista completa en vez de un fragmento.
   const full = param('full') === '1' || param('full') === 'true';
 
@@ -602,7 +741,7 @@ export default async function handler(req, res) {
     ? 'bytes=0-1'
     : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
 
-  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration);
+  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm);
 
   if (buffer) {
     return serveBuffer(buffer, req, res, node, startByte, endByte, full);
