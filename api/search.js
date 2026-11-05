@@ -52,9 +52,24 @@ export default async function handler(req, res) {
 
     // Si es un filtro específico (songs, artists, albums, playlists, videos)
     const lastSec = secList[secList.length - 1] || {};
-    const shelf = lastSec.musicShelfRenderer || lastSec.itemSectionRenderer || {};
-    const rawItems = shelf.contents || [];
-    let nextToken = shelf.continuations?.[0]?.nextContinuationData?.continuation || null;
+    const lastShelf = lastSec.musicShelfRenderer || lastSec.itemSectionRenderer || {};
+    let rawItems = lastShelf.contents || [];
+    let nextToken = lastShelf.continuations?.[0]?.nextContinuationData?.continuation || null;
+
+    // En canciones/vídeos YouTube a veces coloca la pista de audio (ATV) en una
+    // sección distinta a la del vídeo oficial. Recorremos todas las secciones
+    // para no perder esa copia, que suele reproducirse mejor.
+    if (isTrackType) {
+      const collected = [];
+      for (const sec of secList) {
+        const s = sec.musicShelfRenderer || sec.itemSectionRenderer;
+        if (!s || !Array.isArray(s.contents)) continue;
+        collected.push(...s.contents);
+        const cont = s.continuations?.[0]?.nextContinuationData?.continuation;
+        if (cont) nextToken = cont;
+      }
+      if (collected.length) rawItems = collected;
+    }
 
     let items = parseShelfItems(rawItems, type);
 
