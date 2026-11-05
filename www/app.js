@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.7.8 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.7.9 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1400,11 +1400,14 @@
   // resolución completa y empieza casi al instante.
   const proxyPrewarmStarted = new Set();
   function prewarmProxyStream(track) {
-    if (!track || !track.id || proxyPrewarmStarted.has(track.id) || isDownloaded(track.id)) return;
-    if (navigator.onLine === false) return;
+    window.__fsPW = window.__fsPW || { called: 0, skipped: [], started: [] };
+    window.__fsPW.called++;
+    if (!track || !track.id || proxyPrewarmStarted.has(track.id) || isDownloaded(track.id)) { window.__fsPW.skipped.push(track && track.id); return; }
+    if (navigator.onLine === false) { window.__fsPW.skipped.push('offline'); return; }
     const conn = navigator.connection;
-    if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ''))) return;
+    if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ''))) { window.__fsPW.skipped.push('conn'); return; }
     proxyPrewarmStarted.add(track.id);
+    window.__fsPW.started.push(track.id);
 
     const params = new URLSearchParams({
       id: track.id,
@@ -1425,6 +1428,9 @@
   }
 
   function prewarmTracks(tracks) {
+    window.__fsPT = window.__fsPT || { calls: 0, ids: [] };
+    window.__fsPT.calls++;
+    window.__fsPT.ids.push((tracks || []).slice(0, 3).map(t => t && t.id));
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
     // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
@@ -4814,7 +4820,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.7.8'
+      version: '3.7.9'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
