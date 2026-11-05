@@ -9,6 +9,37 @@ export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const relays = relayInstances();
 
+  // PRUEBA TEMPORAL: listar pistas de un álbum desde la IP de Vercel.
+  if (urlObj.searchParams.get('probe') === 'album') {
+    const browseId = urlObj.searchParams.get('id') || '';
+    const needle = (urlObj.searchParams.get('q') || '').toLowerCase();
+    try {
+      const data = await fetchYt('browse', { browseId }, { timeoutMs: 9000, retries: 0 });
+      const found = [];
+      const seen = new Set();
+      const walk = (node) => {
+        if (!node || typeof node !== 'object' || found.length > 60) return;
+        if (Array.isArray(node)) { for (const n of node) walk(n); return; }
+        const r = node.musicResponsiveListItemRenderer;
+        if (r) {
+          const runs = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+          const title = runs.map(x => x.text || '').join('').trim();
+          const vid = r.playlistItemData?.videoId || runs[0]?.navigationEndpoint?.watchEndpoint?.videoId || '';
+          const type = runs[0]?.navigationEndpoint?.watchEndpoint?.watchEndpointMusicSupportedConfigs?.watchEndpointMusicConfig?.musicVideoType || '';
+          if (vid && !seen.has(vid)) {
+            seen.add(vid);
+            if (!needle || title.toLowerCase().includes(needle)) found.push({ vid, title, type });
+          }
+        }
+        for (const k of Object.keys(node)) walk(node[k]);
+      };
+      walk(data);
+      return sendJson(res, { ok: true, browseId, found: found.slice(0, 30) }, 200, 0);
+    } catch (e) {
+      return sendJson(res, { ok: false, error: String(e && e.message || e) }, 200, 0);
+    }
+  }
+
   // Si se solicita información de relays (/api/relay-info o ?relay=1)
   if (urlObj.searchParams.get('relay') === '1' || urlObj.pathname.includes('relay')) {
     const body = { instances: relays };
