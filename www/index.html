@@ -305,12 +305,12 @@
 
         <!-- Barra de Reproducción y Ordenación rápida -->
         <div id="libActionsBar" class="flex items-center justify-between pt-1">
-          <div class="flex items-center gap-2">
-            <button id="libPlayAllBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 text-black font-bold text-xs press shadow-md">
+          <div class="flex items-center gap-2 min-w-0 lib-actions-main">
+            <button id="libPlayAllBtn" class="lib-action-btn flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500 text-black font-bold text-xs press shadow-md">
               <svg class="w-4 h-4"><use href="#i-play"/></svg>
               <span>Reproducir</span>
             </button>
-            <button id="libShuffleAllBtn" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs press">
+            <button id="libShuffleAllBtn" class="lib-action-btn flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs press">
               <svg class="w-4 h-4"><use href="#i-shuffle"/></svg>
               <span>Aleatorio</span>
             </button>
@@ -319,7 +319,7 @@
             </button>
           </div>
           <!-- Selector de Orden -->
-          <div class="flex items-center gap-1 text-[11px] text-zinc-400">
+          <div class="flex items-center gap-1 text-[11px] text-zinc-400 lib-sort-wrap shrink-0">
             <span>Orden:</span>
             <select id="libSortSelect" class="bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-emerald-500">
               <option value="recent">Recientes</option>
@@ -538,7 +538,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.7.1 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.7.2 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -1070,6 +1070,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.7.1"></script>
+  <script src="app.js?v=3.7.2"></script>
 </body>
 </html>

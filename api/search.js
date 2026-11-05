@@ -190,6 +190,7 @@ async function improveTrackSearch(plan, altPromise, type, items, nextToken) {
 function parseShelfItems(rawList, expectedType) {
   const items = [];
   const seen = new Set();
+  const seenSongs = new Set();
 
   for (const item of rawList) {
     const r = item.musicResponsiveListItemRenderer;
@@ -277,6 +278,14 @@ function parseShelfItems(rawList, expectedType) {
 
       // Si dura más de 20 minutos probablemente sea un DJ mix o compilación completa no deseada como canción suelta
       if (durSec > 1200) continue;
+
+      // YouTube Music devuelve a veces la misma grabación subida dos veces
+      // (mismo título, artista y duración). Mostrarla una sola vez evita que el
+      // usuario elija justo la copia que falla en su red.
+      const songKey = `${normalizeSearchText(title)}|${normalizeSearchText(artist)}|${durSec ? Math.round(durSec / 2) : 0}`;
+      const hasVariant = /\b(remix|cover|live|en vivo|sped up|slowed|instrumental|karaoke)\b/i.test(title);
+      if (!hasVariant && seenSongs.has(songKey)) continue;
+      if (!hasVariant) seenSongs.add(songKey);
 
       items.push({
         type: 'song',

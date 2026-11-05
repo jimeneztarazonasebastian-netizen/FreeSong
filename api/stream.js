@@ -2,7 +2,7 @@
 // Resuelve URLs directas de googlevideo vía clientes nativos móviles (IOS / ANDROID)
 // Soporta AAC (itags 140/139), Opus (itags 251/250) y fallback de búsqueda automática
 import { Readable } from 'stream';
-import { fetchYt, getRunsText, normalizeCookieInput } from './_yt.js';
+import { fetchYt, getRunsText, normalizeCookieInput, parseDuration } from './_yt.js';
 import { getAudioBuffer, getCookie, resolveMwebAudio } from './_hls.js';
 import { resolveRelayAudio } from './_relay.js';
 
@@ -269,8 +269,53 @@ async function openUpstream(target, range) {
   }
 }
 
-// Búsqueda automática de canción alternativa si un videoId específico está bloqueado o caído
-async function findAlternativeVideoId(title, artist, originalId) {
+// Búsqueda automática de canción alternativa si un videoId específico está bloqueado o caído.
+// IMPORTANTE: solo se acepta un resultado que sea REALMENTE la misma canción.
+// Antes se devolvía el primer resultado distinto y eso reproducía otra pista
+// (p. ej. buscar "Candy Plan B" terminaba sirviendo "Sexo, Sudor y Calor").
+const TITLE_VARIANTS_RE = /\b(remix|cover|live|en vivo|sped up|slowed|reverb|instrumental|karaoke|tribute|parody)\b/i;
+const TITLE_NOISE_RE = /\b(official|videoclip|video|audio|visualizer|lyric|lyrics|letra|hd|hq|4k|8k|remaster(?:ed)?|version)\b/gi;
+
+function normalizeSongText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}']+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function coreSongTitle(value) {
+  // Quita aclaraciones entre paréntesis/corchetes ("Official Video", "Remix")
+  // y palabras de relleno habituales. El núcleo debe coincidir exactamente.
+  const withoutBrackets = String(value || '').replace(/\([^)]*\)|\[[^\]]*\]/g, ' ');
+  return normalizeSongText(withoutBrackets.replace(TITLE_NOISE_RE, ' '));
+}
+
+function isSameSongCandidate(candidateTitle, candidateArtist, title, artist, candidateDuration, duration) {
+  const candidateCore = coreSongTitle(candidateTitle);
+  const originalCore = coreSongTitle(title);
+  if (!candidateCore || !originalCore || candidateCore !== originalCore) return false;
+
+  // Una versión (remix, cover, directo...) no sustituye a la canción original.
+  if (TITLE_VARIANTS_RE.test(candidateTitle) && !TITLE_VARIANTS_RE.test(title)) return false;
+
+  if (duration > 0 && candidateDuration > 0) {
+    // Misma canción publicada en otro vídeo: la duración debe ser casi idéntica.
+    if (Math.abs(candidateDuration - duration) > 10) return false;
+  }
+
+  const candidateArtistNorm = normalizeSongText(candidateArtist);
+  const originalArtistNorm = normalizeSongText(artist);
+  if (!originalArtistNorm) return true;
+  if (!candidateArtistNorm) return false;
+  return candidateArtistNorm === originalArtistNorm
+    || candidateArtistNorm.includes(originalArtistNorm)
+    || originalArtistNorm.includes(candidateArtistNorm);
+}
+
+async function findAlternativeVideoId(title, artist, originalId, duration = 0) {
   if (!title) return null;
   const q = `${title} ${artist || ''}`.trim();
   try {
@@ -280,13 +325,25 @@ async function findAlternativeVideoId(title, artist, originalId) {
     });
     const secList = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
     for (const s of secList) {
-      const list = s.musicShelfRenderer?.contents || [];
+      const list = s.musicShelfRenderer?.contents || s.itemSectionRenderer?.contents || [];
       for (const it of list) {
         const r = it.musicResponsiveListItemRenderer;
         if (!r) continue;
-        const titleRun = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0];
-        const vid = titleRun?.navigationEndpoint?.watchEndpoint?.videoId;
-        if (vid && vid !== originalId) return vid;
+        const col0 = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+        const col1 = r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+        const candidateTitle = getRunsText(col0);
+        const subText = getRunsText(col1);
+        const candidateArtist = subText.split('•')[0].trim();
+        const candidateDuration = parseDuration(subText.split('•').pop().trim()).durationSeconds;
+
+        const vid = r.playlistItemData?.videoId
+          || col0[0]?.navigationEndpoint?.watchEndpoint?.videoId
+          || r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId
+          || r.navigationEndpoint?.watchEndpoint?.videoId;
+        if (!vid || vid === originalId) continue;
+        if (isSameSongCandidate(candidateTitle, candidateArtist, title, artist, candidateDuration, duration)) {
+          return vid;
+        }
       }
     }
   } catch {}
@@ -320,7 +377,7 @@ function cacheTarget(cacheKey, target) {
   urlCache.set(cacheKey, { ...target, expires: Date.now() + URL_TTL_MS });
 }
 
-async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '') {
+async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '', duration = 0) {
   const cacheKey = `${videoId}:${itag}`;
   const errors = [];
 
@@ -385,7 +442,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   // 6. Otra publicación de la misma canción (el vídeo original puede estar caído).
   if (title || artist) {
     try {
-      const altVideoId = await findAlternativeVideoId(title, artist, videoId);
+      const altVideoId = await findAlternativeVideoId(title, artist, videoId, duration);
       if (!altVideoId || altVideoId === videoId) {
         errors.push('alt not found or same as original');
       } else {
@@ -484,6 +541,7 @@ export default async function handler(req, res) {
   const backupIndex = Math.max(0, parseInt(param('backup') || '0', 10) || 0);
   const title = param('title') || '';
   const artist = param('artist') || '';
+  const duration = Math.max(0, parseInt(param('dur') || '0', 10) || 0);
   // full=1 se usa para descargas: devuelve la pista completa en vez de un fragmento.
   const full = param('full') === '1' || param('full') === 'true';
 
@@ -526,7 +584,7 @@ export default async function handler(req, res) {
     ? 'bytes=0-1'
     : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
 
-  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist);
+  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration);
 
   if (buffer) {
     return serveBuffer(buffer, req, res, node, startByte, endByte, full);
