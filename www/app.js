@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.7.7 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.7.8 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1429,20 +1429,16 @@
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
     // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
     const candidates = tracks.slice(0, 6).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
-    let proxyWarmups = 0;
+
+    // Calienta el proxy en paralelo desde el primer instante para las dos
+    // primeras pistas. El HEAD solo pide 2 bytes, así que es barato, y deja la
+    // URL de audio resuelta antes de que el usuario toque la canción.
+    for (const t of candidates.slice(0, 2)) prewarmProxyStream(t);
+
     for (const t of candidates) {
       resolveRelaySource(t.id, S.audioQuality).then((src) => {
         if (src) rememberRelaySource(t, src);
-        else if (proxyWarmups < 2) {
-          proxyWarmups++;
-          prewarmProxyStream(t);
-        }
-      }).catch(() => {
-        if (proxyWarmups < 2) {
-          proxyWarmups++;
-          prewarmProxyStream(t);
-        }
-      });
+      }).catch(() => {});
     }
   }
 
@@ -4818,7 +4814,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.7.7'
+      version: '3.7.8'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
