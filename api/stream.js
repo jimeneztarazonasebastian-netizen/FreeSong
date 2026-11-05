@@ -317,12 +317,25 @@ function isSameSongCandidate(candidateTitle, candidateArtist, title, artist, can
 
 async function findAlternativeVideoId(title, artist, originalId, duration = 0) {
   if (!title) return null;
-  const q = `${title} ${artist || ''}`.trim();
-  try {
-    const data = await fetchYt('search', {
-      query: q,
-      params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
-    });
+  const queryWithArtist = `${title} ${artist || ''}`.trim();
+  const queryTitleOnly = String(title).trim();
+
+  const search = (query) => fetchYt('search', {
+    query,
+    params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
+  }).catch(() => null);
+
+  // Dos búsquedas en paralelo: la específica suele acertar antes, pero si no
+  // aparece otra publicación de la misma canción, la búsqueda solo por título
+  // encuentra la copia alternativa (p. ej. el segundo "Candy" de Plan B).
+  const plans = [search(queryWithArtist)];
+  if (normalizeSongText(queryTitleOnly) !== normalizeSongText(queryWithArtist)) {
+    plans.push(search(queryTitleOnly));
+  }
+  const results = await Promise.all(plans);
+
+  for (const data of results) {
+    if (!data) continue;
     const secList = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
     for (const s of secList) {
       const list = s.musicShelfRenderer?.contents || s.itemSectionRenderer?.contents || [];
@@ -346,7 +359,7 @@ async function findAlternativeVideoId(title, artist, originalId, duration = 0) {
         }
       }
     }
-  } catch {}
+  }
   return null;
 }
 
