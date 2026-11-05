@@ -323,7 +323,7 @@ async function findAlternativeVideoId(title, artist, originalId, duration = 0) {
   const search = (query) => fetchYt('search', {
     query,
     params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
-  }).catch(() => null);
+  }, { timeoutMs: 5000, retries: 0 }).catch(() => null);
 
   // Dos búsquedas en paralelo: la específica suele acertar antes, pero si no
   // aparece otra publicación de la misma canción, la búsqueda solo por título

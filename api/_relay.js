@@ -22,7 +22,7 @@ function configuredInstances() {
   return fromEnv.length ? fromEnv : DEFAULT_INSTANCES;
 }
 
-const RESOLVE_TIMEOUT_MS = 9000;
+const RESOLVE_TIMEOUT_MS = 4000;
 const BAD_TTL_MS = 5 * 60 * 1000;
 
 // Instancia que respondió bien la última vez: se prueba primero.

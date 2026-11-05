@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.7.5 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.7.6 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1395,15 +1395,54 @@
     }).catch(() => {});
   }
 
+  // Si el relay directo no funciona, calienta el proxy de Vercel en segundo
+  // plano. Así el primer toque en una canción problemática no espera la
+  // resolución completa y empieza casi al instante.
+  const proxyPrewarmStarted = new Set();
+  function prewarmProxyStream(track) {
+    if (!track || !track.id || proxyPrewarmStarted.has(track.id) || isDownloaded(track.id)) return;
+    if (navigator.onLine === false) return;
+    const conn = navigator.connection;
+    if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ''))) return;
+    proxyPrewarmStarted.add(track.id);
+
+    const params = new URLSearchParams({
+      id: track.id,
+      itag: S.audioQuality,
+      title: track.title || '',
+      artist: track.artist || ''
+    });
+    const durSec = Math.round(Number(track.durationSeconds || track.duration || 0));
+    if (durSec > 0) params.set('dur', String(durSec));
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    fetch(`/api/stream?${params.toString()}`, {
+      method: 'HEAD',
+      cache: 'no-store',
+      signal: ctrl.signal
+    }).catch(() => {}).finally(() => clearTimeout(timer));
+  }
+
   function prewarmTracks(tracks) {
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
     // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
     const candidates = tracks.slice(0, 6).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
+    let proxyWarmups = 0;
     for (const t of candidates) {
       resolveRelaySource(t.id, S.audioQuality).then((src) => {
         if (src) rememberRelaySource(t, src);
-      }).catch(() => {});
+        else if (proxyWarmups < 2) {
+          proxyWarmups++;
+          prewarmProxyStream(t);
+        }
+      }).catch(() => {
+        if (proxyWarmups < 2) {
+          proxyWarmups++;
+          prewarmProxyStream(t);
+        }
+      });
     }
   }
 
@@ -4779,7 +4818,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.7.5'
+      version: '3.7.6'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
