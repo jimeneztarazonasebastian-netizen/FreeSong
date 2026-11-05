@@ -439,20 +439,9 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     }
   }
 
-  // 5. Clientes nativos (suelen quedar en LOGIN_REQUIRED desde Vercel).
-  for (const client of CLIENTS) {
-    try {
-      const target = await resolveWithClient(client, videoId, itag);
-      const resp = await openUpstream(target, range);
-      cacheTarget(cacheKey, target);
-      return { upstream: resp, errors };
-    } catch (e) {
-      errors.push(`${client.name}: ${e.message}`);
-      console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
-    }
-  }
-
-  // 6. Otra publicación de la misma canción (el vídeo original puede estar caído).
+  // 5. Otra publicación de la misma canción (el vídeo original puede estar caído).
+  //    Va antes que los clientes nativos: desde Vercel esos clientes suelen
+  //    responder LOGIN_REQUIRED y solo añaden varios segundos de espera.
   if (title || artist) {
     try {
       const altVideoId = await findAlternativeVideoId(title, artist, videoId, duration);
@@ -504,6 +493,19 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
       }
     } catch (e) {
       errors.push(`alt search error: ${e.message}`);
+    }
+  }
+
+  // 6. Clientes nativos (respaldo final; desde Vercel suelen fallar).
+  for (const client of CLIENTS) {
+    try {
+      const target = await resolveWithClient(client, videoId, itag);
+      const resp = await openUpstream(target, range);
+      cacheTarget(cacheKey, target);
+      return { upstream: resp, errors };
+    } catch (e) {
+      errors.push(`${client.name}: ${e.message}`);
+      console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
     }
   }
 
