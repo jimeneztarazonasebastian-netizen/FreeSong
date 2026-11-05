@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.7.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.7.1 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -32,6 +32,64 @@
 
   // Escapa texto dinámico (títulos, artistas, nombres de playlist) antes de usarlo en innerHTML
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // Las miniaturas de YouTube Music llegan en 120 px. En pantallas Retina eso
+  // se ve pixelado en el reproductor y en las tarjetas. Esta función pide la
+  // variante adecuada al mismo host: 160 px para listas y 480–720 px para
+  // portadas grandes, sin descargar imágenes enormes en cada fila.
+  function thumbAt(url, size = 160) {
+    const raw = String(url || '');
+    if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+    const px = Math.max(64, Math.round(Number(size) || 160));
+    try {
+      const u = new URL(raw, window.location.href);
+      if (/(^|\.)googleusercontent\.com$/i.test(u.hostname)) {
+        // Formatos: ...=w120-h120-l90-rj o ...=s120-c-k-c0x00ffffff-no-rj
+        u.pathname = u.pathname.replace(/=(?:w\d+|h\d+|s\d+)[^/]*$/i, `=w${px}-h${px}-l90-rj`);
+        return u.toString();
+      }
+      if (/(^|\.)ytimg\.com$/i.test(u.hostname)) {
+        const m = u.pathname.match(/^\/vi\/([\w-]+)\//);
+        if (m) {
+          const file = px >= 480 ? 'maxresdefault' : 'mqdefault';
+          return `https://i.ytimg.com/vi/${m[1]}/${file}.jpg`;
+        }
+      }
+    } catch {}
+    return raw;
+  }
+
+  // Aplica una miniatura a un <img> existente y prepara su respaldo.
+  function setThumbSrc(img, track, size) {
+    if (!img) return;
+    if (track && track.id) img.setAttribute('data-vid', track.id);
+    else img.removeAttribute('data-vid');
+    img.removeAttribute('data-thumb-fell-back');
+    img.src = thumbAt(track && track.thumbnail, size) || 'icons/icon-192.png';
+  }
+
+  // Si una portada `maxresdefault` no existe (vídeos antiguos), cae a la
+  // versión estándar sin dejar un hueco roto en la interfaz. Si falla yt3
+  // (YouTube a veces responde 429), se usa el fotograma del vídeo.
+  document.addEventListener('error', (event) => {
+    const img = event.target;
+    if (!img || img.tagName !== 'IMG') return;
+    const src = img.currentSrc || img.src || '';
+
+    if (!img.dataset.thumbFellBack) {
+      const vid = img.getAttribute('data-vid');
+      if (vid) {
+        img.dataset.thumbFellBack = '1';
+        const wide = (img.getBoundingClientRect().width || 0) >= 180;
+        img.src = `https://i.ytimg.com/vi/${vid}/${wide ? 'hqdefault' : 'mqdefault'}.jpg`;
+        return;
+      }
+    }
+
+    if (/maxresdefault\.jpg/.test(src)) {
+      img.src = src.replace('maxresdefault.jpg', 'hqdefault.jpg');
+    }
+  }, true);
 
   // --- Historial del navegador ligado a los paneles: "atrás" (o el gesto) cierra el panel abierto ---
   // Cada panel agrega una entrada al abrirse; al cerrarlo por otro medio hay que retirarla,
@@ -1048,9 +1106,9 @@
         artist: track.artist || 'FreeSong',
         album: 'FreeSong Premium',
         artwork: [
-          { src: track.thumbnail, sizes: '512x512', type: 'image/jpeg' },
-          { src: track.thumbnail, sizes: '256x256', type: 'image/jpeg' },
-          { src: track.thumbnail, sizes: '128x128', type: 'image/jpeg' }
+          { src: thumbAt(track.thumbnail, 512), sizes: '512x512', type: 'image/jpeg' },
+          { src: thumbAt(track.thumbnail, 256), sizes: '256x256', type: 'image/jpeg' },
+          { src: thumbAt(track.thumbnail, 128), sizes: '128x128', type: 'image/jpeg' }
         ]
       });
 
@@ -3055,7 +3113,7 @@
       container.innerHTML = filtered.map((t, idx) => `
         <div class="flex items-center justify-between p-2 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press" data-similar-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
-            <img src="${t.thumbnail}" class="w-10 h-10 rounded-xl object-cover bg-zinc-800 shrink-0" loading="lazy" />
+            <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-10 h-10 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
               <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
               <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
@@ -3173,7 +3231,7 @@
     }
     S.menuTargetTrack = target;
 
-    $('songMenuCover').src = target.thumbnail;
+    setThumbSrc($('songMenuCover'), target, 160);
     $('songMenuTitle').textContent = target.title;
     $('songMenuArtist').textContent = target.artist || 'Artista';
 
@@ -3306,7 +3364,7 @@
     $('artistTopBarTitle').textContent = primaryArtist;
     $('artistHeroName').textContent = primaryArtist;
     if (artistThumb) {
-      $('artistHeroImg').src = artistThumb;
+      $('artistHeroImg').src = thumbAt(artistThumb, 720);
     } else {
       $('artistHeroImg').src = 'icons/icon-512.png';
     }
@@ -3361,7 +3419,7 @@
           $('artistTopBarTitle').textContent = data.artist.name;
         }
         if (data.artist.thumbnail) {
-          $('artistHeroImg').src = data.artist.thumbnail;
+          $('artistHeroImg').src = thumbAt(data.artist.thumbnail, 720);
         }
       }
 
@@ -3369,14 +3427,14 @@
         topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${primaryArtist}</p>`;
       } else {
         if (!artistThumb && !data.artist?.thumbnail && tracks[0]?.thumbnail) {
-          $('artistHeroImg').src = tracks[0].thumbnail;
+          $('artistHeroImg').src = thumbAt(tracks[0].thumbnail, 720);
         }
 
         topListEl.innerHTML = tracks.map((t, idx) => `
           <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-artist-track-idx="${idx}">
             <div class="flex items-center gap-3 min-w-0 flex-1">
               <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-              <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+              <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
                 <div class="flex items-center gap-1.5 mt-0.5">
@@ -3434,7 +3492,7 @@
           albumsListEl.innerHTML = albums.map((alb) => `
             <div class="p-3 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/90 border border-zinc-800/60 transition cursor-pointer press flex flex-col justify-between group" data-album-id="${alb.id}" data-album-title="${esc(alb.title)}">
               <div class="aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
-                <img src="${alb.thumbnail || 'icons/icon-192.png'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+                <img src="${thumbAt(alb.thumbnail || 'icons/icon-192.png', 480)}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
               </div>
               <div class="min-w-0">
                 <p class="text-xs font-bold text-white truncate group-hover:text-emerald-400 transition">${esc(alb.title)}</p>
@@ -3469,7 +3527,7 @@
           <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${art.name}">
             <div class="flex items-center gap-3">
               ${art.thumbnail ? `
-                <img src="${art.thumbnail}" class="w-10 h-10 rounded-full object-cover bg-zinc-800 shadow-md" loading="lazy" />
+                <img src="${thumbAt(art.thumbnail, 160)}" class="w-10 h-10 rounded-full object-cover bg-zinc-800 shadow-md" loading="lazy" />
               ` : `
                 <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-black font-black text-xs shadow-md">
                   ${art.name.slice(0, 2).toUpperCase()}
@@ -3548,7 +3606,7 @@
           : `${meta.author || 'YouTube Music'}`;
         $('collectionTrackCount').textContent = `${tracks.length} canciones`;
         if (meta.thumbnail) {
-          $('collectionHeroImg').src = meta.thumbnail;
+          $('collectionHeroImg').src = thumbAt(meta.thumbnail, 720);
         }
       }
 
@@ -3563,7 +3621,7 @@
         <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-coll-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-            <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+            <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
               <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
               <div class="flex items-center gap-1.5 mt-0.5">
@@ -3626,7 +3684,7 @@
     mini.style.display = 'flex';
 
     const miniCover = $('miniCover');
-    if (miniCover) miniCover.src = track.thumbnail || 'icons/icon-192.png';
+    if (miniCover) setThumbSrc(miniCover, track, 160);
     const miniTitle = $('miniTitle');
     if (miniTitle) miniTitle.textContent = track.title || 'Canción';
     const miniArtist = $('miniArtist');
@@ -3676,7 +3734,8 @@
 
     $('playerTitle').textContent = track.title;
     $('playerArtist').textContent = track.artist || 'Artista';
-    $('playerCover').src = track.thumbnail;
+    // 720 px: nítido en pantallas Retina sin descargar una imagen enorme.
+    setThumbSrc($('playerCover'), track, 720);
 
     updateLikeButton(track);
     updateDownloadButton(track);
@@ -3794,7 +3853,7 @@
       <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/80 border border-zinc-800/80 hover:bg-zinc-800 transition cursor-pointer press" data-stat-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span class="w-5 text-center text-sm font-black text-emerald-400 shrink-0">#${idx + 1}</span>
-          <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
+          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)} • ${count} veces</p>
@@ -3856,7 +3915,7 @@
       if (S.currentIndex >= 0 && S.currentIndex < S.queue.length) {
         const t = S.queue[S.currentIndex];
         nowPlayingWrap.innerHTML = `
-          <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
+          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-emerald-400 truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
@@ -3895,7 +3954,7 @@
             <circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>
           </svg>
         </button>
-        <img src="${t.thumbnail}" alt="" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" loading="lazy" />
+        <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" alt="" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" loading="lazy" />
         <div class="min-w-0 flex-1 ml-2.5">
           <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
           <div class="flex items-center gap-1.5 mt-0.5">
@@ -4163,7 +4222,7 @@
     container.innerHTML = tracks.map((t, idx) => `
       <div class="flex items-center justify-between p-2 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-lib-track-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
-          <img src="${esc(t.thumbnail)}" alt="" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+          <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" alt="" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
@@ -4718,7 +4777,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.7.0'
+      version: '3.7.1'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -4941,7 +5000,7 @@
             ${shelf.items.map((t, itemIdx) => `
               <div class="group relative rounded-2xl bg-zinc-900/60 p-2.5 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-shelf-idx="${sIdx}" data-item-idx="${itemIdx}">
                 <div class="w-full aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
-                  <img src="${t.thumbnail}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+                  <img src="${thumbAt(t.thumbnail, 480)}" data-vid="${esc(t.id)}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
                   <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
                     <div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-lg">
                       <svg class="w-5 h-5"><use href="#i-play"/></svg>
@@ -4985,7 +5044,7 @@
 
     grid.innerHTML = source.map((t, idx) => `
       <div class="flex items-center rounded-xl bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 overflow-hidden cursor-pointer press shadow-sm group" data-quick-idx="${idx}">
-        <img src="${t.thumbnail}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
+        <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
         <span class="text-xs font-bold text-white px-2.5 truncate flex-1 leading-tight">${esc(t.title)}</span>
         <div class="w-7 h-7 rounded-full bg-emerald-500 text-black flex items-center justify-center mr-2 opacity-0 group-hover:opacity-100 transition shadow-md shrink-0">
           <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
@@ -5014,7 +5073,7 @@
       <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/80 border border-zinc-800/60 transition cursor-pointer press group" data-trend-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span class="w-5 text-center text-sm font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-          <img src="${t.thumbnail}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
+          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
@@ -5308,7 +5367,7 @@
         html = items.map((art) => `
           <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-artist-browse="${art.id}" data-artist-name="${esc(art.name || art.title)}" data-artist-thumb="${esc(art.thumbnail || '')}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${art.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-full object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${thumbAt(art.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-full object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <p class="text-sm font-bold text-white truncate">${esc(art.name || art.title)}</p>
@@ -5326,7 +5385,7 @@
         html = items.map((alb) => `
           <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-album-browse="${alb.id}" data-album-title="${esc(alb.title)}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${alb.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${thumbAt(alb.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-bold text-white truncate">${esc(alb.title)}</p>
                 <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(alb.artist)}${alb.year ? ' • ' + esc(alb.year) : ''} • Álbum</p>
@@ -5341,7 +5400,7 @@
         html = items.map((pl) => `
           <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-playlist-browse="${pl.id}" data-playlist-title="${esc(pl.title)}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${pl.thumbnail || 'icons/icon-192.png'}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${thumbAt(pl.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-bold text-white truncate">${esc(pl.title)}</p>
                 <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(pl.author)}${pl.trackCount ? ' • ' + esc(pl.trackCount) : ''}</p>
@@ -5360,7 +5419,7 @@
           return `
             <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${globalIdx}">
               <div class="flex items-center gap-3 min-w-0 flex-1">
-                <img src="${t.thumbnail}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+                <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
                 <div class="min-w-0 flex-1">
                   <p class="text-sm font-bold text-white truncate">${esc(t.title)}</p>
                   <div class="flex items-center gap-1.5 mt-0.5">

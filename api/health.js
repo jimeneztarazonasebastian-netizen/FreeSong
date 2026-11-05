@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   return sendJson(res, {
     ok,
     checkedAt: new Date().toISOString(),
-    version: '3.7.0',
+    version: '3.7.1',
     engine: {
       name: 'YouTube Music (InnerTube)',
       reachable,

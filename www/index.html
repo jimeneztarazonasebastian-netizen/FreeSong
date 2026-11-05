@@ -538,7 +538,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.7.0 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.7.1 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -555,7 +555,7 @@
       </div>
 
       <div class="flex items-center gap-3 min-w-0 flex-1">
-        <img id="miniCover" src="icons/icon-192.png" alt="" class="w-11 h-11 rounded-xl object-cover shrink-0 shadow-md bg-zinc-800" />
+        <img id="miniCover" src="icons/icon-192.png" alt="" class="w-11 h-11 rounded-xl object-cover shrink-0 shadow-md bg-zinc-800" decoding="async" />
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5 min-w-0">
             <span id="miniEq" class="items-end gap-[2px] h-4 shrink-0" style="display:none;" aria-hidden="true">
@@ -632,7 +632,7 @@
       <!-- Vista 1: Carátula y detalles de canción -->
       <div id="sheetTrackView" class="flex-1 flex flex-col justify-center items-center my-auto min-h-0 py-2 space-y-5">
         <div class="w-full max-w-[min(76vw,34vh)] aspect-square rounded-3xl overflow-hidden shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] bg-zinc-900 relative">
-          <img id="playerCover" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
+          <img id="playerCover" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" decoding="async" fetchpriority="high" />
         </div>
         <div class="w-full max-w-sm flex items-center justify-between gap-3 px-1">
           <div class="min-w-0 flex-1 text-left">
@@ -829,7 +829,7 @@
       <!-- Hero del Artista -->
       <div class="relative px-5 pt-2 pb-6 space-y-4">
         <div class="w-full aspect-[16/10] max-h-64 rounded-3xl overflow-hidden bg-zinc-900 relative shadow-2xl">
-          <img id="artistHeroImg" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" />
+          <img id="artistHeroImg" src="icons/icon-512.png" alt="" class="w-full h-full object-cover" decoding="async" />
           <div class="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"></div>
           <div class="absolute bottom-4 left-4 right-4 space-y-1">
             <span class="inline-flex items-center gap-1 text-[11px] font-bold text-sky-400 bg-sky-500/20 border border-sky-500/30 px-2 py-0.5 rounded-full backdrop-blur-sm">
@@ -899,7 +899,7 @@
       <!-- Cabecera / Hero de Álbum o Playlist -->
       <div class="relative px-5 pt-2 pb-4 space-y-4">
         <div class="flex flex-col sm:flex-row items-center gap-5 pt-2">
-          <img id="collectionHeroImg" src="icons/icon-512.png" alt="" class="w-44 h-44 sm:w-52 sm:h-52 rounded-2xl object-cover shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] bg-zinc-900 shrink-0" />
+          <img id="collectionHeroImg" src="icons/icon-512.png" alt="" class="w-44 h-44 sm:w-52 sm:h-52 rounded-2xl object-cover shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] bg-zinc-900 shrink-0" decoding="async" />
           <div class="flex-1 text-center sm:text-left space-y-2 min-w-0">
             <span id="collectionTypeBadge" class="inline-block text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Álbum</span>
             <h1 id="collectionHeroTitle" class="text-2xl sm:text-3xl font-black text-white tracking-tight leading-tight truncate">Título</h1>
@@ -1070,6 +1070,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.7.0"></script>
+  <script src="app.js?v=3.7.1"></script>
 </body>
 </html>
