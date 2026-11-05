@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.1 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.2 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -4815,7 +4815,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.1'
+      version: '3.8.2'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);

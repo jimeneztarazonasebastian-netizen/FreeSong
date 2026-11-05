@@ -536,8 +536,9 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
 
   const altTask = (title || artist)
     ? (async () => {
-        // En el precalentamiento no hay usuario esperando: ve directo a la copia.
-        await delay(prewarm ? 0 : 1200);
+        // En el precalentamiento no hay usuario esperando; aun así damos una
+        // pequeña ventaja al vídeo original por si el relay responde rápido.
+        await delay(prewarm ? 700 : 1200);
         if (state.done) return { ok: false };
         const altIds = await findInvidiousAlternatives(videoId, title, artist, duration);
         if (!altIds.length) {
