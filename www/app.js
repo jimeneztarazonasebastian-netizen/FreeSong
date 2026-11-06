@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.3 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.4 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -786,9 +786,35 @@
     }, 600);
   }
 
-  // Reintenta el proxy con una URL nueva antes de saltar al reproductor de YouTube.
-  // Los cortes suelen ser enlaces caducados de googlevideo: una segunda resolución
-  // (backup=1) casi siempre funciona y evita el mensaje de "reintentando".
+  // Vigila el arranque de una pista. Se reprograma solo: si un intento se
+  // queda colgado, avanza al siguiente en vez de dejar la cola en silencio.
+  function armStreamWatchdog(track, delayMs = 6000, secondPhase = false) {
+    if (streamWatchdogTimer) {
+      clearTimeout(streamWatchdogTimer);
+      streamWatchdogTimer = null;
+    }
+    streamWatchdogTimer = setTimeout(() => {
+      streamWatchdogTimer = null;
+      const p = getActivePlayer();
+      if (!p || !track) return;
+      if (!S.isPlaying || userIntentionalPause || isTransitioningTrack) return;
+      if (S.queue[S.currentIndex] !== track) return;
+      // Ya arrancó: no hay nada que vigilar.
+      if (p.currentTime > 0.35 && p.readyState >= 2) return;
+      if (p.readyState >= 2 && !secondPhase) {
+        // Llegaron metadatos pero sigue clavado en 0:00; dale un margen corto.
+        armStreamWatchdog(track, 4500, true);
+        return;
+      }
+      console.warn('Watchdog: el audio no arrancó, ejecutando fallback...');
+      try { p.volume = S.audioNormalize ? 0.88 : 1.0; } catch {}
+      handleStreamFailure(track, p);
+    }, delayMs);
+  }
+
+  // Reintenta con una URL nueva sin esperar resoluciones lentas: el proxy de
+  // Vercel con `backup` responde en 1-2 s, mientras que reintentar el relay
+  // directo podía bloquear la cola hasta 6 s más.
   async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
@@ -817,44 +843,44 @@
       }
 
       const step = Number(track._fallbackStep) || 0;
-      if (step < 3) {
-        track._fallbackStep = step + 1;
-        delete track.streamUrl;
-        delete track._relayExpires;
-
-        // Primer reintento: URL directa nueva del relay (rápida, sin pasar por Vercel).
-        let nextUrl = '';
-        if (step === 0) {
-          const source = await resolveRelaySource(track.id, S.audioQuality).catch(() => null);
-          if (source) {
-            rememberRelaySource(track, source);
-            nextUrl = source.url;
-          }
-        }
-        if (!nextUrl) nextUrl = buildStreamUrl(track, track._fallbackStep);
-
-        if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
-
-        try {
-          const seek = () => {
-            try {
-              if (resumeAt > 0 && (!isFinite(player.duration) || resumeAt < player.duration - 1)) {
-                player.currentTime = resumeAt;
-              }
-            } catch {}
-          };
-          if (resumeAt > 0) player.addEventListener('canplay', seek, { once: true });
-          player.src = nextUrl;
-          player.load();
-          if (resumeAt > 0) seek();
-          const pr = player.play();
-          if (pr && pr.catch) pr.catch(() => {});
-          return;
-        } catch {}
+      if (step >= 3) {
+        noteStreamFailure();
+        skipFailedTrack(track);
+        return;
       }
 
-      noteStreamFailure();
-      skipFailedTrack(track);
+      track._fallbackStep = step + 1;
+      delete track.streamUrl;
+      delete track._relayExpires;
+      delete track._relaySize;
+
+      // Si la URL directa falló, no vuelvas a pedir la misma: pasa ya al proxy
+      // con una resolución nueva. El relay se refresca en segundo plano para
+      // la próxima reproducción.
+      if (step === 0) {
+        resolveRelaySource(track.id, S.audioQuality, true).catch(() => {});
+      }
+      const nextUrl = buildStreamUrl(track, track._fallbackStep);
+
+      if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+
+      try {
+        const seek = () => {
+          try {
+            if (resumeAt > 0 && (!isFinite(player.duration) || resumeAt < player.duration - 1)) {
+              player.currentTime = resumeAt;
+            }
+          } catch {}
+        };
+        if (resumeAt > 0) player.addEventListener('canplay', seek, { once: true });
+        player.src = nextUrl;
+        player.load();
+        if (resumeAt > 0) seek();
+        const pr = player.play();
+        if (pr && pr.catch) pr.catch(() => {});
+        armStreamWatchdog(track, 7000);
+        return;
+      } catch {}
     } finally {
       track._recovering = false;
     }
@@ -1289,14 +1315,20 @@
 
   // Devuelve { url, itag, size, relay, expires } o null. Deduplica peticiones
   // simultáneas (Safari pide varios rangos de golpe) y cachea ~20 minutos.
-  async function resolveRelaySource(videoId, wantedItag) {
+  async function resolveRelaySource(videoId, wantedItag, force = false) {
     if (!videoId) return null;
     const cacheKey = `${videoId}:${wantedItag || ''}`;
-    const cached = relaySources.get(cacheKey);
-    if (cached && cached.expires > Date.now()) return cached;
-    const failedUntil = relaySourceFailures.get(cacheKey);
-    if (failedUntil && failedUntil > Date.now()) return null;
-    if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
+    if (force) {
+      // Un intento fallido no debe devolver siempre el mismo enlace roto.
+      relaySources.delete(cacheKey);
+      relaySourceFailures.delete(cacheKey);
+    } else {
+      const cached = relaySources.get(cacheKey);
+      if (cached && cached.expires > Date.now()) return cached;
+      const failedUntil = relaySourceFailures.get(cacheKey);
+      if (failedUntil && failedUntil > Date.now()) return null;
+      if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
+    }
 
     const task = (async () => {
       const bases = loadRelayBases();
@@ -1496,17 +1528,26 @@
     // lista y empezará en ~0,3 s en vez de esperar al proxy de Vercel.
     resolveRelaySource(nextTrack.id, S.audioQuality).then((source) => {
       if (!source) return;
+      // La cola pudo cambiar mientras resolvía: no precargues una pista que ya
+      // no es la siguiente.
+      const stillNext = getNextIndex();
+      if (S.queue[stillNext] !== nextTrack) return;
       rememberRelaySource(nextTrack, source);
 
-      if (!isBackground() && !isIOS) {
+      // En iPhone también se deja listo el otro deck: al cambiar de canción se
+      // reutiliza su buffer en vez de volver a descargar desde cero.
+      if (!isBackground() && !isDownloaded(nextTrack.id)) {
         const inact = getInactivePlayer();
         // La marca guarda QUÉ pista está precargada: un booleano impedía
         // precargar la siguiente canción después del primer cambio de pista.
         if (inact && inact.paused && inact.dataset.prefetchedId !== nextTrack.id) {
-          inact.dataset.prefetchedId = nextTrack.id;
-          inact.src = source.url;
-          inact.preload = 'auto';
-          inact.muted = true;
+          try {
+            inact.dataset.prefetchedId = nextTrack.id;
+            inact.muted = true;
+            inact.preload = 'auto';
+            inact.src = source.url;
+            inact.load();
+          } catch {}
         }
       }
     }).catch(() => {});
@@ -1883,7 +1924,31 @@
     // Crossfade elegante SOLO de forma automática al final natural (!immediate)
     const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
     const outPlayer = getActivePlayer();
-    const inPlayer = shouldCrossfade ? getInactivePlayer() : getActivePlayer();
+    let inPlayer;
+    let reusingPrefetched = false;
+
+    if (shouldCrossfade) {
+      inPlayer = getInactivePlayer();
+    } else {
+      // Si el otro deck ya tiene esta pista precargada, se reproduce desde ESE
+      // deck. Antes se descartaba su buffer y se volvía a pedir la canción en
+      // el deck actual: eso añadía 1-3 s en cada cambio automático (y en iPhone).
+      const prefetched = getInactivePlayer();
+      const prefetchedSrc = prefetched ? (prefetched.currentSrc || prefetched.src || '') : '';
+      if (
+        prefetched &&
+        prefetched.dataset.prefetchedId === track.id &&
+        prefetchedSrc &&
+        prefetchedSrc === streamUrl &&
+        !prefetched.error
+      ) {
+        activeDeckIdx = 1 - activeDeckIdx;
+        inPlayer = prefetched;
+        reusingPrefetched = true;
+      } else {
+        inPlayer = outPlayer;
+      }
+    }
 
     delete inPlayer.dataset.retried;
     delete inPlayer.dataset.prefetched;
@@ -1916,21 +1981,46 @@
         inPlayer.volume = targetVolume;
         inPlayer.playbackRate = S.playbackRate;
 
-        // Reset de posición
-        try { inPlayer.currentTime = 0; } catch {}
+        if (reusingPrefetched) {
+          // Ya está cargada y con buffer: NO reasignar `src` (reiniciaría la
+          // descarga y provocaría el silencio de varios segundos).
+          try {
+            if (inPlayer.currentTime > 0.25) inPlayer.currentTime = 0;
+          } catch {}
+          applyPendingResume(inPlayer, track);
+          const playPromise = inPlayer.play();
+          if (playPromise && playPromise.catch) {
+            playPromise.catch((err) => {
+              if (err.name !== 'AbortError') {
+                console.warn('inPlayer play error:', err);
+                reusingPrefetched = false;
+                delete inPlayer.dataset.prefetchedId;
+                if (S.queue[S.currentIndex] === track && !userIntentionalPause) {
+                  handleStreamFailure(track, inPlayer);
+                } else {
+                  S.isPlaying = false;
+                  updatePlayPauseIcons(false, false);
+                }
+              }
+            });
+          }
+        } else {
+          // Reset de posición
+          try { inPlayer.currentTime = 0; } catch {}
 
-        // Asignación directa y 100% síncrona en iOS Safari
-        inPlayer.src = streamUrl;
-        applyPendingResume(inPlayer, track);
-        const playPromise = inPlayer.play();
-        if (playPromise && playPromise.catch) {
-          playPromise.catch((err) => {
-            if (err.name !== 'AbortError') {
-              console.warn('inPlayer play error:', err);
-              S.isPlaying = false;
-              updatePlayPauseIcons(false, false);
-            }
-          });
+          // Asignación directa y 100% síncrona en iOS Safari
+          inPlayer.src = streamUrl;
+          applyPendingResume(inPlayer, track);
+          const playPromise = inPlayer.play();
+          if (playPromise && playPromise.catch) {
+            playPromise.catch((err) => {
+              if (err.name !== 'AbortError') {
+                console.warn('inPlayer play error:', err);
+                S.isPlaying = false;
+                updatePlayPauseIcons(false, false);
+              }
+            });
+          }
         }
       }
 
@@ -1946,34 +2036,8 @@
 
       // Watchdog en dos fases: si a los 6 s no llegó ni un byte de metadatos,
       // la URL está muerta y se reintenta de inmediato. Si ya hay metadatos
-      // pero sigue en 0:00, se le dan 6 s más antes de intervenir.
-      if (streamWatchdogTimer) clearTimeout(streamWatchdogTimer);
-      const checkStuck = () => {
-        const p = getActivePlayer();
-        if (isTransitioningTrack || !S.isPlaying || userIntentionalPause || !p) return false;
-        return p.currentTime === 0 || p.readyState < 2;
-      };
-      streamWatchdogTimer = setTimeout(() => {
-        if (!checkStuck()) return;
-        const p = getActivePlayer();
-        if (!p) return;
-        if (p.readyState === 0) {
-          console.warn('Watchdog de 6s: sin metadatos de audio, ejecutando fallback...');
-          const targetVol = S.audioNormalize ? 0.88 : 1.0;
-          p.volume = targetVol;
-          handleStreamFailure(track, p);
-          return;
-        }
-        streamWatchdogTimer = setTimeout(() => {
-          if (!checkStuck()) return;
-          console.warn('Watchdog de 12s: Audio trabado en 0:00, ejecutando fallback...');
-          const q = getActivePlayer();
-          if (!q) return;
-          const targetVol = S.audioNormalize ? 0.88 : 1.0;
-          q.volume = targetVol;
-          handleStreamFailure(track, q);
-        }, 6000);
-      }, 6000);
+      // pero sigue en 0:00, se le dan unos segundos más antes de intervenir.
+      armStreamWatchdog(track);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
@@ -4868,7 +4932,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.3'
+      version: '3.8.4'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
