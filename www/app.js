@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.2 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.3 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -262,7 +262,9 @@
   let streamWatchdogTimer = null;
   let lastSkipTimestamp = 0;
   let consecutiveStreamFailures = 0;
+  let consecutiveSkippedTracks = 0;
   const MAX_STREAM_FAILURES = 3; // fallbacks/saltos seguidos antes de detenerse
+  const MAX_SKIPPED_TRACKS = 4; // pistas seguidas que se saltan antes de parar
 
   function getActivePlayer() {
     return audioDecks[activeDeckIdx];
@@ -756,14 +758,32 @@
     showToast('El motor de audio no responde (posible bloqueo de YouTube). Compruébalo en Ajustes → Estado del servicio.', 4400);
   }
 
-  // Devuelve false si ya se superó el máximo de fallos seguidos (y detiene la reproducción).
+  // Devuelve false si ya se superó el máximo de fallos seguidos.
   function noteStreamFailure() {
     consecutiveStreamFailures++;
-    if (consecutiveStreamFailures > MAX_STREAM_FAILURES) {
+    return consecutiveStreamFailures <= MAX_STREAM_FAILURES;
+  }
+
+  // Una pista imposible no debe detener toda la cola: se salta a la siguiente.
+  // Si se encadenan varias pistas rotas, entonces sí se detiene para no entrar
+  // en un bucle de saltos.
+  function skipFailedTrack(track) {
+    if (S.queue.length <= 1) {
       stopAfterStreamFailures();
-      return false;
+      return;
     }
-    return true;
+    consecutiveSkippedTracks++;
+    if (consecutiveSkippedTracks > MAX_SKIPPED_TRACKS) {
+      stopAfterStreamFailures();
+      return;
+    }
+    console.warn(`[FreeSong] Saltando pista no reproducible: ${track && track.title}`);
+    showToast(`No se pudo reproducir "${track ? track.title : 'esta pista'}". Pasando a la siguiente...`, 2400);
+    setTimeout(() => {
+      if (userIntentionalPause) return;
+      if (S.queue[S.currentIndex] && S.queue[S.currentIndex].id !== (track && track.id)) return;
+      playNext(true);
+    }, 600);
   }
 
   // Reintenta el proxy con una URL nueva antes de saltar al reproductor de YouTube.
@@ -797,7 +817,7 @@
       }
 
       const step = Number(track._fallbackStep) || 0;
-      if (step < 2) {
+      if (step < 3) {
         track._fallbackStep = step + 1;
         delete track.streamUrl;
         delete track._relayExpires;
@@ -833,9 +853,8 @@
         } catch {}
       }
 
-      if (!noteStreamFailure()) return;
-      console.warn(`[FreeSong] Conectando motor de audio alternativo para "${track.title}" (${track.id})...`);
-      playWithYouTubeEngine(track);
+      noteStreamFailure();
+      skipFailedTrack(track);
     } finally {
       track._recovering = false;
     }
@@ -907,6 +926,7 @@
         }
       }
       if (idx === activeDeckIdx) consecutiveStreamFailures = 0;
+      if (idx === activeDeckIdx) consecutiveSkippedTracks = 0;
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -1180,6 +1200,8 @@
   let relayBasesRefreshStarted = false;
   const relaySources = new Map(); // `${videoId}:${itag}` -> { url, size, expires }
   const relayPending = new Map();
+  const relaySourceFailures = new Map(); // evita repetir el 500 de un vídeo que no existe
+  const RELAY_FAIL_TTL_MS = 90 * 1000;
   let relayUpgradeToken = 0;
 
   // Caché en disco de URLs ya resueltas: al reabrir la app la primera canción
@@ -1272,6 +1294,8 @@
     const cacheKey = `${videoId}:${wantedItag || ''}`;
     const cached = relaySources.get(cacheKey);
     if (cached && cached.expires > Date.now()) return cached;
+    const failedUntil = relaySourceFailures.get(cacheKey);
+    if (failedUntil && failedUntil > Date.now()) return null;
     if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
 
     const task = (async () => {
@@ -1318,11 +1342,16 @@
           if (relaySources.size > RELAY_PICK_CACHE_MAX) {
             relaySources.delete(relaySources.keys().next().value);
           }
+          relaySourceFailures.delete(cacheKey);
           saveRelayDiskCacheSoon();
           return source;
         } catch (err) {
           console.warn(`[FreeSong] Relay ${base} falló para ${videoId}:`, err.message);
         }
+      }
+      relaySourceFailures.set(cacheKey, Date.now() + RELAY_FAIL_TTL_MS);
+      if (relaySourceFailures.size > 200) {
+        relaySourceFailures.delete(relaySourceFailures.keys().next().value);
       }
       return null;
     })().finally(() => relayPending.delete(cacheKey));
@@ -1422,7 +1451,12 @@
       method: 'HEAD',
       cache: 'no-store',
       signal: ctrl.signal
-    }).catch(() => {}).finally(() => clearTimeout(timer));
+    }).then((res) => {
+      // Si el precalentamiento falló, permite reintentarlo más tarde.
+      if (!res || !res.ok) proxyPrewarmStarted.delete(track.id);
+    }).catch(() => {
+      proxyPrewarmStarted.delete(track.id);
+    }).finally(() => clearTimeout(timer));
   }
 
   function prewarmTracks(tracks) {
@@ -1910,17 +1944,36 @@
         upgradePlaybackToRelay(track, inPlayer);
       }
 
-      // Iniciar Watchdog calibrado de 12 segundos contra canciones trabadas en 0:00 / 0:00
+      // Watchdog en dos fases: si a los 6 s no llegó ni un byte de metadatos,
+      // la URL está muerta y se reintenta de inmediato. Si ya hay metadatos
+      // pero sigue en 0:00, se le dan 6 s más antes de intervenir.
       if (streamWatchdogTimer) clearTimeout(streamWatchdogTimer);
-      streamWatchdogTimer = setTimeout(() => {
+      const checkStuck = () => {
         const p = getActivePlayer();
-        if (!isTransitioningTrack && S.isPlaying && !userIntentionalPause && p && (p.currentTime === 0 || p.readyState < 2)) {
-          console.warn('Watchdog de 12s disparado: Audio trabado en 0:00, ejecutando fallback...');
+        if (isTransitioningTrack || !S.isPlaying || userIntentionalPause || !p) return false;
+        return p.currentTime === 0 || p.readyState < 2;
+      };
+      streamWatchdogTimer = setTimeout(() => {
+        if (!checkStuck()) return;
+        const p = getActivePlayer();
+        if (!p) return;
+        if (p.readyState === 0) {
+          console.warn('Watchdog de 6s: sin metadatos de audio, ejecutando fallback...');
           const targetVol = S.audioNormalize ? 0.88 : 1.0;
-          if (p) p.volume = targetVol;
+          p.volume = targetVol;
           handleStreamFailure(track, p);
+          return;
         }
-      }, 12000);
+        streamWatchdogTimer = setTimeout(() => {
+          if (!checkStuck()) return;
+          console.warn('Watchdog de 12s: Audio trabado en 0:00, ejecutando fallback...');
+          const q = getActivePlayer();
+          if (!q) return;
+          const targetVol = S.audioNormalize ? 0.88 : 1.0;
+          q.volume = targetVol;
+          handleStreamFailure(track, q);
+        }, 6000);
+      }, 6000);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
@@ -4815,7 +4868,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.2'
+      version: '3.8.3'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
