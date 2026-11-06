@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.1 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.2 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -34,7 +34,7 @@
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.1';
+  const APP_VERSION = '3.9.2';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -191,24 +191,20 @@
     });
 
     if (!('serviceWorker' in navigator)) return;
-    const hadController = !!navigator.serviceWorker.controller;
 
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       swRegistration = reg;
-      if (reg.waiting && hadController) showUpdateBanner();
-      reg.addEventListener('updatefound', () => {
-        const worker = reg.installing;
-        if (!worker) return;
-        worker.addEventListener('statechange', () => {
-          if (worker.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner();
-        });
-      });
+      if (reg.waiting) showUpdateBanner();
     }).catch(() => {});
 
-    // Con skipWaiting() la versión nueva puede activarse mientras se escucha.
-    // Solo se avisa (no se recarga) cuando ya había una versión controlando.
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hadController && !updateReloading) showUpdateBanner();
+    // El service worker avisa de su versión al activarse. Solo mostramos el
+    // aviso si la app en pantalla es más antigua: si ya cargó el código nuevo
+    // (Network-First), no tiene sentido pedir una recarga.
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.type !== 'FS_SW_VERSION' || updateReloading) return;
+      const swVersion = String(data.version || '').replace(/^freesong-v/, '');
+      if (swVersion && swVersion !== APP_VERSION) showUpdateBanner();
     });
 
     // Busca actualizaciones al volver a la app, como mucho una vez por hora.
