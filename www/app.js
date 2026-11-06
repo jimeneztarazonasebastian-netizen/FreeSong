@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.0 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.1 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -33,17 +33,19 @@
   // Escapa texto dinámico (títulos, artistas, nombres de playlist) antes de usarlo en innerHTML
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  // Versión y diagnóstico local (sin telemetría). Se inicializan pronto para
-  // que cualquier evento de audio pueda registrar datos sin riesgos.
-  const APP_VERSION = '3.9.0';
-  const DIAG_KEY = 'fs_diag_v1';
-  let diagData = (() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(DIAG_KEY) || 'null');
-      if (saved && typeof saved === 'object') return saved;
-    } catch {}
-    return {};
+  // Versión de la app (fuente única) y puente al diagnóstico local.
+  const APP_VERSION = '3.9.1';
+
+  // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
+  // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
+  const Diag = (() => {
+    const api = window.FreeSongDiag;
+    const noop = () => {};
+    return api && typeof api.inc === 'function'
+      ? api
+      : { init: noop, inc: noop, recordStart: noop, render: noop, reset: noop, copy: noop };
   })();
+  Diag.init({ version: APP_VERSION, toast: showToast });
 
   // Las miniaturas de YouTube Music llegan en 120 px. En pantallas Retina eso
   // se ve pixelado en el reproductor y en las tarjetas. Esta función pide la
@@ -809,7 +811,7 @@
 
   // --- Manejo de Fallback Automático en Fallas de Audio ---
   function stopAfterStreamFailures() {
-    diagInc('stops');
+    Diag.inc('stops');
     consecutiveStreamFailures = 0;
     userIntentionalPause = true;
     S.isPlaying = false;
@@ -845,7 +847,7 @@
   // Si se encadenan varias pistas rotas, entonces sí se detiene para no entrar
   // en un bucle de saltos.
   function skipFailedTrack(track) {
-    diagInc('skips');
+    Diag.inc('skips');
     if (S.queue.length <= 1) {
       stopAfterStreamFailures();
       return;
@@ -921,7 +923,7 @@
       }
 
       const step = Number(track._fallbackStep) || 0;
-      if (step === 0) diagInc('recoveries');
+      if (step === 0) Diag.inc('recoveries');
       if (step >= 3) {
         noteStreamFailure();
         skipFailedTrack(track);
@@ -1031,8 +1033,8 @@
         if (!deck.currentTime || deck.currentTime < 2) {
           S.queue[S.currentIndex]._fallbackStep = 0;
           if (pendingStartId && pendingStartId === S.queue[S.currentIndex].id) {
-            diagRecordStart(Date.now() - pendingStartMark);
-            diagInc(isDirectRelayUrl(deck.currentSrc || deck.src) ? 'relay' : 'proxy');
+            Diag.recordStart(Date.now() - pendingStartMark);
+            Diag.inc(isDirectRelayUrl(deck.currentSrc || deck.src) ? 'relay' : 'proxy');
             pendingStartId = '';
           }
         }
@@ -1586,7 +1588,7 @@
         // la encontrarán sin repetir la búsqueda.
         relaySources.set(cacheKey, source);
         saveRelayDiskCacheSoon();
-        diagInc('alt');
+        Diag.inc('alt');
         return source;
       }
       return null;
@@ -5243,74 +5245,6 @@
     e.target.value = '';
   }
 
-  // --- Diagnóstico local (sin telemetría) ---
-  function saveDiag() {
-    try {
-      diagData.updated = Date.now();
-      localStorage.setItem(DIAG_KEY, JSON.stringify(diagData));
-    } catch {}
-  }
-
-  function diagInc(key, amount = 1) {
-    diagData[key] = (Number(diagData[key]) || 0) + amount;
-    saveDiag();
-  }
-
-  function diagRecordStart(ms) {
-    if (!(ms > 0) || ms > 120000) return;
-    diagData.plays = (Number(diagData.plays) || 0) + 1;
-    diagData.startCount = (Number(diagData.startCount) || 0) + 1;
-    diagData.startTotalMs = (Number(diagData.startTotalMs) || 0) + Math.round(ms);
-    diagData.lastStartMs = Math.round(ms);
-    saveDiag();
-  }
-
-  function fmtDiagMs(ms) {
-    if (!(ms > 0)) return '—';
-    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
-  }
-
-  function renderDiagnostics() {
-    const summary = $('diagSummary');
-    const detail = $('diagDetail');
-    if (!summary || !detail) return;
-    const plays = Number(diagData.plays) || 0;
-    const count = Number(diagData.startCount) || 0;
-    const avg = count ? Math.round((Number(diagData.startTotalMs) || 0) / count) : 0;
-    if (!plays && !diagData.recoveries && !diagData.skips) {
-      summary.textContent = 'Todavía no hay datos. Reproduce algunas canciones y vuelve aquí.';
-      detail.textContent = 'Se guardan solo en este dispositivo; no se envía nada a ningún servidor.';
-      return;
-    }
-    summary.textContent = `${plays} reproducciones · arranque medio ${fmtDiagMs(avg)} · último ${fmtDiagMs(diagData.lastStartMs)}`;
-    detail.textContent = `${diagData.recoveries || 0} recuperaciones · ${diagData.skips || 0} pistas saltadas · ${diagData.alt || 0} copias alternativas · ${diagData.stops || 0} paradas`;
-  }
-
-  function resetDiagnostics() {
-    diagData = {};
-    saveDiag();
-    renderDiagnostics();
-    showToast('Diagnóstico reiniciado');
-  }
-
-  async function copyDiagnostics() {
-    const report = {
-      app: 'FreeSong',
-      version: APP_VERSION,
-      userAgent: navigator.userAgent,
-      online: navigator.onLine,
-      data: diagData
-    };
-    const text = JSON.stringify(report, null, 2);
-    try {
-      if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('sin portapapeles');
-      await navigator.clipboard.writeText(text);
-      showToast('Informe copiado al portapapeles');
-    } catch {
-      showToast('No se pudo copiar. Revisa los permisos del navegador.', 3200);
-    }
-  }
-
   // --- Estado del servicio (diagnóstico del motor de audio) ---
   function setHealthStatus(state, text, detail) {
     const dot = $('healthDot');
@@ -6132,7 +6066,7 @@
     }
     if (tab === 'settings') {
       renderBackupStatus();
-      renderDiagnostics();
+      Diag.render();
       maybeCheckServiceHealth();
     }
   }
@@ -6825,8 +6759,8 @@
 
     // Estado del servicio (diagnóstico del motor de audio)
     $('healthCheckBtn')?.addEventListener('click', checkServiceHealth);
-    $('diagResetBtn')?.addEventListener('click', resetDiagnostics);
-    $('diagCopyBtn')?.addEventListener('click', copyDiagnostics);
+    $('diagResetBtn')?.addEventListener('click', () => Diag.reset());
+    $('diagCopyBtn')?.addEventListener('click', () => Diag.copy());
 
     // Restablecer datos
     $('btnClearData').addEventListener('click', async () => {

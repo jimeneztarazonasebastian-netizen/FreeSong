@@ -12,6 +12,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 - **Playlists propias**: crea, renombra y elimina playlists; abre una para ver, quitar o reproducir sus canciones (guardadas solo en tu dispositivo).
 - **Atajos de teclado (escritorio)**: `Espacio` reproducir/pausar, `←`/`→` retroceder/adelantar 5 s, `Shift+←`/`Shift+→` canción anterior/siguiente.
 - **100% Privado y Seguro**: Sin anuncios, sin rastreadores, sin analíticas. Tus favoritos y playlists se guardan únicamente en tu dispositivo.
+- **Actualizaciones sin cortes**: cuando hay una versión nueva, la app muestra un aviso y solo recarga al tocar **Actualizar**, para no interrumpir la música.
 
 ## 🚀 Despliegue en Vercel
 
@@ -29,6 +30,22 @@ npm run build   # compila Tailwind -> www/app.css
 npm start       # http://localhost:5173 (sirve www/ y emula las funciones de /api)
 npm run icons   # regenera los íconos PNG desde assets/icon.svg
 ```
+
+## ✅ Pruebas automáticas
+
+`npm test` abre Chrome real en modo headless y comprueba el flujo crítico: buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.
+
+```bash
+npm test          # o: npm run test:smoke
+```
+
+Requiere Google Chrome instalado. Usa `playwright-core` con el canal `chrome`, así que no descarga navegadores adicionales.
+
+## 🩺 Diagnóstico local
+
+Ajustes → **Diagnóstico local** muestra reproducciones, tiempo medio de arranque, recuperaciones, pistas saltadas, copias alternativas y paradas. Se guarda solo en `localStorage` (`fs_diag_v1`) en tu dispositivo; no hay telemetría. **Copiar informe** genera un JSON listo para compartir al reportar un fallo.
+
+La lógica vive en `www/diag.js`, separada de `www/app.js` para mantenerla y probarla sin tocar el motor de reproducción. El módulo es opcional: si no carga, la app sigue funcionando sin métricas.
 
 ## 🔊 Cómo funciona el streaming
 
