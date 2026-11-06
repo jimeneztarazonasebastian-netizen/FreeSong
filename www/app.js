@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.4 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.5 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1392,6 +1392,123 @@
     return task;
   }
 
+  // --- Resolución de una copia alternativa de la misma canción ---
+  // La instancia Invidious puede no tener el vídeo original (HTTP 500), pero su
+  // buscador sí encuentra otra publicación de la misma canción. Se resuelve
+  // durante la precarga para que el toque del usuario ya encuentre una URL.
+  const RELAY_TITLE_VARIANTS_RE = /\b(remix|cover|live|en vivo|sped up|slowed|reverb|instrumental|karaoke|tribute|parody|letra|lyrics|lyric)\b/i;
+  const RELAY_TITLE_NOISE_RE = /\b(official|videoclip|video|audio|visualizer|lyric|lyrics|letra|hd|hq|4k|8k|remaster(?:ed)?|version)\b/gi;
+
+  function relayNormalizeText(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}']+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function relayCoreTitle(value) {
+    const withoutBrackets = String(value || '').replace(/\([^)]*\)|\[[^\]]*\]/g, ' ');
+    return relayNormalizeText(withoutBrackets.replace(RELAY_TITLE_NOISE_RE, ' '));
+  }
+
+  function isSameSongRelayCandidate(candidateTitle, candidateArtist, title, artist, candidateDuration, duration) {
+    const candidateCore = relayCoreTitle(candidateTitle);
+    const originalCore = relayCoreTitle(title);
+    const artistCore = relayCoreTitle(artist);
+    if (!candidateCore || !originalCore) return false;
+
+    const cores = new Set([originalCore]);
+    if (artistCore) {
+      cores.add(`${artistCore} ${originalCore}`);
+      cores.add(`${originalCore} ${artistCore}`);
+    }
+    if (!cores.has(candidateCore)) return false;
+
+    if (RELAY_TITLE_VARIANTS_RE.test(candidateTitle) && !RELAY_TITLE_VARIANTS_RE.test(title)) return false;
+
+    if (duration > 0 && candidateDuration > 0 && Math.abs(candidateDuration - duration) > 10) return false;
+
+    const candidateArtistNorm = relayNormalizeText(candidateArtist);
+    const originalArtistNorm = relayNormalizeText(artist);
+    if (!originalArtistNorm) return true;
+
+    const titleHasArtist = new RegExp(`(^|\\s)${originalArtistNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(candidateCore);
+    if (!candidateArtistNorm) return titleHasArtist;
+    return candidateArtistNorm === originalArtistNorm
+      || candidateArtistNorm.includes(originalArtistNorm)
+      || originalArtistNorm.includes(candidateArtistNorm)
+      || titleHasArtist;
+  }
+
+  const relayAltPending = new Map();
+  function resolveRelayAlternative(track) {
+    if (!track || !track.id || !track.title) return Promise.resolve(null);
+    const cacheKey = `${track.id}:${S.audioQuality || ''}`;
+    const existing = relaySources.get(cacheKey);
+    if (existing && existing.expires > Date.now()) return Promise.resolve(existing);
+    if (relayAltPending.has(cacheKey)) return relayAltPending.get(cacheKey);
+
+    const task = (async () => {
+      const query = `${track.title} ${track.artist || ''}`.trim();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      let list = [];
+      try {
+        for (const base of loadRelayBases()) {
+          try {
+            const res = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {
+              headers: { Accept: 'application/json' },
+              cache: 'no-store',
+              signal: ctrl.signal
+            });
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (Array.isArray(data) && data.length) {
+              list = data;
+              break;
+            }
+          } catch {}
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+
+      const duration = Number(track.durationSeconds || track.duration || 0);
+      const candidates = list
+        .filter((item) => item && item.videoId && item.videoId !== track.id)
+        .map((item) => ({
+          id: item.videoId,
+          title: String(item.title || ''),
+          artist: String(item.author || ''),
+          seconds: Number(item.lengthSeconds) || 0
+        }))
+        .filter((item) => isSameSongRelayCandidate(item.title, item.artist, track.title, track.artist, item.seconds, duration))
+        .sort((a, b) => {
+          const da = duration > 0 ? Math.abs(a.seconds - duration) : 0;
+          const db = duration > 0 ? Math.abs(b.seconds - duration) : 0;
+          return da - db;
+        })
+        .slice(0, 3);
+
+      for (const candidate of candidates) {
+        const source = await resolveRelaySource(candidate.id, S.audioQuality);
+        if (!source) continue;
+        // Guárdala también bajo el id original: los siguientes cambios de pista
+        // la encontrarán sin repetir la búsqueda.
+        relaySources.set(cacheKey, source);
+        saveRelayDiskCacheSoon();
+        return source;
+      }
+      return null;
+    })().finally(() => relayAltPending.delete(cacheKey));
+
+    relayAltPending.set(cacheKey, task);
+    return task;
+  }
+
   function isDirectRelayUrl(url) {
     if (!url) return false;
     // Ojo: las URLs del relay llevan `host=...googlevideo.com` en la query,
@@ -1504,7 +1621,15 @@
 
     for (const t of candidates) {
       resolveRelaySource(t.id, S.audioQuality).then((src) => {
-        if (src) rememberRelaySource(t, src);
+        if (src) {
+          rememberRelaySource(t, src);
+          return null;
+        }
+        // La instancia no tiene el vídeo original: busca otra publicación de la
+        // misma canción mientras el usuario aún está eligiendo.
+        return resolveRelayAlternative(t).then((alt) => {
+          if (alt) rememberRelaySource(t, alt);
+        });
       }).catch(() => {});
     }
   }
@@ -1526,7 +1651,7 @@
 
     // Resuelve la URL directa con antelación: al cambiar de canción ya estará
     // lista y empezará en ~0,3 s en vez de esperar al proxy de Vercel.
-    resolveRelaySource(nextTrack.id, S.audioQuality).then((source) => {
+    const applyPrefetch = (source) => {
       if (!source) return;
       // La cola pudo cambiar mientras resolvía: no precargues una pista que ya
       // no es la siguiente.
@@ -1550,6 +1675,14 @@
           } catch {}
         }
       }
+    };
+
+    resolveRelaySource(nextTrack.id, S.audioQuality).then((source) => {
+      if (source) {
+        applyPrefetch(source);
+        return null;
+      }
+      return resolveRelayAlternative(nextTrack).then(applyPrefetch);
     }).catch(() => {});
 
     // Respaldo inmediato por el proxy mientras se resuelve el relay.
@@ -4932,7 +5065,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.4'
+      version: '3.8.5'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -5640,7 +5773,13 @@
             const t = currentSearchResults[idx];
             if (t && t.id && !t.streamUrl) {
               resolveRelaySource(t.id, S.audioQuality).then((src) => {
-                if (src) rememberRelaySource(t, src);
+                if (src) {
+                  rememberRelaySource(t, src);
+                  return null;
+                }
+                return resolveRelayAlternative(t).then((alt) => {
+                  if (alt) rememberRelaySource(t, alt);
+                });
               }).catch(() => {});
             }
           }, { passive: true });
