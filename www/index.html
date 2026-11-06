@@ -516,6 +516,20 @@
           </div>
         </div>
 
+        <!-- Diagnóstico local (sin telemetría) -->
+        <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <div class="pr-3">
+              <p class="font-bold text-sm text-white">Diagnóstico local</p>
+              <p class="text-xs text-zinc-400">Datos de esta sesión guardados solo en tu dispositivo.</p>
+            </div>
+            <button id="diagResetBtn" class="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-zinc-300 press shrink-0">Reiniciar</button>
+          </div>
+          <p id="diagSummary" class="text-xs text-zinc-300 leading-relaxed">Todavía no hay datos.</p>
+          <p id="diagDetail" class="text-[11px] text-zinc-500 leading-relaxed"></p>
+          <button id="diagCopyBtn" class="w-full py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-zinc-200 press">Copiar informe</button>
+        </div>
+
         <!-- Copia de Seguridad: Exportar e Importar Biblioteca -->
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-3">
           <div>
@@ -538,7 +552,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.8.8 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.0 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -1060,6 +1074,19 @@
       <span id="toastText">Mensaje</span>
     </div>
 
+    <!-- Aviso de nueva versión de la PWA (nunca recarga sola) -->
+    <div id="updateBanner" class="hidden fixed top-3 left-1/2 -translate-x-1/2 z-[61] w-[calc(100%-1.5rem)] max-w-sm bg-zinc-900/95 border border-emerald-500/40 rounded-2xl shadow-2xl backdrop-blur-md px-4 py-3 flex items-center gap-3">
+      <svg class="w-5 h-5 text-emerald-400 shrink-0"><use href="#i-download"/></svg>
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-bold text-white">Nueva versión disponible</p>
+        <p class="text-[11px] text-zinc-400 leading-snug">Actualiza para aplicar las mejoras.</p>
+      </div>
+      <button id="updateNowBtn" type="button" class="px-3 py-1.5 rounded-xl bg-emerald-500 text-black text-xs font-black press shrink-0">Actualizar</button>
+      <button id="updateLaterBtn" type="button" aria-label="Ahora no" class="p-1 text-zinc-400 hover:text-white press shrink-0">
+        <svg class="w-4 h-4"><use href="#i-close"/></svg>
+      </button>
+    </div>
+
   <!-- Motor de audio HTML5 nativo de doble deck para Crossfade continuo y reproduccion en segundo plano -->
   <audio id="audioA" playsinline preload="auto"></audio>
   <audio id="audioB" playsinline preload="auto"></audio>
@@ -1070,6 +1097,6 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="app.js?v=3.8.8"></script>
+  <script src="app.js?v=3.9.0"></script>
 </body>
 </html>

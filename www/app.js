@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.8 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.0 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -32,6 +32,18 @@
 
   // Escapa texto dinámico (títulos, artistas, nombres de playlist) antes de usarlo en innerHTML
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // Versión y diagnóstico local (sin telemetría). Se inicializan pronto para
+  // que cualquier evento de audio pueda registrar datos sin riesgos.
+  const APP_VERSION = '3.9.0';
+  const DIAG_KEY = 'fs_diag_v1';
+  let diagData = (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DIAG_KEY) || 'null');
+      if (saved && typeof saved === 'object') return saved;
+    } catch {}
+    return {};
+  })();
 
   // Las miniaturas de YouTube Music llegan en 120 px. En pantallas Retina eso
   // se ve pixelado en el reproductor y en las tarjetas. Esta función pide la
@@ -142,6 +154,70 @@
       toast.classList.remove('opacity-100', 'translate-y-0');
       toast.classList.add('opacity-0', 'pointer-events-none', 'translate-y-[-10px]');
     }, duration);
+  }
+
+  // --- Actualizaciones de la PWA ---
+  // Nunca recarga sola: si hay música sonando, el aviso espera a que la persona
+  // pulse "Actualizar" para no cortar la reproducción.
+  let swRegistration = null;
+  let updateDismissed = false;
+  let updateReloading = false;
+
+  function showUpdateBanner() {
+    const banner = $('updateBanner');
+    if (banner && !updateDismissed) banner.classList.remove('hidden');
+  }
+
+  function hideUpdateBanner() {
+    $('updateBanner')?.classList.add('hidden');
+  }
+
+  function applyAppUpdate() {
+    if (updateReloading) return;
+    updateReloading = true;
+    hideUpdateBanner();
+    try { swRegistration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); } catch {}
+    // Margen para que el nuevo service worker tome el control antes de recargar.
+    setTimeout(() => window.location.reload(), 300);
+  }
+
+  function setupPwaUpdates() {
+    $('updateNowBtn')?.addEventListener('click', applyAppUpdate);
+    $('updateLaterBtn')?.addEventListener('click', () => {
+      updateDismissed = true;
+      hideUpdateBanner();
+    });
+
+    if (!('serviceWorker' in navigator)) return;
+    const hadController = !!navigator.serviceWorker.controller;
+
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      swRegistration = reg;
+      if (reg.waiting && hadController) showUpdateBanner();
+      reg.addEventListener('updatefound', () => {
+        const worker = reg.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner();
+        });
+      });
+    }).catch(() => {});
+
+    // Con skipWaiting() la versión nueva puede activarse mientras se escucha.
+    // Solo se avisa (no se recarga) cuando ya había una versión controlando.
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !updateReloading) showUpdateBanner();
+    });
+
+    // Busca actualizaciones al volver a la app, como mucho una vez por hora.
+    let lastUpdateCheck = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !swRegistration) return;
+      const now = Date.now();
+      if (now - lastUpdateCheck < 60 * 60 * 1000) return;
+      lastUpdateCheck = now;
+      swRegistration.update().catch(() => {});
+    });
   }
 
   // --- Estado Global de la Aplicación (v3.0.0 Ultra) ---
@@ -733,6 +809,7 @@
 
   // --- Manejo de Fallback Automático en Fallas de Audio ---
   function stopAfterStreamFailures() {
+    diagInc('stops');
     consecutiveStreamFailures = 0;
     userIntentionalPause = true;
     S.isPlaying = false;
@@ -768,6 +845,7 @@
   // Si se encadenan varias pistas rotas, entonces sí se detiene para no entrar
   // en un bucle de saltos.
   function skipFailedTrack(track) {
+    diagInc('skips');
     if (S.queue.length <= 1) {
       stopAfterStreamFailures();
       return;
@@ -843,6 +921,7 @@
       }
 
       const step = Number(track._fallbackStep) || 0;
+      if (step === 0) diagInc('recoveries');
       if (step >= 3) {
         noteStreamFailure();
         skipFailedTrack(track);
@@ -911,6 +990,8 @@
   // --- Eventos del Reproductor HTML5 ---
   let isTransitioningTrack = false;
   let trackTransitionTimeout = null;
+  let pendingStartMark = 0;
+  let pendingStartId = '';
 
   audioDecks.forEach((deck, idx) => {
     deck.addEventListener('loadstart', () => {
@@ -949,6 +1030,11 @@
         // mitad de canción conserva el nivel de fallback para no reintentar sin fin.
         if (!deck.currentTime || deck.currentTime < 2) {
           S.queue[S.currentIndex]._fallbackStep = 0;
+          if (pendingStartId && pendingStartId === S.queue[S.currentIndex].id) {
+            diagRecordStart(Date.now() - pendingStartMark);
+            diagInc(isDirectRelayUrl(deck.currentSrc || deck.src) ? 'relay' : 'proxy');
+            pendingStartId = '';
+          }
         }
       }
       if (idx === activeDeckIdx) consecutiveStreamFailures = 0;
@@ -1500,6 +1586,7 @@
         // la encontrarán sin repetir la búsqueda.
         relaySources.set(cacheKey, source);
         saveRelayDiskCacheSoon();
+        diagInc('alt');
         return source;
       }
       return null;
@@ -2120,6 +2207,10 @@
 
     // Configurar volumen de normalización y velocidad
     const targetVolume = S.audioNormalize ? 0.88 : 1.0;
+
+    // Marca para medir el arranque real (diagnóstico local).
+    pendingStartMark = Date.now();
+    pendingStartId = track.id;
 
     try {
       if (shouldCrossfade) {
@@ -5096,7 +5187,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.8'
+      version: APP_VERSION
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -5150,6 +5241,74 @@
     };
     reader.readAsText(file);
     e.target.value = '';
+  }
+
+  // --- Diagnóstico local (sin telemetría) ---
+  function saveDiag() {
+    try {
+      diagData.updated = Date.now();
+      localStorage.setItem(DIAG_KEY, JSON.stringify(diagData));
+    } catch {}
+  }
+
+  function diagInc(key, amount = 1) {
+    diagData[key] = (Number(diagData[key]) || 0) + amount;
+    saveDiag();
+  }
+
+  function diagRecordStart(ms) {
+    if (!(ms > 0) || ms > 120000) return;
+    diagData.plays = (Number(diagData.plays) || 0) + 1;
+    diagData.startCount = (Number(diagData.startCount) || 0) + 1;
+    diagData.startTotalMs = (Number(diagData.startTotalMs) || 0) + Math.round(ms);
+    diagData.lastStartMs = Math.round(ms);
+    saveDiag();
+  }
+
+  function fmtDiagMs(ms) {
+    if (!(ms > 0)) return '—';
+    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+  }
+
+  function renderDiagnostics() {
+    const summary = $('diagSummary');
+    const detail = $('diagDetail');
+    if (!summary || !detail) return;
+    const plays = Number(diagData.plays) || 0;
+    const count = Number(diagData.startCount) || 0;
+    const avg = count ? Math.round((Number(diagData.startTotalMs) || 0) / count) : 0;
+    if (!plays && !diagData.recoveries && !diagData.skips) {
+      summary.textContent = 'Todavía no hay datos. Reproduce algunas canciones y vuelve aquí.';
+      detail.textContent = 'Se guardan solo en este dispositivo; no se envía nada a ningún servidor.';
+      return;
+    }
+    summary.textContent = `${plays} reproducciones · arranque medio ${fmtDiagMs(avg)} · último ${fmtDiagMs(diagData.lastStartMs)}`;
+    detail.textContent = `${diagData.recoveries || 0} recuperaciones · ${diagData.skips || 0} pistas saltadas · ${diagData.alt || 0} copias alternativas · ${diagData.stops || 0} paradas`;
+  }
+
+  function resetDiagnostics() {
+    diagData = {};
+    saveDiag();
+    renderDiagnostics();
+    showToast('Diagnóstico reiniciado');
+  }
+
+  async function copyDiagnostics() {
+    const report = {
+      app: 'FreeSong',
+      version: APP_VERSION,
+      userAgent: navigator.userAgent,
+      online: navigator.onLine,
+      data: diagData
+    };
+    const text = JSON.stringify(report, null, 2);
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('sin portapapeles');
+      await navigator.clipboard.writeText(text);
+      showToast('Informe copiado al portapapeles');
+    } catch {
+      showToast('No se pudo copiar. Revisa los permisos del navegador.', 3200);
+    }
   }
 
   // --- Estado del servicio (diagnóstico del motor de audio) ---
@@ -5973,6 +6132,7 @@
     }
     if (tab === 'settings') {
       renderBackupStatus();
+      renderDiagnostics();
       maybeCheckServiceHealth();
     }
   }
@@ -6665,6 +6825,8 @@
 
     // Estado del servicio (diagnóstico del motor de audio)
     $('healthCheckBtn')?.addEventListener('click', checkServiceHealth);
+    $('diagResetBtn')?.addEventListener('click', resetDiagnostics);
+    $('diagCopyBtn')?.addEventListener('click', copyDiagnostics);
 
     // Restablecer datos
     $('btnClearData').addEventListener('click', async () => {
@@ -6876,9 +7038,7 @@
         .catch(() => {});
     }
 
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
+    setupPwaUpdates();
   });
 
 })();
