@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.5 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.6 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1608,11 +1608,29 @@
     }).finally(() => clearTimeout(timer));
   }
 
+  // Deja el primer resultado ya cargado en el deck inactivo para que el primer
+  // toque arranque casi al instante (antes había que abrir la conexión y
+  // descargar el primer fragmento en ese momento).
+  function primeTrackForInstantStart(track, source) {
+    if (!track || !source || !source.url) return;
+    if (S.isPlaying || S.currentIndex >= 0 || isBackground() || isDownloaded(track.id)) return;
+    const inact = getInactivePlayer();
+    if (!inact || !inact.paused || inact.dataset.prefetchedId === track.id) return;
+    try {
+      inact.dataset.prefetchedId = track.id;
+      inact.muted = true;
+      inact.preload = 'auto';
+      inact.src = source.url;
+      inact.load();
+    } catch {}
+  }
+
   function prewarmTracks(tracks) {
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
     // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
     const candidates = tracks.slice(0, 6).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
+    const primeId = candidates[0] && candidates[0].id;
 
     // Calienta el proxy en paralelo desde el primer instante para las dos
     // primeras pistas. El HEAD solo pide 2 bytes, así que es barato, y deja la
@@ -1623,12 +1641,16 @@
       resolveRelaySource(t.id, S.audioQuality).then((src) => {
         if (src) {
           rememberRelaySource(t, src);
+          if (t.id === primeId) primeTrackForInstantStart(t, src);
           return null;
         }
         // La instancia no tiene el vídeo original: busca otra publicación de la
         // misma canción mientras el usuario aún está eligiendo.
         return resolveRelayAlternative(t).then((alt) => {
-          if (alt) rememberRelaySource(t, alt);
+          if (alt) {
+            rememberRelaySource(t, alt);
+            if (t.id === primeId) primeTrackForInstantStart(t, alt);
+          }
         });
       }).catch(() => {});
     }
@@ -5065,7 +5087,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.5'
+      version: '3.8.6'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
