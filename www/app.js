@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.8.7 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.8.8 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -1541,6 +1541,13 @@
       delete track.streamUrl;
       delete track._relayExpires;
       delete track._relaySize;
+    }
+    // Aunque este objeto pista venga de otra pantalla, aprovecha una URL ya
+    // resuelta (precarga o caché en disco) antes de recurrir al proxy lento.
+    const cached = relaySources.get(`${track.id}:${S.audioQuality || ''}`);
+    if (cached && cached.expires > Date.now()) {
+      rememberRelaySource(track, cached);
+      return cached.url;
     }
     return buildStreamUrl(track);
   }
@@ -5089,7 +5096,7 @@
       stats: S.stats,
       exportedAt: new Date().toISOString(),
       app: 'FreeSong',
-      version: '3.8.7'
+      version: '3.8.8'
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
