@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.3 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.4 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -47,7 +47,7 @@
   });
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.3';
+  const APP_VERSION = '3.9.4';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -135,65 +135,9 @@
     }, duration);
   }
 
-  // --- Actualizaciones de la PWA ---
-  // Nunca recarga sola: si hay música sonando, el aviso espera a que la persona
-  // pulse "Actualizar" para no cortar la reproducción.
-  let swRegistration = null;
-  let updateDismissed = false;
-  let updateReloading = false;
-
-  function showUpdateBanner() {
-    const banner = $('updateBanner');
-    if (banner && !updateDismissed) banner.classList.remove('hidden');
-  }
-
-  function hideUpdateBanner() {
-    $('updateBanner')?.classList.add('hidden');
-  }
-
-  function applyAppUpdate() {
-    if (updateReloading) return;
-    updateReloading = true;
-    hideUpdateBanner();
-    try { swRegistration?.waiting?.postMessage({ type: 'SKIP_WAITING' }); } catch {}
-    // Margen para que el nuevo service worker tome el control antes de recargar.
-    setTimeout(() => window.location.reload(), 300);
-  }
-
-  function setupPwaUpdates() {
-    $('updateNowBtn')?.addEventListener('click', applyAppUpdate);
-    $('updateLaterBtn')?.addEventListener('click', () => {
-      updateDismissed = true;
-      hideUpdateBanner();
-    });
-
-    if (!('serviceWorker' in navigator)) return;
-
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
-      swRegistration = reg;
-      if (reg.waiting) showUpdateBanner();
-    }).catch(() => {});
-
-    // El service worker avisa de su versión al activarse. Solo mostramos el
-    // aviso si la app en pantalla es más antigua: si ya cargó el código nuevo
-    // (Network-First), no tiene sentido pedir una recarga.
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      const data = event.data;
-      if (!data || data.type !== 'FS_SW_VERSION' || updateReloading) return;
-      const swVersion = String(data.version || '').replace(/^freesong-v/, '');
-      if (swVersion && swVersion !== APP_VERSION) showUpdateBanner();
-    });
-
-    // Busca actualizaciones al volver a la app, como mucho una vez por hora.
-    let lastUpdateCheck = 0;
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible' || !swRegistration) return;
-      const now = Date.now();
-      if (now - lastUpdateCheck < 60 * 60 * 1000) return;
-      lastUpdateCheck = now;
-      swRegistration.update().catch(() => {});
-    });
-  }
+  // --- Actualizaciones de la PWA (www/pwa.js) ---
+  // El módulo nunca recarga solo: avisa y espera a que la persona confirme.
+  const Pwa = window.FreeSongPwa;
 
   // --- Estado Global de la Aplicación (v3.0.0 Ultra) ---
   const S = {
@@ -6938,7 +6882,12 @@
         .catch(() => {});
     }
 
-    setupPwaUpdates();
+    if (Pwa && typeof Pwa.init === 'function') {
+      Pwa.init({ version: APP_VERSION });
+    } else if ('serviceWorker' in navigator) {
+      // Respaldo mínimo si el módulo no cargara: al menos mantiene la caché.
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
   });
 
 })();

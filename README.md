@@ -51,9 +51,10 @@ npm run test:smoke # solo Chrome headless
 - `www/app.js`: motor de reproducción, pantallas y estado global.
 - `www/util.js`: helpers puros (escapado HTML, miniaturas, mezcla, duración).
 - `www/diag.js`: métricas locales de reproducción (sin telemetría).
+- `www/pwa.js`: registro del service worker y aviso de actualizaciones.
 - `www/sw.js`: caché de la PWA y aviso de actualizaciones.
 
-Los módulos se cargan como scripts clásicos antes de `app.js` y exponen un objeto en `window` (`FreeSongUtil`, `FreeSongDiag`). Así se pueden probar por separado sin bundler y sin tocar el orden de arranque del reproductor.
+Los módulos se cargan como scripts clásicos antes de `app.js` y exponen un objeto en `window` (`FreeSongUtil`, `FreeSongDiag`, `FreeSongPwa`). Así se pueden probar por separado sin bundler y sin tocar el orden de arranque del reproductor.
 
 ## 🩺 Diagnóstico local
 
