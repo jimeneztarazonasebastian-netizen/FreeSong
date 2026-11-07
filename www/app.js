@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.10 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.11 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.10';
+  const APP_VERSION = '3.9.11';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -5693,7 +5693,8 @@
     }
 
     list.innerHTML = shelves.slice(0, 10).map((shelf, idx) => {
-      const cover = shelf.items.find((track) => track && track.thumbnail) || shelf.items[0];
+      const coverPool = shelf.items.filter((track) => track && track.thumbnail);
+      const cover = coverPool.length ? coverPool[idx % coverPool.length] : shelf.items[0];
       const count = shelf.items.length;
       return `
         <button type="button" class="w-32 shrink-0 text-left press" data-discover-idx="${idx}">
