@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.9 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.10 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.9';
+  const APP_VERSION = '3.9.10';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -5746,9 +5746,9 @@
     applyGenreArt();
   }
 
-  // Pinta portadas reales dentro de las tarjetas de género cuando hay alguna
-  // canción de esa vibra en las recomendaciones. Si no hay coincidencia, la
-  // tarjeta conserva su degradado (nunca queda un hueco roto).
+  // Pinta portadas reales dentro de las tarjetas de género. Primero busca una
+  // canción de esa vibra en las recomendaciones y, si no hay coincidencia, usa
+  // una portada del mismo pool: como en Spotify, ninguna tarjeta queda vacía.
   function applyGenreArt() {
     const tracks = allHomeTracks();
     if (!tracks.length) return;
@@ -5759,19 +5759,21 @@
       .toLowerCase();
     const pool = tracks.map((track) => ({ track, hay: normalize(`${track.title} ${track.artist}`) }));
 
-    $$('[data-genre-key]').forEach((card) => {
+    $$('[data-genre-key]').forEach((card, cardIdx) => {
       if (card.querySelector('.genre-art')) return;
       const keys = String(card.getAttribute('data-genre-key') || '')
         .split('|').map((key) => normalize(key).trim()).filter(Boolean);
-      if (!keys.length) return;
 
       const matches = [];
-      for (const entry of pool) {
-        if (!keys.some((key) => entry.hay.includes(key))) continue;
-        if (matches.some((track) => track.id === entry.track.id)) continue;
-        matches.push(entry.track);
-        if (matches.length >= 2) break;
+      if (keys.length) {
+        for (const entry of pool) {
+          if (!keys.some((key) => entry.hay.includes(key))) continue;
+          if (matches.some((track) => track.id === entry.track.id)) continue;
+          matches.push(entry.track);
+          if (matches.length >= 2) break;
+        }
       }
+      if (!matches.length) matches.push(tracks[cardIdx % tracks.length]);
       if (!matches.length) return;
 
       const art = document.createElement('span');
