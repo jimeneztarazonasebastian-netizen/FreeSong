@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.4 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.5 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -46,8 +46,19 @@
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   });
 
+  // --- Acceso seguro a localStorage (www/storage.js) ---
+  // Respaldo mínimo: si el módulo no cargara, la app arranca sin datos antes
+  // que romperse, y no escribe nada para no pisar la biblioteca existente.
+  const Store = window.FreeSongStorage || {
+    read: (_key, fallback = null) => fallback,
+    readArray: () => [],
+    readObject: () => ({}),
+    readRaw: (_key, fallback = null) => fallback,
+    write: () => false
+  };
+
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.4';
+  const APP_VERSION = '3.9.5';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -148,21 +159,28 @@
     crossfadeDuration: 6,
     shuffleMode: 0, // 0: Desactivado, 1: Aleatorio Normal, 2: Smart Shuffle ✨
     repeat: 'all', // 'off', 'all', 'one'
-    favorites: JSON.parse(localStorage.getItem('fs_favorites') || '[]'),
-    downloads: JSON.parse(localStorage.getItem('fs_downloads') || '[]'),
+    favorites: Store.readArray('fs_favorites'),
+    downloads: Store.readArray('fs_downloads'),
     offlineBlobUrls: new Map(),
     currentTrack: null,
     pendingResume: null, // { id, seconds } para retomar donde se quedó al reabrir
     isDownloadingMap: {},
-    recentSearches: JSON.parse(localStorage.getItem('fs_recent_searches') || '[]'),
+    recentSearches: Store.readArray('fs_recent_searches'),
     djVibeIndex: 0,
-    history: JSON.parse(localStorage.getItem('fs_history') || '[]'),
-    playlists: JSON.parse(localStorage.getItem('fs_playlists') || '[]'),
-    stats: JSON.parse(localStorage.getItem('fs_stats') || '{"totalPlays":0,"songs":{},"artists":{}}'),
+    history: Store.readArray('fs_history'),
+    playlists: Store.readArray('fs_playlists'),
+    stats: (() => {
+      const saved = Store.readObject('fs_stats');
+      return {
+        totalPlays: Number(saved.totalPlays) || 0,
+        songs: saved.songs && typeof saved.songs === 'object' ? saved.songs : {},
+        artists: saved.artists && typeof saved.artists === 'object' ? saved.artists : {}
+      };
+    })(),
     playbackRate: 1.0,
-    audioQuality: ['140', '139'].includes(localStorage.getItem('fs_quality')) ? localStorage.getItem('fs_quality') : '140',
-    audioNormalize: localStorage.getItem('fs_normalize') !== 'false',
-    autoplayInfinite: localStorage.getItem('fs_autoplay') !== 'false',
+    audioQuality: ['140', '139'].includes(Store.readRaw('fs_quality')) ? Store.readRaw('fs_quality') : '140',
+    audioNormalize: Store.readRaw('fs_normalize') !== 'false',
+    autoplayInfinite: Store.readRaw('fs_autoplay') !== 'false',
     smartShuffleInjectCount: 0,
     syncedLyrics: [],
     currentLyricIdx: -1,
@@ -185,24 +203,22 @@
     auroraIntensity: 0.55,
     haptics: true,
     audioFade: true,
-    lastBackup: localStorage.getItem('fs_last_backup') || null
+    lastBackup: Store.readRaw('fs_last_backup') || null
   };
 
   // Cargar configuración guardada
-  const savedXf = localStorage.getItem('fs_crossfade');
+  const savedXf = Store.readRaw('fs_crossfade');
   if (savedXf !== null) S.crossfade = savedXf === 'true';
-  const savedXfDur = localStorage.getItem('fs_crossfade_dur');
+  const savedXfDur = Store.readRaw('fs_crossfade_dur');
   if (savedXfDur) S.crossfadeDuration = parseInt(savedXfDur, 10);
 
   // --- Preferencias visuales y táctiles (personalizables) ---
   const VISUAL_KEY = 'fs_visual_v1';
-  try {
-    const visual = JSON.parse(localStorage.getItem(VISUAL_KEY) || '{}') || {};
-    if (typeof visual.aurora === 'boolean') S.auroraEnabled = visual.aurora;
-    if (typeof visual.auroraIntensity === 'number') S.auroraIntensity = Math.max(0.1, Math.min(1, visual.auroraIntensity));
-    if (typeof visual.haptics === 'boolean') S.haptics = visual.haptics;
-    if (typeof visual.fade === 'boolean') S.audioFade = visual.fade;
-  } catch {}
+  const visual = Store.readObject(VISUAL_KEY);
+  if (typeof visual.aurora === 'boolean') S.auroraEnabled = visual.aurora;
+  if (typeof visual.auroraIntensity === 'number') S.auroraIntensity = Math.max(0.1, Math.min(1, visual.auroraIntensity));
+  if (typeof visual.haptics === 'boolean') S.haptics = visual.haptics;
+  if (typeof visual.fade === 'boolean') S.audioFade = visual.fade;
 
   function saveVisualPrefs() {
     try {
@@ -289,36 +305,33 @@
       if (p && isFinite(p.currentTime) && p.currentTime > 0) position = p.currentTime;
     }
 
-    try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({
-        queue: S.queue.map((t) => ({
-          id: t.id,
-          title: t.title,
-          artist: t.artist,
-          duration: t.duration || 0,
-          durationSeconds: t.durationSeconds || 0,
-          durationText: t.durationText || '',
-          thumbnail: t.thumbnail || ''
-        })),
-        currentIndex: S.currentIndex,
-        position,
-        repeat: S.repeat,
-        shuffleMode: S.shuffleMode,
-        quality: S.audioQuality,
-        normalize: S.audioNormalize,
-        playbackRate: S.playbackRate,
-        crossfade: S.crossfade,
-        crossfadeDuration: S.crossfadeDuration,
-        autoplay: S.autoplayInfinite,
-        savedAt: now
-      }));
-    } catch {}
+    Store.write(SESSION_KEY, {
+      queue: S.queue.map((t) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration || 0,
+        durationSeconds: t.durationSeconds || 0,
+        durationText: t.durationText || '',
+        thumbnail: t.thumbnail || ''
+      })),
+      currentIndex: S.currentIndex,
+      position,
+      repeat: S.repeat,
+      shuffleMode: S.shuffleMode,
+      quality: S.audioQuality,
+      normalize: S.audioNormalize,
+      playbackRate: S.playbackRate,
+      crossfade: S.crossfade,
+      crossfadeDuration: S.crossfadeDuration,
+      autoplay: S.autoplayInfinite,
+      savedAt: now
+    });
   }
 
   // Devuelve true si restauró una sesión completa.
   function restoreSession() {
-    let data = null;
-    try { data = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch {}
+    const data = Store.read(SESSION_KEY, null);
     if (!data || !Array.isArray(data.queue) || data.queue.length === 0) return false;
     // Ignora sesiones de hace más de una semana.
     if (data.savedAt && Date.now() - Number(data.savedAt) > 7 * 24 * 3600 * 1000) return false;
@@ -1234,21 +1247,17 @@
   const RELAY_DISK_CACHE_MAX = 40;
 
   function loadRelayDiskCache() {
-    try {
-      const raw = localStorage.getItem(RELAY_DISK_CACHE_KEY);
-      if (!raw) return;
-      const entries = JSON.parse(raw);
-      if (!Array.isArray(entries)) return;
-      const now = Date.now();
-      for (const entry of entries) {
-        if (!Array.isArray(entry) || entry.length < 2) continue;
-        const key = entry[0];
-        const src = entry[1];
-        if (typeof key !== 'string' || !src || !src.url || !(src.expires > now + 60 * 1000)) continue;
-        if (relaySources.size >= RELAY_DISK_CACHE_MAX) break;
-        relaySources.set(key, src);
-      }
-    } catch {}
+    const entries = Store.readArray(RELAY_DISK_CACHE_KEY);
+    if (!entries.length) return;
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const key = entry[0];
+      const src = entry[1];
+      if (typeof key !== 'string' || !src || !src.url || !(src.expires > now + 60 * 1000)) continue;
+      if (relaySources.size >= RELAY_DISK_CACHE_MAX) break;
+      relaySources.set(key, src);
+    }
   }
 
   let relayDiskSaveTimer = 0;
@@ -1917,7 +1926,7 @@
       } else {
         S.downloads.unshift(entry);
       }
-      localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
+      Store.write('fs_downloads', S.downloads);
 
       const cur = S.queue[S.currentIndex];
       if (cur && cur.id === track.id) {
@@ -1952,7 +1961,7 @@
     }
 
     S.downloads = S.downloads.filter((d) => d.id !== trackId);
-    localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
+    Store.write('fs_downloads', S.downloads);
 
     const cur = S.queue[S.currentIndex];
     if (cur && cur.id === trackId) {
@@ -2031,7 +2040,7 @@
     S.currentIndex = index;
     const track = S.queue[index];
     S.currentTrack = track;
-    localStorage.setItem('fs_last_track', JSON.stringify(track));
+    Store.write('fs_last_track', track);
     saveSession(true, 0);
 
     userIntentionalPause = false;
@@ -2450,12 +2459,8 @@
   const LYRICS_OFFSET_KEY = 'fs_lyrics_offsets_v1';
   const LYRICS_CACHE_MAX = 60;
 
-  let lyricsCache = (() => {
-    try { return JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY) || '{}') || {}; } catch { return {}; }
-  })();
-  let lyricOffsets = (() => {
-    try { return JSON.parse(localStorage.getItem(LYRICS_OFFSET_KEY) || '{}') || {}; } catch { return {}; }
-  })();
+  let lyricsCache = Store.readObject(LYRICS_CACHE_KEY);
+  let lyricOffsets = Store.readObject(LYRICS_OFFSET_KEY);
 
   let lyricNodes = [];            // [{ el, fill, time }]
   let lyricsActiveIdx = -1;
@@ -4111,7 +4116,7 @@
       haptic('success');
       showToast('Agregada a Tus Me Gusta ❤️');
     }
-    localStorage.setItem('fs_favorites', JSON.stringify(S.favorites));
+    Store.write('fs_favorites', S.favorites);
     updateLikeButton(track);
     renderLibrary();
   }
@@ -4119,7 +4124,7 @@
   // --- Registro de Historial y Estadísticas (Tu Cápsula Sonora / Spotify Wrapped) ---
   function saveHistory(track) {
     S.history = [track, ...S.history.filter((h) => h.id !== track.id)].slice(0, 50);
-    localStorage.setItem('fs_history', JSON.stringify(S.history));
+    Store.write('fs_history', S.history);
   }
 
   function recordPlayStat(track) {
@@ -4138,7 +4143,7 @@
     if (!S.stats.artists) S.stats.artists = {};
     S.stats.artists[artist] = (S.stats.artists[artist] || 0) + 1;
 
-    localStorage.setItem('fs_stats', JSON.stringify(S.stats));
+    Store.write('fs_stats', S.stats);
   }
 
   function renderStats() {
@@ -4618,7 +4623,7 @@
   const TRASH_SVG = '<svg class="w-4 h-4"><use href="#i-trash"/></svg>';
 
   function savePlaylists() {
-    localStorage.setItem('fs_playlists', JSON.stringify(S.playlists));
+    Store.write('fs_playlists', S.playlists);
   }
 
   function createPlaylist(name) {
@@ -5124,23 +5129,23 @@
         if (parsed.favorites || parsed.playlists || parsed.downloads) {
           if (Array.isArray(parsed.favorites)) {
             S.favorites = parsed.favorites;
-            localStorage.setItem('fs_favorites', JSON.stringify(S.favorites));
+            Store.write('fs_favorites', S.favorites);
           }
           if (Array.isArray(parsed.downloads)) {
             S.downloads = parsed.downloads;
-            localStorage.setItem('fs_downloads', JSON.stringify(S.downloads));
+            Store.write('fs_downloads', S.downloads);
           }
           if (Array.isArray(parsed.playlists)) {
             S.playlists = parsed.playlists;
-            localStorage.setItem('fs_playlists', JSON.stringify(S.playlists));
+            Store.write('fs_playlists', S.playlists);
           }
           if (Array.isArray(parsed.history)) {
             S.history = parsed.history;
-            localStorage.setItem('fs_history', JSON.stringify(S.history));
+            Store.write('fs_history', S.history);
           }
           if (parsed.stats) {
             S.stats = parsed.stats;
-            localStorage.setItem('fs_stats', JSON.stringify(S.stats));
+            Store.write('fs_stats', S.stats);
           }
           renderLibrary();
           showToast('¡Biblioteca restaurada con éxito!');
@@ -5481,7 +5486,7 @@
         e.stopPropagation();
         const i = parseInt(btn.getAttribute('data-recent-del'), 10);
         S.recentSearches.splice(i, 1);
-        localStorage.setItem('fs_recent_searches', JSON.stringify(S.recentSearches));
+        Store.write('fs_recent_searches', S.recentSearches);
         renderRecentSearches();
       });
     });
@@ -5647,7 +5652,7 @@
     if (!isContinuation && query && query.trim().length > 1) {
       const cleanQ = query.trim();
       S.recentSearches = [cleanQ, ...S.recentSearches.filter((s) => s.toLowerCase() !== cleanQ.toLowerCase())].slice(0, 8);
-      localStorage.setItem('fs_recent_searches', JSON.stringify(S.recentSearches));
+      Store.write('fs_recent_searches', S.recentSearches);
     }
 
     try {

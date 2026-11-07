@@ -243,6 +243,18 @@ async function run() {
     assert.match(diag.summary, /reproducciones/, `Diagnóstico sin datos: ${diag.summary}`);
     assert.match(diag.detail, /recuperaciones/, `Detalle inesperado: ${diag.detail}`);
 
+    // Datos locales corruptos: la app debe arrancar igual, sin perder la calma.
+    await page.evaluate(() => {
+      localStorage.setItem('fs_favorites', '{no es json');
+      localStorage.setItem('fs_stats', '[1,2]');
+      localStorage.setItem('fs_playlists', '"texto"');
+      localStorage.setItem('fs_history', 'null');
+      localStorage.setItem('fs_visual_v1', 'roto');
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-nav="search"]', { timeout: 15000 });
+    await page.waitForSelector('[data-nav="settings"]', { timeout: 15000 });
+
     assert.deepEqual(pageErrors, [], `Errores JS: ${pageErrors.join(' | ')}`);
     assert.deepEqual(consoleErrors, [], `Errores de consola: ${consoleErrors.join(' | ')}`);
 
@@ -251,6 +263,7 @@ async function run() {
     console.log('  reproducción: 1 pista + 4 cambios automáticos');
     console.log('  controles: pausa y reanudación');
     console.log('  diagnóstico: métricas locales visibles en Ajustes');
+    console.log('  almacenamiento: arranque correcto con datos corruptos');
   } catch (err) {
     failures.push(err);
     console.error('SMOKE FAIL:', err && err.message ? err.message : err);

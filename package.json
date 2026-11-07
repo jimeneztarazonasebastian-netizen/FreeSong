@@ -10,8 +10,8 @@
     "css": "tailwindcss -i src/input.css -o www/app.css --minify",
     "css:watch": "tailwindcss -i src/input.css -o www/app.css --watch",
     "icons": "node scripts/prepare.mjs",
-    "test": "node scripts/test-util.mjs && node scripts/test-smoke.mjs",
-    "test:unit": "node scripts/test-util.mjs",
+    "test": "node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-smoke.mjs",
+    "test:unit": "node scripts/test-util.mjs && node scripts/test-storage.mjs",
     "test:smoke": "node scripts/test-smoke.mjs"
   },
   "devDependencies": {
