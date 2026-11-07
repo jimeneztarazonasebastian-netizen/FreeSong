@@ -171,7 +171,10 @@ async function run() {
         if (url.pathname === '/api/stream') return streamAudio(route, request);
         if (url.pathname === '/api/relay-info') return json(route, { instances: [] });
         if (url.pathname === '/api/suggestions') return json(route, { queries: [] });
-        if (url.pathname === '/api/lyrics') return json(route, { syncedLyrics: '', plainLyrics: '' });
+        if (url.pathname === '/api/lyrics') return json(route, {
+          syncedLyrics: '[00:00.00]Línea de prueba\n[00:05.00]Segunda línea de prueba',
+          plainLyrics: 'Línea de prueba\nSegunda línea de prueba'
+        });
         if (url.pathname === '/api/queue') return json(route, { tracks: [] });
         if (url.pathname === '/api/health') return json(route, { ok: true, version: 'test' });
         if (url.pathname === '/api/home') return json(route, { shelves: [] });
@@ -243,6 +246,20 @@ async function run() {
     assert.match(diag.summary, /reproducciones/, `Diagnóstico sin datos: ${diag.summary}`);
     assert.match(diag.detail, /recuperaciones/, `Detalle inesperado: ${diag.detail}`);
 
+    // Letras: el parser compartido debe pintar las líneas sincronizadas.
+    await page.evaluate(() => document.getElementById('miniPlayer')?.click());
+    await page.waitForSelector('#tabLyricsBtn', { state: 'visible', timeout: 8000 });
+    await page.evaluate(() => document.getElementById('tabLyricsBtn')?.click());
+    await page.waitForFunction(
+      () => document.querySelectorAll('#lyricsContainer .lyric-line').length >= 2,
+      null,
+      { timeout: 10000 }
+    );
+    const lyricText = await page.evaluate(
+      () => document.querySelector('#lyricsContainer .lyric-text')?.textContent || ''
+    );
+    assert.match(lyricText, /Línea de prueba/, `Letra inesperada: ${lyricText}`);
+
     // Datos locales corruptos: la app debe arrancar igual, sin perder la calma.
     await page.evaluate(() => {
       localStorage.setItem('fs_favorites', '{no es json');
@@ -263,6 +280,7 @@ async function run() {
     console.log('  reproducción: 1 pista + 4 cambios automáticos');
     console.log('  controles: pausa y reanudación');
     console.log('  diagnóstico: métricas locales visibles en Ajustes');
+    console.log('  letras: 2 líneas sincronizadas renderizadas');
     console.log('  almacenamiento: arranque correcto con datos corruptos');
   } catch (err) {
     failures.push(err);

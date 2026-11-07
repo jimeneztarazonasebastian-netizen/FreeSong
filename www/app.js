@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.5 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.6 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -57,8 +57,19 @@
     write: () => false
   };
 
+  // --- Letras (www/lyrics.js) ---
+  // Sin el módulo, la app sigue funcionando sin letras en vez de fallar.
+  const LyricsUtil = window.FreeSongLyrics || {
+    cacheKey: () => '',
+    parseLrc: () => [],
+    findIndex: () => -1
+  };
+  const parseLrc = LyricsUtil.parseLrc;
+  const lyricsCacheKey = LyricsUtil.cacheKey;
+  const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
+
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.5';
+  const APP_VERSION = '3.9.6';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -2461,7 +2472,6 @@
 
   let lyricsCache = Store.readObject(LYRICS_CACHE_KEY);
   let lyricOffsets = Store.readObject(LYRICS_OFFSET_KEY);
-
   let lyricNodes = [];            // [{ el, fill, time }]
   let lyricsActiveIdx = -1;
   let lyricsRaf = null;
@@ -2471,11 +2481,6 @@
   let lyricsLoadedKey = null;
   let lyricsLoadingKey = null;
   const lyricsInFlight = new Set();
-
-  function lyricsCacheKey(track) {
-    if (!track) return '';
-    return `${track.id || ''}|${String(track.title || '').toLowerCase()}|${String(track.artist || '').toLowerCase()}`;
-  }
 
   function saveLyricsCache() {
     try {
@@ -2495,44 +2500,6 @@
     for (const key of keys.slice(LYRICS_CACHE_MAX)) delete lyricsCache[key];
   }
 
-  function parseLrc(lrcText) {
-    if (!lrcText) return [];
-    const timeTag = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
-    const offsetTag = /\[offset:\s*([+-]?\d+)\]/i.exec(lrcText);
-    const offset = offsetTag ? (parseInt(offsetTag[1], 10) || 0) / 1000 : 0;
-    const result = [];
-
-    for (const rawLine of String(lrcText).split(/\r?\n/)) {
-      timeTag.lastIndex = 0;
-      const stamps = [];
-      let match;
-      while ((match = timeTag.exec(rawLine))) {
-        const min = parseInt(match[1], 10);
-        const sec = parseInt(match[2], 10);
-        const frac = match[3] ? parseInt(match[3], 10) / Math.pow(10, match[3].length) : 0;
-        stamps.push(min * 60 + sec + frac);
-      }
-      if (!stamps.length) continue;
-
-      const text = rawLine
-        .replace(timeTag, '')
-        .replace(/<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>/g, '') // LRC mejorado (palabra a palabra)
-        .trim();
-      if (!text) continue;
-
-      for (const time of stamps) result.push({ time: Math.max(0, time + offset), text });
-    }
-
-    result.sort((a, b) => a.time - b.time);
-    const deduped = [];
-    for (const item of result) {
-      const prev = deduped[deduped.length - 1];
-      if (prev && Math.abs(prev.time - item.time) < 0.01 && prev.text === item.text) continue;
-      deduped.push(item);
-    }
-    return deduped;
-  }
-
   function getCurrentPlaybackTime() {
     if (isYtMode && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
       try { return ytPlayer.getCurrentTime() || 0; } catch { return null; }
@@ -2547,18 +2514,6 @@
     const view = $('sheetLyricsView');
     return !!view && !view.classList.contains('hidden') &&
       !!sheet && !sheet.classList.contains('translate-y-full');
-  }
-
-  function findLyricIndex(t) {
-    const list = S.syncedLyrics;
-    let lo = 0;
-    let hi = list.length - 1;
-    let ans = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (t >= list[mid].time) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
-    }
-    return ans;
   }
 
   function renderLyrics(lyricsList) {
