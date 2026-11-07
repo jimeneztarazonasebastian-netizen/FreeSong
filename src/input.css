@@ -173,10 +173,10 @@ nav.bottom-nav {
 .genre-card {
   position: relative;
   overflow: hidden;
-  border-radius: 1.25rem;
-  padding: 1rem;
-  min-height: 5.75rem;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border-radius: 0.6rem;
+  padding: 0.85rem;
+  height: 6.9rem;
+  transition: transform 0.15s ease;
 }
 .genre-card:active {
   transform: scale(0.97);
@@ -228,6 +228,14 @@ nav.bottom-nav {
   border-color: #10b981;
   font-weight: 700;
   box-shadow: 0 0 15px rgba(16, 185, 129, 0.35);
+}
+
+/* Píldoras compactas de los filtros de Buscar (estilo Spotify) */
+.chip-btn.chip-sm {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 0.5rem;
 }
 
 /* Indicador de punto verde para shuffle y repeat */
@@ -651,49 +659,62 @@ body[data-aurora="off"] .aurora-bg { display: none; }
 }
 
 /* =========================================================
-   v3.9.7 — Buscar con contenido real: portadas en géneros y carruseles
+   v3.9.9 — Buscar con la cuadrícula y los carruseles de Spotify
    ========================================================= */
 .genre-card > span {
   position: relative;
   z-index: 2;
+  display: block;
+  max-width: 80%;
+  font-size: 1rem;
+  line-height: 1.1;
+  font-weight: 900;
+  letter-spacing: -0.015em;
+  color: #fff;
+  text-wrap: balance;
+  text-shadow: 0 1px 2px rgb(0 0 0 / .28);
 }
 
+/* Portada inclinada y recortada en la esquina, como en Spotify. */
 .genre-art {
   position: absolute;
-  right: -0.5rem;
-  bottom: -0.8rem;
-  display: flex;
+  right: -0.75rem;
+  bottom: -0.75rem;
+  width: 6.2rem;
+  height: 6.2rem;
   z-index: 1;
   pointer-events: none;
 }
 
 .genre-art-img {
-  width: 4.15rem;
-  height: 4.15rem;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 5rem;
+  height: 5rem;
   object-fit: cover;
-  border-radius: 0.9rem;
-  border: 2px solid rgb(255 255 255 / .16);
-  box-shadow: 0 10px 20px rgb(0 0 0 / .5);
-  transform: rotate(-8deg);
+  border-radius: 0.2rem;
+  box-shadow: 0 10px 20px rgb(0 0 0 / .55);
+  transform: rotate(25deg);
 }
 
+/* Una sola portada basta: la segunda se oculta para no ensuciar la tarjeta. */
 .genre-art-img + .genre-art-img {
-  margin-left: -1.35rem;
-  transform: rotate(9deg) translateY(6px);
+  display: none;
 }
 
 /* Relleno decorativo cuando no hay una portada que coincida con el género */
 .genre-card::after {
   content: '♪';
   position: absolute;
-  right: 0.55rem;
-  bottom: 0.1rem;
+  right: 0.7rem;
+  bottom: -0.4rem;
   z-index: 0;
-  font-size: 3.6rem;
+  font-size: 4rem;
   line-height: 1;
   font-weight: 900;
-  color: rgb(255 255 255 / .14);
-  transform: rotate(-8deg);
+  color: rgb(255 255 255 / .18);
+  transform: rotate(18deg);
   pointer-events: none;
 }
 

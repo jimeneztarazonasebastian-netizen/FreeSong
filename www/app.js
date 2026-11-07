@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.8 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.9 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.8';
+  const APP_VERSION = '3.9.9';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -5616,16 +5616,15 @@
 
     wrap.classList.remove('hidden');
     list.innerHTML = items.map((track, idx) => `
-      <button type="button" class="w-28 shrink-0 text-left press" data-continue-idx="${idx}">
-        <div class="relative w-28 h-28 rounded-2xl overflow-hidden bg-zinc-800 shadow-lg border border-zinc-800/70">
+      <button type="button" class="w-32 shrink-0 text-left press" data-continue-idx="${idx}">
+        <div class="relative w-32 h-32 rounded-lg overflow-hidden bg-zinc-800">
           <img src="${thumbAt(track.thumbnail, 320)}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />
-          <span class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/70 to-transparent pointer-events-none"></span>
-          <span class="absolute bottom-1.5 right-1.5 w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg">
+          <span class="absolute bottom-2 right-2 w-9 h-9 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg shadow-black/40">
             <svg class="w-4 h-4"><use href="#i-play"/></svg>
           </span>
         </div>
-        <p class="text-[11px] font-bold text-white truncate mt-1.5">${esc(track.title)}</p>
-        <p class="text-[10px] text-zinc-400 truncate">${esc(track.artist || '')}</p>
+        <p class="text-[13px] font-semibold text-white truncate mt-2">${esc(track.title)}</p>
+        <p class="text-[11px] text-zinc-400 truncate">${esc(track.artist || '')}</p>
       </button>
     `).join('');
 
@@ -5674,13 +5673,13 @@
     if (!shelves.length) {
       if (searchDiscoverLoading) {
         list.innerHTML = `
-          <div class="shrink-0 w-36 space-y-2 animate-pulse">
-            <div class="w-36 h-36 rounded-2xl bg-zinc-800/80"></div>
-            <div class="h-3 w-28 rounded-full bg-zinc-800/80"></div>
+          <div class="shrink-0 w-32 space-y-2 animate-pulse">
+            <div class="w-32 h-32 rounded-lg bg-zinc-800/80"></div>
+            <div class="h-3 w-24 rounded-full bg-zinc-800/80"></div>
           </div>
-          <div class="shrink-0 w-36 space-y-2 animate-pulse">
-            <div class="w-36 h-36 rounded-2xl bg-zinc-800/60"></div>
-            <div class="h-3 w-24 rounded-full bg-zinc-800/60"></div>
+          <div class="shrink-0 w-32 space-y-2 animate-pulse">
+            <div class="w-32 h-32 rounded-lg bg-zinc-800/60"></div>
+            <div class="h-3 w-20 rounded-full bg-zinc-800/60"></div>
           </div>`;
         return;
       }
@@ -5694,19 +5693,18 @@
     }
 
     list.innerHTML = shelves.slice(0, 10).map((shelf, idx) => {
-      const covers = shelf.items.slice(0, 4);
-      const cells = Array.from({ length: 4 }, (_, i) => {
-        const track = covers[i];
-        return track
-          ? `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />`
-          : '<span class="w-full h-full bg-zinc-800"></span>';
-      }).join('');
+      const cover = shelf.items.find((track) => track && track.thumbnail) || shelf.items[0];
       const count = shelf.items.length;
       return `
-        <button type="button" class="w-36 shrink-0 text-left press" data-discover-idx="${idx}">
-          <div class="w-36 h-36 rounded-2xl overflow-hidden grid grid-cols-2 grid-rows-2 gap-0.5 bg-zinc-800 shadow-lg border border-zinc-800/70">${cells}</div>
-          <p class="text-[11px] font-bold text-white truncate mt-1.5">${esc(shelf.title || 'Mezcla FreeSong')}</p>
-          <p class="text-[10px] text-zinc-400 truncate">${count} canciones</p>
+        <button type="button" class="w-32 shrink-0 text-left press" data-discover-idx="${idx}">
+          <div class="relative w-32 h-32 rounded-lg overflow-hidden bg-zinc-800">
+            <img src="${thumbAt(cover && cover.thumbnail, 320)}" data-vid="${esc((cover && cover.id) || '')}" alt="" loading="lazy" class="w-full h-full object-cover" />
+            <span class="absolute bottom-2 right-2 w-9 h-9 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg shadow-black/40">
+              <svg class="w-4 h-4"><use href="#i-play"/></svg>
+            </span>
+          </div>
+          <p class="text-[13px] font-semibold text-white truncate mt-2">${esc(shelf.title || 'Mezcla FreeSong')}</p>
+          <p class="text-[11px] text-zinc-400 truncate">${count} canciones</p>
         </button>`;
     }).join('');
 
@@ -5809,18 +5807,6 @@
 
     renderRecentSearches();
 
-    // Sugerencias rápidas de búsqueda
-    $$('[data-quick-search]').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        const term = chip.getAttribute('data-quick-search');
-        if (!term) return;
-        input.value = term;
-        clearBtn.classList.remove('hidden');
-        suggestionsDropdown?.classList.add('hidden');
-        executeSearch(term, false);
-      });
-    });
-
     $('searchDiscoverRefreshBtn')?.addEventListener('click', () => ensureSearchDiscover(true));
 
     // Filtros de categoría de búsqueda (SimpMusic: Canciones, Artistas, Álbumes, Playlists, Videos)
@@ -5848,7 +5834,6 @@
         results.classList.add('hidden');
         if (resultsList) resultsList.innerHTML = '';
         if (genresWrap) genresWrap.classList.remove('hidden');
-        $('searchQuickWrap')?.classList.remove('hidden');
         $('searchDiscoverWrap')?.classList.remove('hidden');
         renderSearchContinue();
         renderRecentSearches();
@@ -5908,7 +5893,6 @@
       results.classList.add('hidden');
       if (resultsList) resultsList.innerHTML = '';
       if (genresWrap) genresWrap.classList.remove('hidden');
-      $('searchQuickWrap')?.classList.remove('hidden');
       $('searchDiscoverWrap')?.classList.remove('hidden');
       renderSearchContinue();
       renderRecentSearches();
@@ -5951,7 +5935,6 @@
     if (suggestionsDropdown) suggestionsDropdown.classList.add('hidden');
     if (genresWrap) genresWrap.classList.add('hidden');
     if (recentWrap) recentWrap.classList.add('hidden');
-    $('searchQuickWrap')?.classList.add('hidden');
     $('searchDiscoverWrap')?.classList.add('hidden');
     $('searchContinueWrap')?.classList.add('hidden');
     results.classList.remove('hidden');

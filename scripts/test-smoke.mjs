@@ -331,7 +331,7 @@ async function run() {
       continueCards: document.querySelectorAll('#searchContinueList [data-continue-idx]').length
     }));
     assert.ok(landing.discover >= 3, `La landing de Buscar no generó varias mezclas: ${landing.discover}`);
-    assert.ok(landing.covers >= 4, `La landing de Buscar no mostró portadas: ${landing.covers}`);
+    assert.ok(landing.covers >= landing.discover, `Cada mezcla debe tener portada: ${landing.covers}/${landing.discover}`);
     assert.ok(landing.genreArt >= 2, `Los géneros no recibieron portadas: ${landing.genreArt}`);
     assert.ok(landing.continueCards >= 1, 'No apareció "Sigue escuchando" con el historial');
 
