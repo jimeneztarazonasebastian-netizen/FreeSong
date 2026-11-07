@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.2 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.3 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -30,11 +30,24 @@
   const $ = (id) => document.getElementById(id);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  // Escapa texto dinámico (títulos, artistas, nombres de playlist) antes de usarlo en innerHTML
-  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // --- Utilidades puras (www/util.js) ---
+  // Se cargan antes que este archivo. El respaldo mantiene la app operativa
+  // (y el escapado de HTML seguro) aunque una caché vieja no tenga util.js.
+  const Util = window.FreeSongUtil || {};
+  const esc = Util.esc || ((v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c])));
+  const thumbAt = Util.thumbAt || ((url) => String(url || ''));
+  const shuffled = Util.shuffled || ((list) => [...list]);
+  const formatTime = Util.formatTime || ((secs) => {
+    if (isNaN(secs) || secs < 0) return '0:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  });
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.2';
+  const APP_VERSION = '3.9.3';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -46,32 +59,6 @@
       : { init: noop, inc: noop, recordStart: noop, render: noop, reset: noop, copy: noop };
   })();
   Diag.init({ version: APP_VERSION, toast: showToast });
-
-  // Las miniaturas de YouTube Music llegan en 120 px. En pantallas Retina eso
-  // se ve pixelado en el reproductor y en las tarjetas. Esta función pide la
-  // variante adecuada al mismo host: 160 px para listas y 480–720 px para
-  // portadas grandes, sin descargar imágenes enormes en cada fila.
-  function thumbAt(url, size = 160) {
-    const raw = String(url || '');
-    if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
-    const px = Math.max(64, Math.round(Number(size) || 160));
-    try {
-      const u = new URL(raw, window.location.href);
-      if (/(^|\.)googleusercontent\.com$/i.test(u.hostname)) {
-        // Formatos: ...=w120-h120-l90-rj o ...=s120-c-k-c0x00ffffff-no-rj
-        u.pathname = u.pathname.replace(/=(?:w\d+|h\d+|s\d+)[^/]*$/i, `=w${px}-h${px}-l90-rj`);
-        return u.toString();
-      }
-      if (/(^|\.)ytimg\.com$/i.test(u.hostname)) {
-        const m = u.pathname.match(/^\/vi\/([\w-]+)\//);
-        if (m) {
-          const file = px >= 480 ? 'maxresdefault' : 'mqdefault';
-          return `https://i.ytimg.com/vi/${m[1]}/${file}.jpg`;
-        }
-      }
-    } catch {}
-    return raw;
-  }
 
   // Aplica una miniatura a un <img> existente y prepara su respaldo.
   function setThumbSrc(img, track, size) {
@@ -129,16 +116,6 @@
     if (!(history.state && history.state.modal)) return;
     popGuard++;
     try { history.back(); } catch { popGuard--; }
-  }
-
-  // Mezcla uniforme (Fisher-Yates); sort(() => Math.random() - 0.5) está sesgado
-  function shuffled(list) {
-    const a = [...list];
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
   }
 
   // --- Sistema de Notificaciones Toast Flotantes ---
@@ -474,13 +451,6 @@
         deck.muted = false;
       } catch {}
     });
-  }
-
-  function formatTime(secs) {
-    if (isNaN(secs) || secs < 0) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
   // Corrección heurística del Bug DASH itag=140 en iOS Safari (duración duplicada 2x)

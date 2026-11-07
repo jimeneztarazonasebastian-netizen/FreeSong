@@ -33,13 +33,27 @@ npm run icons   # regenera los íconos PNG desde assets/icon.svg
 
 ## ✅ Pruebas automáticas
 
-`npm test` abre Chrome real en modo headless y comprueba el flujo crítico: buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.
+`npm test` ejecuta dos capas:
 
-```bash
-npm test          # o: npm run test:smoke
-```
+- **Unitarias** (`npm run test:unit`): helpers puros de `www/util.js` (escapado, miniaturas, duración, mezcla) en Node, sin navegador.
+- **Humo** (`npm run test:smoke`): abre Chrome real en modo headless y comprueba buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.
 
 Requiere Google Chrome instalado. Usa `playwright-core` con el canal `chrome`, así que no descarga navegadores adicionales.
+
+```bash
+npm test           # unitarias + humo
+npm run test:unit  # solo helpers puros
+npm run test:smoke # solo Chrome headless
+```
+
+## 🧩 Estructura del cliente
+
+- `www/app.js`: motor de reproducción, pantallas y estado global.
+- `www/util.js`: helpers puros (escapado HTML, miniaturas, mezcla, duración).
+- `www/diag.js`: métricas locales de reproducción (sin telemetría).
+- `www/sw.js`: caché de la PWA y aviso de actualizaciones.
+
+Los módulos se cargan como scripts clásicos antes de `app.js` y exponen un objeto en `window` (`FreeSongUtil`, `FreeSongDiag`). Así se pueden probar por separado sin bundler y sin tocar el orden de arranque del reproductor.
 
 ## 🩺 Diagnóstico local
 
