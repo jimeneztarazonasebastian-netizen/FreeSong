@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.7 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.8 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.7';
+  const APP_VERSION = '3.9.8';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -5639,12 +5639,36 @@
     });
   }
 
+  // Cuando Inicio devuelve una sola lista (modo respaldo), Buscar se veía con
+  // una única mezcla. Dividimos esas mismas canciones en varias mezclas para
+  // que el carrusel tenga vida, sin pedir nada extra al servidor.
+  const SEARCH_DERIVED_TITLES = ['Para descubrir', 'Éxitos del momento', 'Nueva música', 'Mezcla FreeSong'];
+
+  function deriveSearchMixes(realShelves) {
+    const pool = allHomeTracks();
+    if (pool.length < 6 || realShelves.length >= 3) return realShelves;
+
+    const usedTitles = new Set(realShelves.map((shelf) => String(shelf.title || '').toLowerCase()));
+    const titles = SEARCH_DERIVED_TITLES.filter((title) => !usedTitles.has(title.toLowerCase()));
+    if (!titles.length) return realShelves;
+
+    const chunkSize = Math.max(4, Math.ceil(pool.length / 4));
+    const mixes = [];
+    for (let i = 0, t = 0; i < pool.length && mixes.length < 3; i += chunkSize, t++) {
+      const items = pool.slice(i, i + chunkSize);
+      if (items.length < 4) break;
+      mixes.push({ title: titles[t % titles.length], items });
+    }
+    return [...realShelves, ...mixes];
+  }
+
   function renderSearchDiscover() {
     const wrap = $('searchDiscoverWrap');
     const list = $('searchDiscoverList');
     if (!wrap || !list) return;
 
-    const shelves = homeShelvesCache.filter((shelf) => shelf && Array.isArray(shelf.items) && shelf.items.length);
+    const realShelves = homeShelvesCache.filter((shelf) => shelf && Array.isArray(shelf.items) && shelf.items.length);
+    const shelves = deriveSearchMixes(realShelves);
     wrap.classList.remove('hidden');
 
     if (!shelves.length) {

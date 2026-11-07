@@ -32,7 +32,11 @@ const HOME_TRACKS = [
   { id: 'home-1', title: 'Reggaetón de prueba', artist: 'Bad Bunny', duration: 200, durationSeconds: 200, durationText: '3:20' },
   { id: 'home-2', title: 'Pop de prueba', artist: 'Karol G', duration: 180, durationSeconds: 180, durationText: '3:00' },
   { id: 'home-3', title: 'Rock de prueba', artist: 'Soda Stereo', duration: 220, durationSeconds: 220, durationText: '3:40' },
-  { id: 'home-4', title: 'Chill de prueba', artist: 'Feid', duration: 195, durationSeconds: 195, durationText: '3:15' }
+  { id: 'home-4', title: 'Chill de prueba', artist: 'Feid', duration: 195, durationSeconds: 195, durationText: '3:15' },
+  { id: 'home-5', title: 'Trap de prueba', artist: 'Duki', duration: 205, durationSeconds: 205, durationText: '3:25' },
+  { id: 'home-6', title: 'Cumbia de prueba', artist: 'Silvestre', duration: 210, durationSeconds: 210, durationText: '3:30' },
+  { id: 'home-7', title: 'Electrónica de prueba', artist: 'Calvin Harris', duration: 190, durationSeconds: 190, durationText: '3:10' },
+  { id: 'home-8', title: 'Balada de prueba', artist: 'Sin Bandera', duration: 230, durationSeconds: 230, durationText: '3:50' }
 ].map((track) => ({
   ...track,
   thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
@@ -326,7 +330,7 @@ async function run() {
       genreArt: document.querySelectorAll('#searchGenresWrap .genre-art-img').length,
       continueCards: document.querySelectorAll('#searchContinueList [data-continue-idx]').length
     }));
-    assert.ok(landing.discover >= 1, 'La landing de Buscar no mostró mezclas');
+    assert.ok(landing.discover >= 3, `La landing de Buscar no generó varias mezclas: ${landing.discover}`);
     assert.ok(landing.covers >= 4, `La landing de Buscar no mostró portadas: ${landing.covers}`);
     assert.ok(landing.genreArt >= 2, `Los géneros no recibieron portadas: ${landing.genreArt}`);
     assert.ok(landing.continueCards >= 1, 'No apareció "Sigue escuchando" con el historial');
