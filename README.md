@@ -29,6 +29,8 @@ npm install
 npm run build   # compila Tailwind -> www/app.css
 npm start       # http://localhost:5173 (sirve www/ y emula las funciones de /api)
 npm run icons   # regenera los íconos PNG desde assets/icon.svg
+npm run version:check       # verifica que app, sw y health compartan versión
+npm run version:set -- 3.9.6  # actualiza la versión en los cuatro archivos
 ```
 
 ## ✅ Pruebas automáticas
