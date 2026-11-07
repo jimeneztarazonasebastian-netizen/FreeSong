@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.6 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.7 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.6';
+  const APP_VERSION = '3.9.7';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -194,6 +194,7 @@
     autoplayInfinite: Store.readRaw('fs_autoplay') !== 'false',
     smartShuffleInjectCount: 0,
     syncedLyrics: [],
+    plainLyrics: null,
     currentLyricIdx: -1,
     lyricsTrackId: null,
     lyricsOffset: 0,
@@ -2747,6 +2748,7 @@
     if (!container) return;
 
     S.syncedLyrics = payload.synced || [];
+    S.plainLyrics = payload.plain || null;
     S.currentLyricIdx = -1;
     lyricsActiveIdx = -1;
     lyricsLoadedKey = lyricsCacheKey(track);
@@ -2799,6 +2801,7 @@
     }
 
     S.syncedLyrics = [];
+    S.plainLyrics = null;
     S.currentLyricIdx = -1;
     lyricsActiveIdx = -1;
     lyricNodes = [];
@@ -3182,11 +3185,12 @@
     ctx.restore();
 
     // Verso principal
-    const verseText = String(verse || track.title || '').trim();
+    const rawVerse = String(verse || '').trim();
+    const verseText = rawVerse || 'Escúchala completa en FreeSong';
     const verseFit = fitCanvasLines(ctx, verseText, 840, 4, [52, 47, 42, 38], '800');
     const verseLineHeight = Math.round(verseFit.size * 1.24);
 
-    const hasNext = !!(nextVerse && nextVerse !== verseText);
+    const hasNext = !!(rawVerse && nextVerse && nextVerse !== rawVerse);
     const nextFit = hasNext ? fitCanvasLines(ctx, nextVerse, 800, 2, [36, 32, 28], '600') : null;
     const nextLineHeight = nextFit ? Math.round(nextFit.size * 1.24) : 0;
 
@@ -3239,18 +3243,81 @@
     return await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
   }
 
-  const storyShareState = { url: '', blob: null, file: null, filename: '', title: '', text: '' };
+  const storyShareState = {
+    url: '', blob: null, file: null, filename: '', title: '', text: '',
+    track: null, verses: [], verseIdx: 0
+  };
+  let storyVerseToken = 0;
+
+  // Reúne los versos que se pueden compartir: primero la letra sincronizada y,
+  // si no hay, la letra plana. Así la tarjeta nunca cae al título de la canción
+  // cuando la letra existe.
+  function collectShareVerses(track) {
+    if (!track) return [];
+    if (S.lyricsTrackId && track.id && S.lyricsTrackId !== track.id) return [];
+    const synced = Array.isArray(S.syncedLyrics) ? S.syncedLyrics : [];
+    const lines = synced
+      .map((line) => String((line && line.text) || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    if (lines.length) return lines;
+
+    const plain = String(S.plainLyrics || '').replace(/\r/g, '').trim();
+    if (!plain) return [];
+    return plain.split('\n').map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  }
+
+  // Verso inicial: el que suena ahora o, si aún no empezó, el primero.
+  function initialShareVerseIndex(verses) {
+    if (!verses.length) return 0;
+    if (S.syncedLyrics && S.syncedLyrics.length && S.currentLyricIdx >= 0) {
+      return Math.min(S.currentLyricIdx, verses.length - 1);
+    }
+    return 0;
+  }
+
+  function storyShareVerseText() {
+    return storyShareState.verses[storyShareState.verseIdx] || '';
+  }
+
+  function storyShareMetaText() {
+    const track = storyShareState.track;
+    if (!track) return '';
+    const verse = storyShareVerseText();
+    if (!verse) return `${track.title} de ${track.artist || 'Artista'}\n${trackShareUrl(track)}`;
+    return `"${verse}" — ${track.title} de ${track.artist || 'Artista'}\n${trackShareUrl(track)}`;
+  }
+
+  function syncStoryShareUI() {
+    const { verses, verseIdx } = storyShareState;
+    const verseEl = $('storyShareVerse');
+    if (verseEl) {
+      verseEl.textContent = verses.length
+        ? `“${verses[verseIdx]}”`
+        : 'Esta canción no tiene letra disponible. Compartimos la tarjeta de la canción.';
+    }
+    const counter = $('storyShareCounter');
+    if (counter) counter.textContent = verses.length ? `${verseIdx + 1} / ${verses.length}` : 'Sin letra';
+    const prev = $('storySharePrevBtn');
+    const next = $('storyShareNextBtn');
+    if (prev) prev.disabled = verses.length < 2 || verseIdx <= 0;
+    if (next) next.disabled = verses.length < 2 || verseIdx >= verses.length - 1;
+    storyShareState.text = storyShareMetaText();
+  }
 
   function closeStoryShareModal() {
     const modal = $('storyShareModal');
     if (!modal || modal.classList.contains('hidden')) return;
     modal.classList.add('hidden');
+    storyVerseToken++;
     if (storyShareState.url) {
       URL.revokeObjectURL(storyShareState.url);
       storyShareState.url = '';
     }
     storyShareState.blob = null;
     storyShareState.file = null;
+    storyShareState.track = null;
+    storyShareState.verses = [];
+    storyShareState.verseIdx = 0;
     popModalState();
   }
 
@@ -3262,9 +3329,9 @@
     }
   }
 
-  function openStoryShareModal(blob, track, verse) {
+  function openStoryShareModal(blob, track, options = {}) {
     const modal = $('storyShareModal');
-    if (!modal || !blob) return;
+    if (!modal || !blob || !track) return;
 
     if (storyShareState.url) URL.revokeObjectURL(storyShareState.url);
     const objectUrl = URL.createObjectURL(blob);
@@ -3274,12 +3341,20 @@
       file = new File([blob], filename, { type: 'image/png' });
     } catch {}
 
+    const verses = Array.isArray(options.verses) ? options.verses.filter(Boolean) : [];
+    const index = verses.length
+      ? Math.max(0, Math.min(Number(options.index) || 0, verses.length - 1))
+      : 0;
+
     storyShareState.url = objectUrl;
     storyShareState.blob = blob;
     storyShareState.file = file;
     storyShareState.filename = filename;
     storyShareState.title = `${track.title} · FreeSong`;
-    storyShareState.text = `"${verse}" — ${track.title} de ${track.artist || 'Artista'}\n${trackShareUrl(track)}`;
+    storyShareState.track = track;
+    storyShareState.verses = verses;
+    storyShareState.verseIdx = index;
+    syncStoryShareUI();
 
     const img = $('storySharePreview');
     if (img) img.src = objectUrl;
@@ -3292,13 +3367,52 @@
     if (downloadBtn) downloadBtn.classList.toggle('col-span-2', !canNative);
     if (hint) {
       hint.textContent = canNative
-        ? 'Vista previa 1080 × 1920. Toca «Compartir» y elige Instagram, WhatsApp o TikTok.'
+        ? 'Vista previa 1080 × 1920. Elige el verso y toca «Compartir» para Instagram, WhatsApp o TikTok.'
         : 'Vista previa 1080 × 1920. Descarga la imagen o mantén pulsada la vista previa para guardarla en Fotos.';
     }
 
     modal.classList.remove('hidden');
     pushModalState('storyShare');
     haptic('light');
+  }
+
+  // Cambia el verso de la tarjeta sin cerrar el modal (estilo Spotify).
+  async function goToStoryVerse(nextIdx) {
+    const state = storyShareState;
+    if (!state.track || state.verses.length < 2) return;
+    const idx = Math.max(0, Math.min(nextIdx, state.verses.length - 1));
+    if (idx === state.verseIdx) return;
+
+    state.verseIdx = idx;
+    syncStoryShareUI();
+    const token = ++storyVerseToken;
+    const verseEl = $('storyShareVerse');
+    verseEl?.classList.add('opacity-40');
+
+    try {
+      const verse = state.verses[idx];
+      const next = state.verses[idx + 1] || '';
+      const blob = await buildStoryCard(state.track, verse, next);
+      if (!blob || token !== storyVerseToken) return;
+
+      if (state.url) URL.revokeObjectURL(state.url);
+      const objectUrl = URL.createObjectURL(blob);
+      state.url = objectUrl;
+      state.blob = blob;
+      try {
+        state.file = new File([blob], state.filename, { type: 'image/png' });
+      } catch {
+        state.file = blob;
+      }
+      const img = $('storySharePreview');
+      if (img) img.src = objectUrl;
+      // El botón nativo puede cambiar de disponibilidad al regenerar el File.
+      $('storyShareNativeBtn')?.classList.toggle('hidden', !canShareStoryFile(state.file));
+    } catch {
+      showToast('No se pudo actualizar el verso');
+    } finally {
+      if (token === storyVerseToken) verseEl?.classList.remove('opacity-40');
+    }
   }
 
   async function shareStoryNative() {
@@ -3341,30 +3455,31 @@
   }
 
   async function shareLyricsCard() {
-    const track = S.currentIndex >= 0 ? S.queue[S.currentIndex] : null;
-    if (!track) {
+    const track = S.currentIndex >= 0 ? S.queue[S.currentIndex] : S.currentTrack;
+    if (!track || !track.id) {
       showToast('No hay ninguna canción sonando');
       return;
     }
 
-    // Se comparte el verso que está sonando y, si existe, el siguiente.
-    let line1 = '';
-    let line2 = '';
-    if (S.syncedLyrics && S.syncedLyrics.length > 0 && S.currentLyricIdx >= 0) {
-      line1 = S.syncedLyrics[S.currentLyricIdx]?.text || '';
-      line2 = S.syncedLyrics[S.currentLyricIdx + 1]?.text || '';
+    // La letra pudo no haber terminado de cargar: si hace falta, se espera a
+    // tenerla para que la tarjeta muestre el verso real y no solo la canción.
+    let verses = collectShareVerses(track);
+    if (!verses.length) {
+      showToast('Preparando la letra…', 1200);
+      try {
+        if (lyricsLoadedKey !== lyricsCacheKey(track)) await loadLyrics(track);
+      } catch {}
+      verses = collectShareVerses(track);
     }
-    if (!line1) {
-      const firstSynced = (S.syncedLyrics || []).find((l) => l && l.text && l.text.trim());
-      line1 = firstSynced ? firstSynced.text : track.title;
-      line2 = firstSynced ? '' : (track.artist || '');
-    }
+    const index = initialShareVerseIndex(verses);
 
-    showToast('Generando tarjeta de historia…', 1400);
+    showToast(verses.length ? 'Generando tarjeta de historia…' : 'Esta canción no tiene letra disponible', 1400);
     try {
-      const blob = await buildStoryCard(track, line1, line2);
+      const verse = verses[index] || '';
+      const next = verses[index + 1] || '';
+      const blob = await buildStoryCard(track, verse, next);
       if (!blob) throw new Error('sin imagen');
-      openStoryShareModal(blob, track, line1);
+      openStoryShareModal(blob, track, { verses, index });
     } catch {
       showToast('No se pudo generar la imagen de la historia');
     }
@@ -5255,6 +5370,16 @@
         return;
       }
 
+      // Buscar reutiliza estas recomendaciones con portadas reales. No se
+      // vuelve a pedir nada al servidor.
+      if (category === 'todo' || !homeShelvesCache.length) {
+        homeShelvesCache = data.shelves;
+      }
+      if (S.activeTab === 'search') {
+        renderSearchDiscover();
+        applyGenreArt();
+      }
+
       if (data.shelves[0]?.items?.length > 0) {
         prewarmTracks(data.shelves[0].items.slice(0, 4));
       }
@@ -5447,6 +5572,203 @@
     });
   }
 
+  // --- Landing de Buscar con contenido real ---
+  // Reutiliza las recomendaciones que ya carga Inicio (una sola petición a
+  // /api/home, con caché del navegador) para que Buscar no sea solo colores:
+  // portadas reales, mezclas por shelf e historial.
+  let homeShelvesCache = [];
+  let searchDiscoverLoading = false;
+  let searchDiscoverToken = 0;
+
+  function allHomeTracks() {
+    const seen = new Set();
+    const out = [];
+    for (const shelf of homeShelvesCache) {
+      if (!shelf || !Array.isArray(shelf.items)) continue;
+      for (const track of shelf.items) {
+        if (!track || !track.id || seen.has(track.id)) continue;
+        seen.add(track.id);
+        out.push(track);
+      }
+    }
+    return out;
+  }
+
+  function renderSearchContinue() {
+    const wrap = $('searchContinueWrap');
+    const list = $('searchContinueList');
+    if (!wrap || !list) return;
+
+    const seen = new Set();
+    const items = [];
+    for (const track of [...S.history, ...S.favorites]) {
+      if (!track || !track.id || seen.has(track.id)) continue;
+      seen.add(track.id);
+      items.push(track);
+      if (items.length >= 10) break;
+    }
+
+    if (!items.length) {
+      wrap.classList.add('hidden');
+      list.innerHTML = '';
+      return;
+    }
+
+    wrap.classList.remove('hidden');
+    list.innerHTML = items.map((track, idx) => `
+      <button type="button" class="w-28 shrink-0 text-left press" data-continue-idx="${idx}">
+        <div class="relative w-28 h-28 rounded-2xl overflow-hidden bg-zinc-800 shadow-lg border border-zinc-800/70">
+          <img src="${thumbAt(track.thumbnail, 320)}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />
+          <span class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/70 to-transparent pointer-events-none"></span>
+          <span class="absolute bottom-1.5 right-1.5 w-8 h-8 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg">
+            <svg class="w-4 h-4"><use href="#i-play"/></svg>
+          </span>
+        </div>
+        <p class="text-[11px] font-bold text-white truncate mt-1.5">${esc(track.title)}</p>
+        <p class="text-[10px] text-zinc-400 truncate">${esc(track.artist || '')}</p>
+      </button>
+    `).join('');
+
+    $$('[data-continue-idx]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-continue-idx'), 10) || 0;
+        S.queue = [...items];
+        playTrack(idx, true);
+        haptic('light');
+      });
+    });
+  }
+
+  function renderSearchDiscover() {
+    const wrap = $('searchDiscoverWrap');
+    const list = $('searchDiscoverList');
+    if (!wrap || !list) return;
+
+    const shelves = homeShelvesCache.filter((shelf) => shelf && Array.isArray(shelf.items) && shelf.items.length);
+    wrap.classList.remove('hidden');
+
+    if (!shelves.length) {
+      if (searchDiscoverLoading) {
+        list.innerHTML = `
+          <div class="shrink-0 w-36 space-y-2 animate-pulse">
+            <div class="w-36 h-36 rounded-2xl bg-zinc-800/80"></div>
+            <div class="h-3 w-28 rounded-full bg-zinc-800/80"></div>
+          </div>
+          <div class="shrink-0 w-36 space-y-2 animate-pulse">
+            <div class="w-36 h-36 rounded-2xl bg-zinc-800/60"></div>
+            <div class="h-3 w-24 rounded-full bg-zinc-800/60"></div>
+          </div>`;
+        return;
+      }
+      list.innerHTML = `
+        <div class="w-full text-center py-6">
+          <p class="text-xs text-zinc-500">No pudimos cargar recomendaciones ahora mismo.</p>
+          <button type="button" id="searchDiscoverRetryBtn" class="mt-2 text-[11px] font-bold text-emerald-400 press">Reintentar</button>
+        </div>`;
+      $('searchDiscoverRetryBtn')?.addEventListener('click', () => ensureSearchDiscover(true));
+      return;
+    }
+
+    list.innerHTML = shelves.slice(0, 10).map((shelf, idx) => {
+      const covers = shelf.items.slice(0, 4);
+      const cells = Array.from({ length: 4 }, (_, i) => {
+        const track = covers[i];
+        return track
+          ? `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />`
+          : '<span class="w-full h-full bg-zinc-800"></span>';
+      }).join('');
+      const count = shelf.items.length;
+      return `
+        <button type="button" class="w-36 shrink-0 text-left press" data-discover-idx="${idx}">
+          <div class="w-36 h-36 rounded-2xl overflow-hidden grid grid-cols-2 grid-rows-2 gap-0.5 bg-zinc-800 shadow-lg border border-zinc-800/70">${cells}</div>
+          <p class="text-[11px] font-bold text-white truncate mt-1.5">${esc(shelf.title || 'Mezcla FreeSong')}</p>
+          <p class="text-[10px] text-zinc-400 truncate">${count} canciones</p>
+        </button>`;
+    }).join('');
+
+    $$('[data-discover-idx]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-discover-idx'), 10) || 0;
+        const shelf = shelves[idx];
+        if (!shelf || !shelf.items.length) return;
+        S.queue = [...shelf.items];
+        playTrack(0, true);
+        haptic('light');
+        showToast(`▶ ${shelf.title || 'Mezcla FreeSong'}`);
+      });
+    });
+  }
+
+  async function ensureSearchDiscover(force = false) {
+    if (!force && homeShelvesCache.length) {
+      renderSearchDiscover();
+      return;
+    }
+    if (searchDiscoverLoading) return;
+
+    searchDiscoverLoading = true;
+    const token = ++searchDiscoverToken;
+    renderSearchDiscover();
+
+    try {
+      const res = await fetch('/api/home', force ? { cache: 'reload' } : undefined);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (token !== searchDiscoverToken) return;
+      if (Array.isArray(data.shelves) && data.shelves.length) homeShelvesCache = data.shelves;
+    } catch {}
+
+    if (token !== searchDiscoverToken) return;
+    searchDiscoverLoading = false;
+    renderSearchDiscover();
+    applyGenreArt();
+  }
+
+  // Pinta portadas reales dentro de las tarjetas de género cuando hay alguna
+  // canción de esa vibra en las recomendaciones. Si no hay coincidencia, la
+  // tarjeta conserva su degradado (nunca queda un hueco roto).
+  function applyGenreArt() {
+    const tracks = allHomeTracks();
+    if (!tracks.length) return;
+
+    const normalize = (value) => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const pool = tracks.map((track) => ({ track, hay: normalize(`${track.title} ${track.artist}`) }));
+
+    $$('[data-genre-key]').forEach((card) => {
+      if (card.querySelector('.genre-art')) return;
+      const keys = String(card.getAttribute('data-genre-key') || '')
+        .split('|').map((key) => normalize(key).trim()).filter(Boolean);
+      if (!keys.length) return;
+
+      const matches = [];
+      for (const entry of pool) {
+        if (!keys.some((key) => entry.hay.includes(key))) continue;
+        if (matches.some((track) => track.id === entry.track.id)) continue;
+        matches.push(entry.track);
+        if (matches.length >= 2) break;
+      }
+      if (!matches.length) return;
+
+      const art = document.createElement('span');
+      art.className = 'genre-art';
+      art.setAttribute('aria-hidden', 'true');
+      art.innerHTML = matches
+        .map((track, i) => `<img src="${thumbAt(track.thumbnail, 160)}" alt="" loading="lazy" class="genre-art-img" style="--i:${i}" />`)
+        .join('');
+      card.appendChild(art);
+    });
+  }
+
+  function renderSearchLanding() {
+    renderSearchContinue();
+    renderSearchDiscover();
+    applyGenreArt();
+    if (!homeShelvesCache.length) ensureSearchDiscover();
+  }
+
   let suggestionTimer = null;
   let currentSearchResults = [];
   let searchAbortController = null;
@@ -5462,6 +5784,20 @@
     const loadMoreBtn = $('searchLoadMoreBtn');
 
     renderRecentSearches();
+
+    // Sugerencias rápidas de búsqueda
+    $$('[data-quick-search]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const term = chip.getAttribute('data-quick-search');
+        if (!term) return;
+        input.value = term;
+        clearBtn.classList.remove('hidden');
+        suggestionsDropdown?.classList.add('hidden');
+        executeSearch(term, false);
+      });
+    });
+
+    $('searchDiscoverRefreshBtn')?.addEventListener('click', () => ensureSearchDiscover(true));
 
     // Filtros de categoría de búsqueda (SimpMusic: Canciones, Artistas, Álbumes, Playlists, Videos)
     $$('[data-search-type]').forEach((btn) => {
@@ -5488,6 +5824,9 @@
         results.classList.add('hidden');
         if (resultsList) resultsList.innerHTML = '';
         if (genresWrap) genresWrap.classList.remove('hidden');
+        $('searchQuickWrap')?.classList.remove('hidden');
+        $('searchDiscoverWrap')?.classList.remove('hidden');
+        renderSearchContinue();
         renderRecentSearches();
         return;
       }
@@ -5545,6 +5884,9 @@
       results.classList.add('hidden');
       if (resultsList) resultsList.innerHTML = '';
       if (genresWrap) genresWrap.classList.remove('hidden');
+      $('searchQuickWrap')?.classList.remove('hidden');
+      $('searchDiscoverWrap')?.classList.remove('hidden');
+      renderSearchContinue();
       renderRecentSearches();
       input.focus();
     });
@@ -5585,6 +5927,9 @@
     if (suggestionsDropdown) suggestionsDropdown.classList.add('hidden');
     if (genresWrap) genresWrap.classList.add('hidden');
     if (recentWrap) recentWrap.classList.add('hidden');
+    $('searchQuickWrap')?.classList.add('hidden');
+    $('searchDiscoverWrap')?.classList.add('hidden');
+    $('searchContinueWrap')?.classList.add('hidden');
     results.classList.remove('hidden');
 
     if (!isContinuation) {
@@ -5934,6 +6279,9 @@
     if (tab === 'library') {
       renderLibrary();
     }
+    if (tab === 'search') {
+      renderSearchLanding();
+    }
     if (tab === 'settings') {
       renderBackupStatus();
       Diag.render();
@@ -6154,6 +6502,8 @@
       showToast('✓ Imagen descargada para compartir');
     });
     $('storyShareCopyBtn')?.addEventListener('click', copyStoryImage);
+    $('storySharePrevBtn')?.addEventListener('click', () => goToStoryVerse(storyShareState.verseIdx - 1));
+    $('storyShareNextBtn')?.addEventListener('click', () => goToStoryVerse(storyShareState.verseIdx + 1));
     setupLyricsView();
 
     // Botón Limpiar Cola

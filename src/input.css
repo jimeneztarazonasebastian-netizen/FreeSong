@@ -114,6 +114,7 @@ main, #mainContainer, section, .scrollable-y {
 
 #fullPlayerSheet {
   background: radial-gradient(circle at 50% 20%, var(--ambient-glow, rgba(16, 185, 129, 0.22)) 0%, #09090b 85%);
+  background-color: #09090b;
   transition: background 0.6s ease, transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
@@ -647,4 +648,67 @@ body[data-aurora="off"] .aurora-bg { display: none; }
     border-radius: 1rem 1rem 0 0;
   }
   #artistViewModal { left: 0; right: 0; max-width: 720px; margin-inline: auto; }
+}
+
+/* =========================================================
+   v3.9.7 — Buscar con contenido real: portadas en géneros y carruseles
+   ========================================================= */
+.genre-card > span {
+  position: relative;
+  z-index: 2;
+}
+
+.genre-art {
+  position: absolute;
+  right: -0.5rem;
+  bottom: -0.8rem;
+  display: flex;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.genre-art-img {
+  width: 4.15rem;
+  height: 4.15rem;
+  object-fit: cover;
+  border-radius: 0.9rem;
+  border: 2px solid rgb(255 255 255 / .16);
+  box-shadow: 0 10px 20px rgb(0 0 0 / .5);
+  transform: rotate(-8deg);
+}
+
+.genre-art-img + .genre-art-img {
+  margin-left: -1.35rem;
+  transform: rotate(9deg) translateY(6px);
+}
+
+/* Relleno decorativo cuando no hay una portada que coincida con el género */
+.genre-card::after {
+  content: '♪';
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.1rem;
+  z-index: 0;
+  font-size: 3.6rem;
+  line-height: 1;
+  font-weight: 900;
+  color: rgb(255 255 255 / .14);
+  transform: rotate(-8deg);
+  pointer-events: none;
+}
+
+/* Si ya hay portadas reales, el adorno sobra */
+.genre-card:has(.genre-art)::after {
+  display: none;
+}
+
+#searchDiscoverList,
+#searchContinueList {
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+#searchDiscoverList > button,
+#searchContinueList > button {
+  scroll-snap-align: start;
 }

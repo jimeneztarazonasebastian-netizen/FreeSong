@@ -197,6 +197,44 @@
           <button class="chip-btn" data-search-type="videos">Videos</button>
         </div>
 
+        <!-- Sugerencias rápidas: un toque y a escuchar -->
+        <div id="searchQuickWrap" class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-500 shrink-0">Prueba con</span>
+          <button type="button" class="chip-btn" data-quick-search="Bad Bunny">Bad Bunny</button>
+          <button type="button" class="chip-btn" data-quick-search="Karol G">Karol G</button>
+          <button type="button" class="chip-btn" data-quick-search="Feid">Feid</button>
+          <button type="button" class="chip-btn" data-quick-search="Reggaeton exitos">Reggaetón</button>
+          <button type="button" class="chip-btn" data-quick-search="Chill relax">Chill</button>
+          <button type="button" class="chip-btn" data-quick-search="Rock en espanol">Rock</button>
+        </div>
+
+        <!-- Descubre: carrusel con portadas reales de recomendaciones -->
+        <div id="searchDiscoverWrap" class="space-y-2.5 pt-1">
+          <div class="flex items-center justify-between px-1">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Descubre algo nuevo</h3>
+            <button id="searchDiscoverRefreshBtn" type="button" class="text-[11px] font-bold text-emerald-400 hover:underline press">Actualizar</button>
+          </div>
+          <div id="searchDiscoverList" class="flex gap-3 overflow-x-auto no-scrollbar px-0.5 pb-1">
+            <div class="shrink-0 w-36 space-y-2 animate-pulse">
+              <div class="w-36 h-36 rounded-2xl bg-zinc-800/80"></div>
+              <div class="h-3 w-28 rounded-full bg-zinc-800/80"></div>
+            </div>
+            <div class="shrink-0 w-36 space-y-2 animate-pulse">
+              <div class="w-36 h-36 rounded-2xl bg-zinc-800/60"></div>
+              <div class="h-3 w-24 rounded-full bg-zinc-800/60"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sigue escuchando: tu historial con portadas reales -->
+        <div id="searchContinueWrap" class="hidden space-y-2.5">
+          <div class="flex items-center justify-between px-1">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Sigue escuchando</h3>
+            <span class="text-[10px] text-zinc-500">Tu historial</span>
+          </div>
+          <div id="searchContinueList" class="flex gap-3 overflow-x-auto no-scrollbar px-0.5 pb-1"></div>
+        </div>
+
         <!-- Búsquedas Recientes (cuando el input está vacío) -->
         <div id="searchRecentWrap" class="hidden space-y-2 pt-1">
           <div class="flex items-center justify-between px-1">
@@ -210,43 +248,43 @@
         <div id="searchGenresWrap" class="space-y-2.5 pt-1">
           <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">Explorar todo</h3>
           <div class="grid grid-cols-2 gap-2.5">
-            <div class="genre-card bg-gradient-to-br from-emerald-600 to-teal-950 border border-emerald-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Reggaeton exitos">
+            <div class="genre-card bg-gradient-to-br from-emerald-600 to-teal-950 border border-emerald-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Reggaeton exitos" data-genre-key="reggaeton|urbano|perreo|bad bunny|j balvin|ozuna|anuel|daddy yankee">
               <span class="text-sm font-black text-white">Reggaetón</span>
               <span class="text-[10px] text-emerald-200/80">Flow & Perreo</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-pink-600 to-rose-950 border border-pink-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Pop Latino exitos">
+            <div class="genre-card bg-gradient-to-br from-pink-600 to-rose-950 border border-pink-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Pop Latino exitos" data-genre-key="pop latino|pop|shakira|maluma|camilo|yatra|karol g">
               <span class="text-sm font-black text-white">Pop Latino</span>
               <span class="text-[10px] text-pink-200/80">Éxitos radiantes</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-purple-600 to-violet-950 border border-purple-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Trap Latino canciones">
+            <div class="genre-card bg-gradient-to-br from-purple-600 to-violet-950 border border-purple-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Trap Latino canciones" data-genre-key="trap|duki|rauw alejandro|arcangel|anuel|bad bunny">
               <span class="text-sm font-black text-white">Trap Latino</span>
               <span class="text-[10px] text-purple-200/80">Bajos pesados</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-green-500 to-emerald-950 border border-green-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Feid Karol G exitos">
+            <div class="genre-card bg-gradient-to-br from-green-500 to-emerald-950 border border-green-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Feid Karol G exitos" data-genre-key="feid|karol g|karol">
               <span class="text-sm font-black text-white">Feid & Karol G</span>
               <span class="text-[10px] text-green-200/80">Mix Medellín</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-amber-600 to-yellow-950 border border-amber-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Cumbia Vallenato exitos">
+            <div class="genre-card bg-gradient-to-br from-amber-600 to-yellow-950 border border-amber-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Cumbia Vallenato exitos" data-genre-key="cumbia|vallenato|silvestre|diomedes|tropical">
               <span class="text-sm font-black text-white">Cumbia & Vallenato</span>
               <span class="text-[10px] text-amber-200/80">Sabor tropical</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-cyan-600 to-blue-950 border border-cyan-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Electronica EDM festival">
+            <div class="genre-card bg-gradient-to-br from-cyan-600 to-blue-950 border border-cyan-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Electronica EDM festival" data-genre-key="electronica|edm|david guetta|calvin harris|avicii|marshmello|tiesto|dance">
               <span class="text-sm font-black text-white">Electrónica</span>
               <span class="text-[10px] text-cyan-200/80">Festival & Dance</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-red-600 to-zinc-950 border border-red-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Rock en espanol clasicos">
+            <div class="genre-card bg-gradient-to-br from-red-600 to-zinc-950 border border-red-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Rock en espanol clasicos" data-genre-key="rock|soda stereo|mana|enanitos verdes|heroes del silencio|caifanes|prisioneros">
               <span class="text-sm font-black text-white">Rock en Español</span>
               <span class="text-[10px] text-red-200/80">Clásicos eternos</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-fuchsia-600 to-purple-950 border border-fuchsia-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Baladas Romanticas">
+            <div class="genre-card bg-gradient-to-br from-fuchsia-600 to-purple-950 border border-fuchsia-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Baladas Romanticas" data-genre-key="balada|romantica|sin bandera|arjona|romeo santos|luis miguel|marco antonio">
               <span class="text-sm font-black text-white">Románticas</span>
               <span class="text-[10px] text-fuchsia-200/80">Para el corazón</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-orange-600 to-red-950 border border-orange-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Workout motivation music">
+            <div class="genre-card bg-gradient-to-br from-orange-600 to-red-950 border border-orange-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Workout motivation music" data-genre-key="workout|gym|motivation|eminem|energy|power">
               <span class="text-sm font-black text-white">Gym & Training</span>
               <span class="text-[10px] text-orange-200/80">Máxima energía</span>
             </div>
-            <div class="genre-card bg-gradient-to-br from-teal-500 to-blue-950 border border-teal-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Top 50 canciones virales">
+            <div class="genre-card bg-gradient-to-br from-teal-500 to-blue-950 border border-teal-500/20 cursor-pointer press flex flex-col justify-between" data-genre-q="Top 50 canciones virales" data-genre-key="top 50|viral|tendencias|hits|exitos">
               <span class="text-sm font-black text-white">Éxitos Virales</span>
               <span class="text-[10px] text-teal-200/80">Tendencias TikTok</span>
             </div>
@@ -552,7 +590,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.6 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.7 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -1001,6 +1039,15 @@
         <div class="rounded-2xl overflow-hidden bg-black border border-zinc-800">
           <img id="storySharePreview" alt="Vista previa de la historia para compartir" class="w-full max-h-[48vh] object-contain" />
         </div>
+
+        <!-- Verso elegido: se puede cambiar sin salir del modal, como en Spotify -->
+        <p id="storyShareVerse" class="text-[12px] leading-snug text-zinc-200 text-center px-1 line-clamp-2 transition-opacity"></p>
+        <div class="flex items-center justify-between gap-2">
+          <button id="storySharePrevBtn" type="button" class="flex-1 px-2 py-2 rounded-xl bg-zinc-800/70 border border-zinc-800 text-[11px] font-bold text-zinc-300 press disabled:opacity-35" aria-label="Verso anterior">‹ Anterior</button>
+          <span id="storyShareCounter" class="text-[10px] font-bold text-zinc-500 tabular-nums shrink-0">1 / 1</span>
+          <button id="storyShareNextBtn" type="button" class="flex-1 px-2 py-2 rounded-xl bg-zinc-800/70 border border-zinc-800 text-[11px] font-bold text-zinc-300 press disabled:opacity-35" aria-label="Verso siguiente">Siguiente ›</button>
+        </div>
+
         <p id="storyShareHint" class="text-[11px] text-zinc-500 leading-relaxed">Vista previa 1080 × 1920 lista para Instagram, WhatsApp o TikTok.</p>
         <div class="grid grid-cols-2 gap-2">
           <button id="storyShareNativeBtn" type="button" class="px-3 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black press">
@@ -1097,11 +1144,11 @@
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
-  <script src="util.js?v=3.9.6"></script>
-  <script src="storage.js?v=3.9.6"></script>
-  <script src="lyrics.js?v=3.9.6"></script>
-  <script src="diag.js?v=3.9.6"></script>
-  <script src="pwa.js?v=3.9.6"></script>
-  <script src="app.js?v=3.9.6"></script>
+  <script src="util.js?v=3.9.7"></script>
+  <script src="storage.js?v=3.9.7"></script>
+  <script src="lyrics.js?v=3.9.7"></script>
+  <script src="diag.js?v=3.9.7"></script>
+  <script src="pwa.js?v=3.9.7"></script>
+  <script src="app.js?v=3.9.7"></script>
 </body>
 </html>

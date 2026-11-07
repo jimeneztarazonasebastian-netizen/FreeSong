@@ -25,7 +25,20 @@ const TRACKS = Array.from({ length: TRACK_COUNT }, (_, i) => ({
   thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
 }));
 
-// WAV PCM 16 bits mono, 8 kHz, 6 s. Suficiente para probar el motor de audio.
+// Pistas de las recomendaciones de Inicio (portadas + géneros de la landing
+// de Buscar). Los títulos incluyen palabras de género para probar el arte de
+// las tarjetas de "Explorar todo".
+const HOME_TRACKS = [
+  { id: 'home-1', title: 'Reggaetón de prueba', artist: 'Bad Bunny', duration: 200, durationSeconds: 200, durationText: '3:20' },
+  { id: 'home-2', title: 'Pop de prueba', artist: 'Karol G', duration: 180, durationSeconds: 180, durationText: '3:00' },
+  { id: 'home-3', title: 'Rock de prueba', artist: 'Soda Stereo', duration: 220, durationSeconds: 220, durationText: '3:40' },
+  { id: 'home-4', title: 'Chill de prueba', artist: 'Feid', duration: 195, durationSeconds: 195, durationText: '3:15' }
+].map((track) => ({
+  ...track,
+  thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
+}));
+
+
 function makeWav(seconds = 6, rate = 8000) {
   const samples = seconds * rate;
   const dataSize = samples * 2;
@@ -177,7 +190,9 @@ async function run() {
         });
         if (url.pathname === '/api/queue') return json(route, { tracks: [] });
         if (url.pathname === '/api/health') return json(route, { ok: true, version: 'test' });
-        if (url.pathname === '/api/home') return json(route, { shelves: [] });
+        if (url.pathname === '/api/home') return json(route, {
+          shelves: [{ title: 'Mezcla de prueba', items: HOME_TRACKS }]
+        });
         if (url.pathname === '/api/artist') return json(route, {});
         if (url.pathname === '/api/album' || url.pathname === '/api/playlist') return json(route, {});
         return route.continue();
@@ -260,6 +275,62 @@ async function run() {
     );
     assert.match(lyricText, /Línea de prueba/, `Letra inesperada: ${lyricText}`);
 
+    // Compartir letra: la tarjeta debe llevar el verso real (no solo la
+    // canción) y permitir cambiar de verso, como en Spotify.
+    await page.evaluate(() => {
+      const first = document.querySelector('#lyricsContainer .lyric-line');
+      if (first) first.click();
+    });
+    await page.waitForTimeout(350);
+    await page.evaluate(() => document.getElementById('btnShareLyrics')?.click());
+    await page.waitForSelector('#storyShareModal:not(.hidden)', { timeout: 12000 });
+    const share = await page.evaluate(() => ({
+      verse: document.getElementById('storyShareVerse')?.textContent || '',
+      counter: document.getElementById('storyShareCounter')?.textContent || '',
+      preview: document.getElementById('storySharePreview')?.getAttribute('src') || ''
+    }));
+    assert.match(share.verse, /Línea de prueba/, `La tarjeta no incluyó el verso: ${share.verse}`);
+    assert.match(share.counter, /^1 \/ 2$/, `Contador de versos inesperado: ${share.counter}`);
+    assert.match(share.preview, /^blob:/, `Vista previa no generada: ${share.preview}`);
+
+    await page.evaluate(() => document.getElementById('storyShareNextBtn')?.click());
+    await page.waitForFunction(
+      () => /Segunda línea de prueba/.test(document.getElementById('storyShareVerse')?.textContent || ''),
+      null,
+      { timeout: 10000 }
+    );
+    const shareNext = await page.evaluate(() => ({
+      counter: document.getElementById('storyShareCounter')?.textContent || '',
+      verse: document.getElementById('storyShareVerse')?.textContent || ''
+    }));
+    assert.match(shareNext.counter, /^2 \/ 2$/, `Contador tras cambiar de verso: ${shareNext.counter}`);
+    await page.evaluate(() => document.getElementById('storyShareCloseBtn')?.click());
+    await page.waitForFunction(
+      () => document.getElementById('storyShareModal')?.classList.contains('hidden'),
+      null,
+      { timeout: 5000 }
+    );
+
+    // Landing de Buscar: mezclas con portadas reales, arte en géneros e
+    // historial, en vez de solo tarjetas de color.
+    await page.evaluate(() => document.getElementById('playerCloseBtn')?.click());
+    await page.evaluate(() => document.querySelector('[data-nav="search"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await page.waitForFunction(
+      () => document.querySelectorAll('#searchDiscoverList [data-discover-idx]').length > 0,
+      null,
+      { timeout: 12000 }
+    );
+    const landing = await page.evaluate(() => ({
+      discover: document.querySelectorAll('#searchDiscoverList [data-discover-idx]').length,
+      covers: document.querySelectorAll('#searchDiscoverList img').length,
+      genreArt: document.querySelectorAll('#searchGenresWrap .genre-art-img').length,
+      continueCards: document.querySelectorAll('#searchContinueList [data-continue-idx]').length
+    }));
+    assert.ok(landing.discover >= 1, 'La landing de Buscar no mostró mezclas');
+    assert.ok(landing.covers >= 4, `La landing de Buscar no mostró portadas: ${landing.covers}`);
+    assert.ok(landing.genreArt >= 2, `Los géneros no recibieron portadas: ${landing.genreArt}`);
+    assert.ok(landing.continueCards >= 1, 'No apareció "Sigue escuchando" con el historial');
+
     // Datos locales corruptos: la app debe arrancar igual, sin perder la calma.
     await page.evaluate(() => {
       localStorage.setItem('fs_favorites', '{no es json');
@@ -281,6 +352,8 @@ async function run() {
     console.log('  controles: pausa y reanudación');
     console.log('  diagnóstico: métricas locales visibles en Ajustes');
     console.log('  letras: 2 líneas sincronizadas renderizadas');
+    console.log('  compartir letra: tarjeta con verso real y selector');
+    console.log('  buscar: mezclas con portadas y arte en géneros');
     console.log('  almacenamiento: arranque correcto con datos corruptos');
   } catch (err) {
     failures.push(err);
