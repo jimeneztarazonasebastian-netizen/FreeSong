@@ -74,6 +74,21 @@ function hostOf(base) {
 
 const AUDIO_ITAGS = new Set(['139', '140', '141', '249', '250', '251']);
 
+// Invidious puede responder con segmentos SABR (`/companion/sabr-segment`),
+// que no son un archivo reproducible (devuelven una página HTML con captcha),
+// o con URLs de googlevideo que desde Vercel responden 403. Ninguna sirve.
+function isPlayableUrl(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    if (/\/companion\/sabr-segment$/i.test(u.pathname)) return false;
+    if (/googlevideo\.com$/i.test(u.host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Invidious no siempre incluye `mimeType`, así que el tipo se deduce del itag o
 // de la propia URL proxeada.
 function isAudioFormat(f) {
@@ -130,23 +145,15 @@ async function resolveFrom(base, videoId, wantedItag) {
   if (!formats.length) throw videoError('sin formatos de audio');
 
   const byItag = (n) => formats.find((f) => String(f.itag) === String(n));
-  const fmt =
-    (wantedItag ? byItag(wantedItag) : null) ||
-    byItag(140) ||
-    byItag(139) ||
-    formats.find((f) => /^audio\/mp4/.test(mimeOf(f))) ||
-    formats[0];
-
-  if (!fmt || !fmt.url) throw videoError('formato sin URL');
-  // Si la instancia ignora `local=true` devuelve googlevideo, que desde Vercel
-  // responde 403: no sirve como relay.
-  let host = '';
-  try {
-    host = new URL(fmt.url).host;
-  } catch {
-    throw fault('URL de audio inválida');
-  }
-  if (/googlevideo\.com$/i.test(host)) throw fault('la instancia no proxea el audio (local=true desactivado)');
+  const ordered = [
+    wantedItag ? byItag(wantedItag) : null,
+    byItag(140),
+    byItag(139),
+    formats.find((f) => /^audio\/mp4/.test(mimeOf(f))),
+    ...formats
+  ].filter(Boolean);
+  const fmt = ordered.find((f) => isPlayableUrl(f.url));
+  if (!fmt) throw videoError('la instancia solo entrega audio SABR');
 
   return {
     url: fmt.url,

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.14 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.15 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.14';
+  const APP_VERSION = '3.9.15';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -315,6 +315,11 @@
       position = positionOverride;
     } else if (S.pendingResume && S.currentTrack && S.pendingResume.id === S.currentTrack.id) {
       position = S.pendingResume.seconds;
+    } else if (isYtMode && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+      try {
+        const t = ytPlayer.getCurrentTime();
+        if (isFinite(t) && t > 1) position = t;
+      } catch {}
     } else if (!isYtMode) {
       const p = getActivePlayer();
       if (p && isFinite(p.currentTime) && p.currentTime > 0) position = p.currentTime;
@@ -699,13 +704,14 @@
     }
   }
 
-  function playWithYouTubeEngine(track) {
+  function playWithYouTubeEngine(track, startAt = 0) {
     if (!track) return;
     isYtMode = true;
     S.isPlaying = true;
     userIntentionalPause = false;
     keepAudioAlive();
     updatePlayPauseIcons(true, true);
+    const start = isFinite(startAt) && startAt > 3 ? Math.floor(startAt) : 0;
 
     // Detener cualquier deck HTML5 para evitar interferencias
     audioDecks.forEach((deck) => {
@@ -719,7 +725,9 @@
     const triggerPlay = () => {
       if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
         try {
-          ytPlayer.loadVideoById({ videoId: track.id, suggestedQuality: 'small' });
+          const request = { videoId: track.id, suggestedQuality: 'small' };
+          if (start > 0) request.startSeconds = start;
+          ytPlayer.loadVideoById(request);
           ytPlayer.playVideo();
         } catch (err) {
           console.warn('Error al llamar loadVideoById:', err);
@@ -892,7 +900,16 @@
 
       const step = Number(track._fallbackStep) || 0;
       if (step === 0) Diag.inc('recoveries');
-      if (step >= 3) {
+      if (step >= 2) {
+        // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
+        // la última vía que entrega audio (vídeos que la instancia solo ofrece
+        // como segmentos SABR). Mejor eso que un spinner infinito.
+        if (!track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
+          track._ytFallback = true;
+          showToast('Cambiando a una fuente alternativa de audio…', 2600);
+          playWithYouTubeEngine(track, resumeAt);
+          return;
+        }
         noteStreamFailure();
         skipFailedTrack(track);
         return;
@@ -1323,6 +1340,8 @@
       const key = entry[0];
       const src = entry[1];
       if (typeof key !== 'string' || !src || !src.url || !(src.expires > now + 60 * 1000)) continue;
+      // Descarta URLs viejas de SABR/googlevideo que ya no se pueden reproducir.
+      if (!isPlayableRelayUrl(src.url)) continue;
       if (relaySources.size >= RELAY_DISK_CACHE_MAX) break;
       relaySources.set(key, src);
     }
@@ -1428,15 +1447,17 @@
           const formats = relayAudioFormats(data);
           if (!formats.length) throw new Error('sin formatos de audio');
           const byItag = (n) => formats.find((f) => String(f.itag) === String(n));
-          const fmt = (wantedItag ? byItag(wantedItag) : null)
-            || byItag(140)
-            || byItag(139)
-            || formats.find((f) => /^audio\/mp4/.test(String(f.mimeType || f.type || '')))
-            || formats[0];
-          if (!fmt || !fmt.url) throw new Error('formato sin URL');
-
-          const host = new URL(fmt.url).host;
-          if (/googlevideo\.com$/i.test(host)) throw new Error('la instancia no proxea el audio');
+          const ordered = [
+            wantedItag ? byItag(wantedItag) : null,
+            byItag(140),
+            byItag(139),
+            formats.find((f) => /^audio\/mp4/.test(String(f.mimeType || f.type || ''))),
+            ...formats
+          ].filter(Boolean);
+          // Algunos vídeos solo se ofrecen como segmentos SABR (página del
+          // companion con captcha): eso no se puede reproducir con <audio>.
+          const fmt = ordered.find((f) => f && f.url && isPlayableRelayUrl(f.url));
+          if (!fmt) throw new Error('la instancia no entrega un archivo de audio');
 
           const source = {
             url: fmt.url,
@@ -1585,6 +1606,22 @@
     return task;
   }
 
+  // Invidious ya no siempre entrega un archivo directo: para algunos vídeos
+  // responde con segmentos SABR (`/companion/sabr-segment`, protegidos por
+  // captcha) o con URLs de googlevideo atadas a su IP. Ninguno sirve para
+  // <audio>; aceptarlos deja la app en un bucle de carga.
+  function isPlayableRelayUrl(url) {
+    if (!url) return false;
+    try {
+      const u = new URL(url, window.location.href);
+      if (/\/companion\/sabr-segment$/i.test(u.pathname)) return false;
+      if (/googlevideo\.com$/i.test(u.host)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function isDirectRelayUrl(url) {
     if (!url) return false;
     // Ojo: las URLs del relay llevan `host=...googlevideo.com` en la query,
@@ -1593,7 +1630,7 @@
     try {
       const u = new URL(url, window.location.href);
       if (u.pathname === '/api/stream') return false;
-      return !/googlevideo\.com$/i.test(u.host);
+      return isPlayableRelayUrl(url);
     } catch {
       return false;
     }
@@ -1611,12 +1648,19 @@
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
     if (offlineUrl) return offlineUrl;
     if (track.streamUrl) {
-      if (!isDirectRelayUrl(track.streamUrl) || !(track._relayExpires > 0) || track._relayExpires > Date.now()) {
+      const isProxyUrl = /\/api\/stream\?/.test(track.streamUrl);
+      // Una URL SABR/googlevideo cacheada no se puede reproducir: descártala.
+      if (!isDirectRelayUrl(track.streamUrl) && !isProxyUrl) {
+        delete track.streamUrl;
+        delete track._relayExpires;
+        delete track._relaySize;
+      } else if (isProxyUrl || !(track._relayExpires > 0) || track._relayExpires > Date.now()) {
         return track.streamUrl;
+      } else {
+        delete track.streamUrl;
+        delete track._relayExpires;
+        delete track._relaySize;
       }
-      delete track.streamUrl;
-      delete track._relayExpires;
-      delete track._relaySize;
     }
     // Aunque este objeto pista venga de otra pantalla, aprovecha una URL ya
     // resuelta (precarga o caché en disco) antes de recurrir al proxy lento.
@@ -2218,8 +2262,13 @@
       return;
     }
     const track = S.queue[index];
-    // Crossfade elegante SOLO de forma automática al final natural (!immediate)
-    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBackground();
+    // Pistas que ya agotaron relay y proxy: YouTube Web las entrega sin pasar
+    // por Invidious. Se recuerda para no repetir los reintentos en cada toque.
+    const preferYt = !isDownloaded(track.id) && !!track._ytFallback && navigator.onLine !== false;
+    const wasYtMode = isYtMode;
+    // Crossfade elegante SOLO de forma automática al final natural (!immediate).
+    // Si la pista anterior sonaba por YouTube Web no hay deck que fundir.
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBackground() && !wasYtMode && !preferYt;
 
     S.currentIndex = index;
     S.currentTrack = track;
@@ -2264,6 +2313,15 @@
       pendingTrackCommit = { track, signal: abortSignal };
     } else {
       commitTrackUI(track, abortSignal, { resetProgress: true });
+    }
+
+    if (preferYt) {
+      const resumeAt = S.pendingResume && S.pendingResume.id === track.id ? S.pendingResume.seconds : 0;
+      S.pendingResume = null;
+      S.isPlaying = true;
+      updatePlayPauseIcons(true, true);
+      playWithYouTubeEngine(track, resumeAt);
+      return;
     }
 
     const outPlayer = getActivePlayer();

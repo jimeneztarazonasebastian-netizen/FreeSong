@@ -36,19 +36,21 @@ npm run version:set -- 3.9.6  # actualiza la versión en los cuatro archivos
 
 ## ✅ Pruebas automáticas
 
-`npm test` ejecuta tres capas:
+`npm test` ejecuta cuatro capas:
 
 - **Unitarias** (`npm run test:unit`): helpers puros de `www/util.js`, lectura segura de `www/storage.js` y parseo de letras de `www/lyrics.js` en Node, sin navegador.
 - **Humo** (`npm run test:smoke`): abre Chrome real en modo headless y comprueba buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.
 - **Crossfade** (`npm run test:crossfade`): verifica que durante el fundido la tarjeta y la letra siguen en la canción que suena, y que solo cambian al terminar.
+- **Respaldo YouTube** (`npm run test:ytfallback`): simula un vídeo que la instancia solo ofrece como SABR y un proxy caído; comprueba que la app cambia al reproductor de YouTube Web en vez de quedarse cargando.
 
 Requiere Google Chrome instalado. Usa `playwright-core` con el canal `chrome`, así que no descarga navegadores adicionales.
 
 ```bash
-npm test               # unitarias + humo + crossfade
-npm run test:unit      # solo helpers puros
-npm run test:smoke     # solo Chrome headless
-npm run test:crossfade # solo regresión del crossfade
+npm test                # todas las capas
+npm run test:unit       # solo helpers puros
+npm run test:smoke      # solo Chrome headless
+npm run test:crossfade  # solo regresión del crossfade
+npm run test:ytfallback # solo respaldo de YouTube
 ```
 
 ## 🧩 Estructura del cliente
