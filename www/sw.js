@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.13: Network-First para App Shell (actualización inmediata)
+// Service worker de FreeSong v3.9.14: Network-First para App Shell (actualización inmediata)
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.13';
+const VERSION = 'freesong-v3.9.14';
 const SHELL = [
   './',
   'index.html',

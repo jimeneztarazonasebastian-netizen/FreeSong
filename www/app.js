@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.13 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.14 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.13';
+  const APP_VERSION = '3.9.14';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -830,9 +830,39 @@
     }, delayMs);
   }
 
-  // Reintenta con una URL nueva sin esperar resoluciones lentas: el proxy de
-  // Vercel con `backup` responde en 1-2 s, mientras que reintentar el relay
-  // directo podía bloquear la cola hasta 6 s más.
+  // Cambia la fuente de un deck ya en marcha conservando la posición. Sirve
+  // para pasar del proxy de Vercel (corta la conexión a los ~15 s) al relay
+  // directo sin reiniciar la canción ni perder el hilo.
+  let playbackSourceToken = 0;
+  function switchPlayerSource(player, url, resumeAt = 0) {
+    if (!player || !url) return false;
+    const pos = isFinite(resumeAt) && resumeAt > 0.05 ? resumeAt : 0;
+    const token = ++playbackSourceToken;
+    try {
+      const seek = () => {
+        if (player.dataset.sourceToken !== String(token)) return;
+        try {
+          if (pos > 0 && (!isFinite(player.duration) || pos < player.duration - 1)) {
+            player.currentTime = pos;
+          }
+        } catch {}
+      };
+      player.dataset.sourceToken = String(token);
+      if (pos > 0) player.addEventListener('loadedmetadata', seek, { once: true });
+      player.src = url;
+      player.load();
+      if (pos > 0) seek();
+      const pr = player.play();
+      if (pr && pr.catch) pr.catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Reintenta con una URL nueva sin esperar resoluciones lentas: el relay
+  // directo sobrevive al corte del proxy; si no hay relay en ~3 s, el proxy
+  // con `backup` responde en 1-2 s.
   async function handleStreamFailure(track, deck) {
     if (!track) {
       updatePlayPauseIcons(false, false);
@@ -868,6 +898,28 @@
         return;
       }
 
+      // El fallo más común no es una URL rota: el proxy de Vercel corta la
+      // conexión a los ~15 s. Antes de gastar otro reintento en el proxy,
+      // intenta el relay directo (resuelve en 1-3 s) y continúa la canción
+      // donde iba. Se omite si el que falló fue el propio relay.
+      const failedOnRelay = isDirectRelayUrl(player.src);
+      if (!failedOnRelay && navigator.onLine !== false) {
+        const direct = await Promise.race([
+          resolveRelaySource(track.id, S.audioQuality, step > 0).catch(() => null),
+          new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+        ]);
+        if (direct && direct.url) {
+          if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+          rememberRelaySource(track, direct);
+          // El relay ya está sonando: no consumas un reintento del proxy.
+          track._fallbackStep = 0;
+          if (switchPlayerSource(player, direct.url, resumeAt)) {
+            armStreamWatchdog(track, 7000);
+            return;
+          }
+        }
+      }
+
       track._fallbackStep = step + 1;
       delete track.streamUrl;
       delete track._relayExpires;
@@ -884,20 +936,9 @@
       if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
 
       try {
-        const seek = () => {
-          try {
-            if (resumeAt > 0 && (!isFinite(player.duration) || resumeAt < player.duration - 1)) {
-              player.currentTime = resumeAt;
-            }
-          } catch {}
-        };
-        if (resumeAt > 0) player.addEventListener('canplay', seek, { once: true });
-        player.src = nextUrl;
-        player.load();
-        if (resumeAt > 0) seek();
-        const pr = player.play();
-        if (pr && pr.catch) pr.catch(() => {});
-        armStreamWatchdog(track, 7000);
+        if (switchPlayerSource(player, nextUrl, resumeAt)) {
+          armStreamWatchdog(track, 7000);
+        }
         return;
       } catch {}
     } finally {
@@ -1587,31 +1628,25 @@
     return buildStreamUrl(track);
   }
 
-  // Si el proxy aún no logró sonar, cambia al relay directo en cuanto esté listo.
-  // Nunca corta una canción que ya empezó: solo actúa con currentTime ~0.
+  // Si la pista arrancó por el proxy, cambia al relay directo en cuanto esté
+  // listo conservando la posición. El proxy de Vercel corta la conexión a los
+  // ~15 s; el relay aguanta la canción completa. Nunca toca copias offline.
   function upgradePlaybackToRelay(track, player) {
     if (!track || !player || isYtMode || !S.isPlaying || userIntentionalPause) return;
     if (isDirectRelayUrl(player.src)) return;
+    const currentSrc = player.src || '';
+    if (currentSrc.startsWith('blob:') || isDownloaded(track.id)) return;
     const token = ++relayUpgradeToken;
 
     resolveRelaySource(track.id, S.audioQuality).then((source) => {
       if (!source || token !== relayUpgradeToken) return;
       if (S.queue[S.currentIndex] !== track || isYtMode || !S.isPlaying || userIntentionalPause) return;
       if (player !== getActivePlayer()) return;
-
-      // Ya está sonando o tiene datos suficientes: no interrumpir.
-      if (player.currentTime > 0.3 || player.readyState >= 3) {
-        rememberRelaySource(track, source);
-        return;
-      }
+      if ((player.src || '').startsWith('blob:')) return;
 
       rememberRelaySource(track, source);
-      try {
-        player.src = source.url;
-        player.load();
-        const pr = player.play();
-        if (pr && pr.catch) pr.catch(() => {});
-      } catch {}
+      const resumeAt = isFinite(player.currentTime) ? player.currentTime : 0;
+      switchPlayerSource(player, source.url, resumeAt);
     }).catch(() => {});
   }
 
