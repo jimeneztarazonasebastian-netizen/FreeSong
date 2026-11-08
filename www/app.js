@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.15 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.16 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.15';
+  const APP_VERSION = '3.9.16';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -709,6 +709,10 @@
     isYtMode = true;
     S.isPlaying = true;
     userIntentionalPause = false;
+    if (streamWatchdogTimer) {
+      clearTimeout(streamWatchdogTimer);
+      streamWatchdogTimer = null;
+    }
     keepAudioAlive();
     updatePlayPauseIcons(true, true);
     const start = isFinite(startAt) && startAt > 3 ? Math.floor(startAt) : 0;
@@ -821,6 +825,7 @@
     }
     streamWatchdogTimer = setTimeout(() => {
       streamWatchdogTimer = null;
+      if (isYtMode) return;
       const p = getActivePlayer();
       if (!p || !track) return;
       if (!S.isPlaying || userIntentionalPause || isTransitioningTrack) return;
@@ -872,6 +877,9 @@
   // directo sobrevive al corte del proxy; si no hay relay en ~3 s, el proxy
   // con `backup` responde en 1-2 s.
   async function handleStreamFailure(track, deck) {
+    // Con YouTube Web controlando el audio, los errores del deck HTML5 ya no
+    // son relevantes (se vació a propósito).
+    if (isYtMode) return;
     if (!track) {
       updatePlayPauseIcons(false, false);
       return;
@@ -900,7 +908,7 @@
 
       const step = Number(track._fallbackStep) || 0;
       if (step === 0) Diag.inc('recoveries');
-      if (step >= 2) {
+      if (step >= 1) {
         // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
         // la última vía que entrega audio (vídeos que la instancia solo ofrece
         // como segmentos SABR). Mejor eso que un spinner infinito.
@@ -922,11 +930,11 @@
       const failedOnRelay = isDirectRelayUrl(player.src);
       if (!failedOnRelay && navigator.onLine !== false) {
         const direct = await Promise.race([
-          resolveRelaySource(track.id, S.audioQuality, step > 0).catch(() => null),
+          resolveRelaySource(track.id, S.audioQuality).catch(() => null),
           new Promise((resolve) => setTimeout(() => resolve(null), 3000))
         ]);
         if (direct && direct.url) {
-          if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+          if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
           rememberRelaySource(track, direct);
           // El relay ya está sonando: no consumas un reintento del proxy.
           track._fallbackStep = 0;
@@ -950,7 +958,7 @@
       }
       const nextUrl = buildStreamUrl(track, track._fallbackStep);
 
-      if (S.queue[S.currentIndex] !== track || userIntentionalPause) return;
+      if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
 
       try {
         if (switchPlayerSource(player, nextUrl, resumeAt)) {
@@ -1153,6 +1161,7 @@
 
     // Errores o bloqueos en la conexión
     deck.addEventListener('error', (e) => {
+      if (isYtMode) return;
       if (idx === activeDeckIdx && S.currentIndex >= 0 && S.isPlaying && !userIntentionalPause && !isTransitioningTrack) {
         console.warn('Error en deck de audio:', e);
         const maxVol = S.audioNormalize ? 0.88 : 1.0;
