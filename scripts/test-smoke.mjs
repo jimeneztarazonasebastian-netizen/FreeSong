@@ -162,6 +162,8 @@ async function run() {
   const failures = [];
   const pageErrors = [];
   const consoleErrors = [];
+  // Similares que devolverá /api/queue. Se rellena en la prueba de radio.
+  let queueTracks = [];
 
   try {
     const context = await browser.newContext({
@@ -192,7 +194,7 @@ async function run() {
           syncedLyrics: '[00:00.00]Línea de prueba\n[00:05.00]Segunda línea de prueba',
           plainLyrics: 'Línea de prueba\nSegunda línea de prueba'
         });
-        if (url.pathname === '/api/queue') return json(route, { tracks: [] });
+        if (url.pathname === '/api/queue') return json(route, { tracks: queueTracks });
         if (url.pathname === '/api/health') return json(route, { ok: true, version: 'test' });
         if (url.pathname === '/api/home') return json(route, {
           shelves: [{ title: 'Mezcla de prueba', items: HOME_TRACKS }]
@@ -335,6 +337,47 @@ async function run() {
     assert.ok(landing.genreArt >= 2, `Los géneros no recibieron portadas: ${landing.genreArt}`);
     assert.ok(landing.continueCards >= 1, 'No apareció "Sigue escuchando" con el historial');
 
+    // Radio desde Buscar: al elegir una canción, la cola debe seguir con
+    // similares (como Spotify), no con el siguiente resultado de búsqueda.
+    queueTracks = Array.from({ length: 4 }, (_, i) => ({
+      id: `sim-${i + 1}`,
+      title: `Similar de prueba ${i + 1}`,
+      artist: 'Artista similar',
+      duration: 30,
+      durationSeconds: 30,
+      durationText: '0:30',
+      thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
+    }));
+    await page.fill('#searchInput', 'sutra');
+    await page.waitForSelector('#searchResultsList [data-search-idx]', { timeout: 8000 });
+    await page.evaluate(() =>
+      document.querySelector('#searchResultsList [data-search-idx]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    );
+    await page.waitForFunction(
+      () => /Canción de prueba 1/.test(document.getElementById('playerTitle')?.textContent || ''),
+      null,
+      { timeout: 12000 }
+    );
+    await page.evaluate(() => document.getElementById('miniPlayer')?.click());
+    await page.waitForSelector('#tabQueueBtn', { state: 'visible', timeout: 8000 });
+    await page.evaluate(() => document.getElementById('tabQueueBtn')?.click());
+    await page.waitForFunction(
+      () => document.querySelectorAll('#queueList [data-queue-idx]').length > 0,
+      null,
+      { timeout: 8000 }
+    );
+    const upcoming = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#queueList [data-queue-idx]')).map((el) => el.textContent || '')
+    );
+    assert.ok(
+      upcoming.some((txt) => /Similar de prueba 1/.test(txt)),
+      `La cola no arrancó con similares: ${upcoming[0] || 'vacía'}`
+    );
+    assert.ok(
+      !upcoming.some((txt) => /Canción de prueba 2/.test(txt)),
+      `La cola sigue con resultados de búsqueda: ${upcoming[0] || ''}`
+    );
+
     // Datos locales corruptos: la app debe arrancar igual, sin perder la calma.
     await page.evaluate(() => {
       localStorage.setItem('fs_favorites', '{no es json');
@@ -358,6 +401,7 @@ async function run() {
     console.log('  letras: 2 líneas sincronizadas renderizadas');
     console.log('  compartir letra: tarjeta con verso real y selector');
     console.log('  buscar: mezclas con portadas y arte en géneros');
+    console.log(`  radio desde Buscar: ${upcoming.length} similares en la cola`);
     console.log('  almacenamiento: arranque correcto con datos corruptos');
   } catch (err) {
     failures.push(err);

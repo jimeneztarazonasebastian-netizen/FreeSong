@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.12 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.13 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.12';
+  const APP_VERSION = '3.9.13';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1783,6 +1783,55 @@
         isFetchingRelated = false;
       }
     }
+  }
+
+  // Añade pistas nuevas a la cola sin duplicar IDs. Devuelve cuántas entraron.
+  function addTracksToQueue(list) {
+    if (!Array.isArray(list) || list.length === 0) return 0;
+    const existing = new Set(S.queue.map((t) => t && t.id));
+    const fresh = list.filter((t) => t && t.id && !existing.has(t.id));
+    if (fresh.length === 0) return 0;
+    S.queue.push(...fresh);
+    renderQueue();
+    return fresh.length;
+  }
+
+  // Al elegir una canción en Buscar, la cola se convierte en una radio de esa
+  // canción (similares de YouTube), no en el resto de resultados. Así "la
+  // siguiente" tiene que ver con lo que está sonando, como en Spotify.
+  let queueSeedToken = 0;
+
+  async function seedSimilarQueue(track, fallback = []) {
+    if (!track || !S.autoplayInfinite) return;
+    const token = ++queueSeedToken;
+    // Evita que ensureUpcomingTracks haga la misma petición por duplicado.
+    isFetchingRelated = true;
+
+    let related = [];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(`/api/queue?id=${encodeURIComponent(track.id)}`, { signal: controller.signal });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tracks)) related = data.tracks;
+      }
+    } catch {}
+    clearTimeout(timer);
+    if (token === queueSeedToken) isFetchingRelated = false;
+    if (token !== queueSeedToken) return;
+
+    // La cola pudo cambiar mientras se resolvía: no mezclar recomendaciones
+    // de una canción que ya no está sonando.
+    const current = S.queue[S.currentIndex];
+    if (!current || current.id !== track.id) return;
+
+    addTracksToQueue(related);
+
+    // Si las recomendaciones no llenan la cola, completa con el resto de la
+    // búsqueda para que la reproducción no se detenga.
+    const remaining = S.queue.length - 1 - S.currentIndex;
+    if (remaining < 4) addTracksToQueue(fallback);
   }
 
   // --- Motor de Descargas Offline Reales (Cache API + Modo Avión en iPhone) ---
@@ -4737,6 +4786,16 @@
     `).join('');
 
     container.querySelectorAll('[data-lib-track-idx]').forEach((card) => {
+      // Al tocar (dedo abajo) se resuelve ya la URL directa del relay: al soltar
+      // la pista arranca sin esperar al proxy de Vercel.
+      card.addEventListener('pointerdown', () => {
+        const idx = parseInt(card.getAttribute('data-lib-track-idx'), 10);
+        const t = tracks[idx];
+        if (!t || !t.id || isDownloaded(t.id)) return;
+        resolveRelaySource(t.id, S.audioQuality).then((src) => {
+          if (src) rememberRelaySource(t, src);
+        }).catch(() => {});
+      }, { passive: true });
       card.addEventListener('click', (e) => {
         if (e.target.closest('[data-lib-track-more]') || e.target.closest('[data-lib-track-like]') || e.target.closest('[data-lib-track-down]') || e.target.closest('[data-lib-track-del]') || e.target.closest('.artist-link')) return;
         const idx = parseInt(card.getAttribute('data-lib-track-idx'), 10);
@@ -6228,8 +6287,19 @@
           el.addEventListener('click', (e) => {
             if (e.target.closest('[data-search-more]') || e.target.closest('[data-search-down]') || e.target.closest('.artist-link')) return;
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
-            S.queue = [...currentSearchResults];
-            playTrack(idx, true);
+            const chosen = currentSearchResults[idx];
+            if (!chosen) return;
+            if (S.autoplayInfinite) {
+              // Radio de la canción elegida: la siguiente será similar, no el
+              // resultado que venía debajo en la búsqueda.
+              S.queue = [chosen];
+              S.currentIndex = 0;
+              seedSimilarQueue(chosen, currentSearchResults.filter((t) => t && t.id !== chosen.id));
+              playTrack(0, true);
+            } else {
+              S.queue = [...currentSearchResults];
+              playTrack(idx, true);
+            }
           });
         });
 
