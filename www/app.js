@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.11 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.12 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.11';
+  const APP_VERSION = '3.9.12';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -277,6 +277,9 @@
 
   let activeDeckIdx = 0;
   let isCrossfading = false;
+  // Cambio visual pendiente mientras el crossfade está en curso: la pista
+  // entrante ya suena, pero la interfaz sigue mostrando la que se apaga.
+  let pendingTrackCommit = null;
   let fadeInterval = null;
   window.crossfadeInterval = null;
   window.activeStreamAbort = null;
@@ -905,12 +908,16 @@
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      saveSession(true);
-      if (isCrossfading) {
+      if (isCrossfading && pendingTrackCommit) {
+        // Al ocultarse la app, el fundido se cierra y la sesión guarda la
+        // pista entrante con su posición real.
+        finishCrossfadeNow();
+      } else if (isCrossfading) {
         cancelActiveCrossfade();
         const activeP = getActivePlayer();
         if (activeP) activeP.volume = S.audioNormalize ? 0.88 : 1;
       }
+      saveSession(true);
       ensurePlaybackAlive();
     } else {
       ensurePlaybackAlive();
@@ -921,7 +928,10 @@
   window.addEventListener('pageshow', () => ensurePlaybackAlive());
   window.addEventListener('focus', () => ensurePlaybackAlive());
   // Guarda la sesión al salir; NO pausa el audio (iOS lo mantiene en segundo plano).
-  window.addEventListener('pagehide', () => saveSession(true));
+  window.addEventListener('pagehide', () => {
+    if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
+    saveSession(true);
+  });
   window.addEventListener('beforeunload', () => saveSession(true));
 
   // --- Eventos del Reproductor HTML5 ---
@@ -1023,7 +1033,11 @@
         streamWatchdogTimer = null;
       }
 
-      const track = S.queue[S.currentIndex];
+      // La duración/posición se resuelven con la pista que contiene ESTE deck.
+      // Durante un crossfade, S.currentIndex ya apunta a la entrante mientras
+      // el deck audible sigue siendo el saliente.
+      const deckTrackId = deck.dataset.trackId;
+      const track = (deckTrackId && S.queue.find((t) => t && t.id === deckTrackId)) || S.queue[S.currentIndex];
       const dur = getEffectiveDuration(deck, track);
 
       if (dur > 0) {
@@ -1075,7 +1089,8 @@
       }
 
       // Guarda la posición cada ~4 s para retomar la sesión al reabrir la app.
-      saveSession();
+      // Durante el crossfade no: la pista nueva aún no manda en la interfaz.
+      if (!isCrossfading) saveSession();
     });
 
     // Errores o bloqueos en la conexión
@@ -1719,6 +1734,7 @@
         if (inact && inact.paused && inact.dataset.prefetchedId !== nextTrack.id) {
           try {
             inact.dataset.prefetchedId = nextTrack.id;
+            inact.dataset.trackId = nextTrack.id;
             inact.muted = true;
             inact.preload = 'auto';
             inact.src = source.url;
@@ -2038,6 +2054,74 @@
     btn.title = isDown ? 'Descargada (Toca para eliminar)' : 'Descargar para escuchar offline';
   }
 
+  // Pinta de una vez todo lo que depende de la pista que realmente manda en
+  // el audio (tarjeta, letra, similares, MediaSession, historial y cola).
+  // En un crossfade se llama al terminar el fundido, no al empezar.
+  function commitTrackUI(track, signal, options = {}) {
+    const resetProgress = options.resetProgress === true;
+    showAndSyncMiniPlayer(track, true);
+
+    const player = getActivePlayer();
+    const cur = resetProgress
+      ? 0
+      : (player && isFinite(player.currentTime) ? Math.max(0, player.currentTime) : 0);
+    const dur = resetProgress ? 0 : getEffectiveDuration(player, track);
+    const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
+
+    if ($('playerCurTime')) $('playerCurTime').textContent = formatTime(cur);
+    if ($('playerDurTime') && dur > 0) $('playerDurTime').textContent = formatTime(dur);
+    if ($('playerSeek') && !isScrubbing) $('playerSeek').value = pct;
+    if ($('miniProgress')) $('miniProgress').style.width = `${pct}%`;
+
+    updatePlayerUI(track);
+    applyDynamicColor(track);
+    saveHistory(track);
+    recordPlayStat(track);
+    loadLyrics(track, signal);
+    loadSimilarTracks(track, signal);
+    updateMediaSession(track);
+    ensureUpcomingTracks(track, signal);
+    enrichTrackDuration(track, signal);
+    // En un cambio normal la posición es 0; al cerrar un crossfade se guarda
+    // la posición real del deck entrante (ya activo).
+    saveSession(true, resetProgress ? 0 : null);
+    if (options.armWatchdog) armStreamWatchdog(track);
+  }
+
+  // Cierra el fundido ahora mismo (pausa, salto o app en segundo plano):
+  // convierte el deck entrante en el activo y recién ahí actualiza la UI.
+  function finishCrossfadeNow() {
+    const pending = pendingTrackCommit;
+    if (!pending) return;
+    const outP = getActivePlayer();
+    const inP = getInactivePlayer();
+
+    cancelActiveCrossfade();
+    try {
+      if (outP) {
+        outP.pause();
+        outP.currentTime = 0;
+        outP.removeAttribute('src');
+        outP.load();
+      }
+      if (inP) inP.volume = S.audioNormalize ? 0.88 : 1.0;
+    } catch {}
+
+    activeDeckIdx = 1 - activeDeckIdx;
+    pendingTrackCommit = null;
+    commitTrackUI(pending.track, pending.signal, { armWatchdog: true });
+  }
+
+  // Al terminar el fundido, el deck entrante ya es el activo: momento exacto
+  // para que la tarjeta, la letra y los similares cambien de canción.
+  function flushPendingTrackCommit() {
+    const pending = pendingTrackCommit;
+    if (!pending) return;
+    pendingTrackCommit = null;
+    if (S.currentTrack !== pending.track) return;
+    commitTrackUI(pending.track, pending.signal, { armWatchdog: true });
+  }
+
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false) {
     isTransitioningTrack = false;
@@ -2049,11 +2133,13 @@
       isTransitioningTrack = false;
       return;
     }
-    S.currentIndex = index;
     const track = S.queue[index];
+    // Crossfade elegante SOLO de forma automática al final natural (!immediate)
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBackground();
+
+    S.currentIndex = index;
     S.currentTrack = track;
     Store.write('fs_last_track', track);
-    saveSession(true, 0);
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
@@ -2078,35 +2164,24 @@
     // Si es salto manual o había crossfade activo, cancelar crossfade y fijar volumen al 100%
     if (immediate || isCrossfading) {
       cancelActiveCrossfade();
+      // La pista que estaba entrando se abandona: no hay que pintarla luego.
+      pendingTrackCommit = null;
     }
-
-    // 1. Mostrar y sincronizar inmediatamente el Mini-Player en el milisegundo 0 (antes de cualquier audio)
-    showAndSyncMiniPlayer(track, true);
-
-    // Reset inmediato de posición visual en la interfaz para la nueva pista
-    if ($('playerCurTime')) $('playerCurTime').textContent = '0:00';
-    if ($('playerSeek')) $('playerSeek').value = 0;
-    if ($('miniProgress')) $('miniProgress').style.width = '0%';
 
     // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
     // aunque la pista también tenga una URL de streaming precargada.
     const streamUrl = getTrackStreamUrl(track);
 
-    // Actualizar UI y ambiente dinámico inmediatamente
-    updatePlayerUI(track);
-    applyDynamicColor(track);
-    saveHistory(track);
-    recordPlayStat(track);
-    loadLyrics(track, abortSignal);
-    loadSimilarTracks(track, abortSignal);
-    updateMediaSession(track);
-    ensureUpcomingTracks(track, abortSignal);
-    enrichTrackDuration(track, abortSignal);
+    if (shouldCrossfade) {
+      // El audio de la siguiente entra ya, pero la tarjeta, la letra y los
+      // similares se actualizan al terminar el fundido: mientras la anterior
+      // siga sonando, la interfaz sigue siendo la de ella.
+      pendingTrackCommit = { track, signal: abortSignal };
+    } else {
+      commitTrackUI(track, abortSignal, { resetProgress: true });
+    }
 
-    const isBg = isBackground();
-    // Crossfade elegante SOLO de forma automática al final natural (!immediate)
-    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBg;
     const outPlayer = getActivePlayer();
     let inPlayer;
     let reusingPrefetched = false;
@@ -2137,6 +2212,10 @@
     delete inPlayer.dataset.retried;
     delete inPlayer.dataset.prefetched;
     delete inPlayer.dataset.prefetchedId;
+    // Qué pista contiene cada deck: la barra de progreso y la duración se
+    // calculan con esto, no con S.currentIndex (que durante el crossfade ya
+    // apunta a la pista entrante).
+    inPlayer.dataset.trackId = track.id;
 
     // Configurar volumen de normalización y velocidad
     const targetVolume = S.audioNormalize ? 0.88 : 1.0;
@@ -2152,7 +2231,7 @@
         inPlayer.playbackRate = S.playbackRate;
         inPlayer.src = streamUrl;
         inPlayer.play().catch(() => {});
-        performCrossfade(outPlayer, inPlayer, S.crossfadeDuration);
+        performCrossfade(outPlayer, inPlayer, S.crossfadeDuration, flushPendingTrackCommit);
       } else {
         cancelActiveCrossfade();
         const inact = getInactivePlayer();
@@ -2236,7 +2315,7 @@
   }
 
   // --- Curva de Crossfade Senoidal (Desktop) ---
-  function performCrossfade(outP, inP, durationSec) {
+  function performCrossfade(outP, inP, durationSec, onDone) {
     // No usar cancelActiveCrossfade(): resetea AMBOS decks a volumen máximo y hacía
     // que la pista entrante sonara fuerte durante el primer tick del fundido.
     if (window.crossfadeInterval) {
@@ -2281,6 +2360,7 @@
           }
         } catch {}
         activeDeckIdx = 1 - activeDeckIdx;
+        if (typeof onDone === 'function') onDone();
       }
     }, stepTime);
     fadeInterval = window.crossfadeInterval;
@@ -2329,6 +2409,9 @@
   function pausePlayback() {
     userIntentionalPause = true;
     isTransitioningTrack = false;
+    // Si se pausa en pleno fundido, se cierra ya y la interfaz pasa a la pista
+    // entrante (la que realmente va a reanudarse).
+    if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
     if (trackTransitionTimeout) {
       clearTimeout(trackTransitionTimeout);
       trackTransitionTimeout = null;
@@ -2453,6 +2536,7 @@
 
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
+    if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
     const p = getActivePlayer();
     if (p && p.currentTime > 3) {
       p.currentTime = 0;
@@ -4596,11 +4680,11 @@
     const noMatch = 'Ninguna canción coincide con tu búsqueda en la biblioteca.';
 
     if (S.libFilter === 'likes') {
-      renderTrackList($('libLikedList'), getFilteredLibraryTracks(), filtering ? noMatch : 'Aún no tienes canciones favoritas. Toca el corazón en cualquier canción.');
+      renderTrackList($('libLikedList'), getFilteredLibraryTracks(), filtering ? noMatch : 'Aún no tienes canciones favoritas. Toca el corazón en cualquier canción.', { icon: 'i-heart' });
     } else if (S.libFilter === 'downloads') {
-      renderTrackList($('libDownloadsList'), getFilteredLibraryTracks(), filtering ? noMatch : 'No tienes canciones descargadas. Toca ⬇️ en cualquier canción o "Descargar favoritas" para escuchar offline.');
+      renderTrackList($('libDownloadsList'), getFilteredLibraryTracks(), filtering ? noMatch : 'No tienes canciones descargadas. Toca ⬇️ en cualquier canción o "Descargar favoritas" para escuchar offline.', { icon: 'i-download' });
     } else if (S.libFilter === 'history') {
-      renderTrackList($('libHistoryList'), getFilteredLibraryTracks(), filtering ? noMatch : 'El historial de reproducción está vacío.');
+      renderTrackList($('libHistoryList'), getFilteredLibraryTracks(), filtering ? noMatch : 'El historial de reproducción está vacío.', { icon: 'i-timer' });
     } else if (S.libFilter === 'playlists') {
       renderUserPlaylists();
     } else if (S.libFilter === 'stats') {
@@ -4612,7 +4696,16 @@
   function renderTrackList(container, tracks, emptyText, opts = {}) {
     if (!container) return;
     if (tracks.length === 0) {
-      container.innerHTML = `<p class="text-zinc-500 text-xs py-8 text-center">${emptyText}</p>`;
+      // Estado vacío con la misma jerarquía visual que el resto de la app:
+      // icono suave + texto corto, en vez de una línea suelta perdida.
+      const icon = opts.icon || 'i-library';
+      container.innerHTML = `
+        <div class="flex flex-col items-center justify-center text-center py-10 px-6">
+          <span class="w-14 h-14 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 mb-3">
+            <svg class="w-6 h-6"><use href="#${icon}"/></svg>
+          </span>
+          <p class="text-xs text-zinc-500 leading-relaxed max-w-[16rem]">${emptyText}</p>
+        </div>`;
       return;
     }
 
@@ -5107,7 +5200,7 @@
       $('plDetailTracks'),
       visible,
       q ? 'Ninguna canción de esta playlist coincide con la búsqueda.' : 'Esta playlist está vacía. Agrega canciones desde el menú ⋮ de cualquier tema.',
-      { onRemove: (idx) => removeTrackFromPlaylist(pl.id, visible[idx].id) }
+      { onRemove: (idx) => removeTrackFromPlaylist(pl.id, visible[idx].id), icon: 'i-playlist-add' }
     );
   }
 
@@ -6274,6 +6367,7 @@
     closeArtistProfile();
     if (S.activeTab !== tab) haptic('light');
     S.activeTab = tab;
+    updateGreeting();
     $('viewHome').classList.toggle('hidden', tab !== 'home');
     $('viewSearch').classList.toggle('hidden', tab !== 'search');
     $('viewLibrary').classList.toggle('hidden', tab !== 'library');
@@ -7038,6 +7132,12 @@
   function updateGreeting() {
     const el = $('headerGreeting');
     if (!el) return;
+    // En las demás pestañas el saludo no tiene sentido: la cabecera muestra
+    // la marca y cada vista conserva su título grande, como en Spotify.
+    if (S.activeTab && S.activeTab !== 'home') {
+      el.textContent = 'FreeSong';
+      return;
+    }
     const hour = new Date().getHours();
     let text = 'FreeSong';
     if (hour >= 5 && hour < 12) text = 'Buenos días';
