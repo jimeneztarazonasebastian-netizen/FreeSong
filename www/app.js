@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.18 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.19 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.18';
+  const APP_VERSION = '3.9.19';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -6132,9 +6132,18 @@
       return;
     }
 
+    // Cada mezcla usa una portada distinta: si dos shelves comparten canción,
+    // la segunda busca otra del suyo antes de repetir arte.
+    const usedCoverIds = new Set();
+    const pickCover = (shelf) => {
+      const items = Array.isArray(shelf.items) ? shelf.items : [];
+      const coverPool = items.filter((track) => track && track.id && track.thumbnail);
+      return coverPool.find((track) => !usedCoverIds.has(track.id)) || coverPool[0] || items[0];
+    };
+
     list.innerHTML = shelves.slice(0, 10).map((shelf, idx) => {
-      const coverPool = shelf.items.filter((track) => track && track.thumbnail);
-      const cover = coverPool.length ? coverPool[idx % coverPool.length] : shelf.items[0];
+      const cover = pickCover(shelf);
+      if (cover && cover.id) usedCoverIds.add(cover.id);
       const count = shelf.items.length;
       return `
         <button type="button" class="w-32 shrink-0 text-left press" data-discover-idx="${idx}">
@@ -6189,40 +6198,69 @@
 
   // Pinta portadas reales dentro de las tarjetas de género. Primero busca una
   // canción de esa vibra en las recomendaciones y, si no hay coincidencia, usa
-  // una portada del mismo pool: como en Spotify, ninguna tarjeta queda vacía.
+  // una portada libre del mismo pool: como en Spotify, ninguna tarjeta queda
+  // vacía y ninguna repite la portada de otra.
   function applyGenreArt() {
     const tracks = allHomeTracks();
-    if (!tracks.length) return;
+    const cards = $$('[data-genre-key]');
+    if (!tracks.length || !cards.length) return;
 
     const normalize = (value) => String(value || '')
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase();
-    const pool = tracks.map((track) => ({ track, hay: normalize(`${track.title} ${track.artist}`) }));
+    const withArt = tracks.filter((track) => track && track.thumbnail);
+    const pool = (withArt.length ? withArt : tracks)
+      .map((track) => ({ track, hay: normalize(`${track.title} ${track.artist}`) }));
+    if (!pool.length) return;
 
-    $$('[data-genre-key]').forEach((card, cardIdx) => {
-      if (card.querySelector('.genre-art')) return;
+    const usedIds = new Set();
+    const picks = new Array(cards.length).fill(null);
+
+    // 1) Coincidencia real de género, sin repetir portada.
+    cards.forEach((card, cardIdx) => {
       const keys = String(card.getAttribute('data-genre-key') || '')
         .split('|').map((key) => normalize(key).trim()).filter(Boolean);
+      if (!keys.length) return;
+      const match = pool.find((entry) => !usedIds.has(entry.track.id)
+        && keys.some((key) => entry.hay.includes(key)));
+      if (!match) return;
+      usedIds.add(match.track.id);
+      picks[cardIdx] = match.track;
+    });
 
-      const matches = [];
-      if (keys.length) {
-        for (const entry of pool) {
-          if (!keys.some((key) => entry.hay.includes(key))) continue;
-          if (matches.some((track) => track.id === entry.track.id)) continue;
-          matches.push(entry.track);
-          if (matches.length >= 2) break;
-        }
+    // 2) Completar las que no tenían match con portadas únicas del pool.
+    let cursor = 0;
+    cards.forEach((card, cardIdx) => {
+      if (picks[cardIdx]) return;
+      let track = null;
+      for (let step = 0; step < pool.length; step++) {
+        const candidate = pool[(cursor + step) % pool.length].track;
+        if (usedIds.has(candidate.id)) continue;
+        track = candidate;
+        cursor = (cursor + step + 1) % pool.length;
+        break;
       }
-      if (!matches.length) matches.push(tracks[cardIdx % tracks.length]);
-      if (!matches.length) return;
+      // Solo se repite si hay menos canciones que tarjetas.
+      if (!track) track = pool[cardIdx % pool.length].track;
+      usedIds.add(track.id);
+      picks[cardIdx] = track;
+    });
+
+    cards.forEach((card, cardIdx) => {
+      const track = picks[cardIdx];
+      if (!track) return;
+
+      const vid = String(track.id);
+      const existing = card.querySelector('.genre-art');
+      if (existing && existing.getAttribute('data-vid') === vid) return;
+      existing?.remove();
 
       const art = document.createElement('span');
       art.className = 'genre-art';
+      art.setAttribute('data-vid', vid);
       art.setAttribute('aria-hidden', 'true');
-      art.innerHTML = matches
-        .map((track, i) => `<img src="${thumbAt(track.thumbnail, 160)}" alt="" loading="lazy" class="genre-art-img" style="--i:${i}" />`)
-        .join('');
+      art.innerHTML = `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(vid)}" alt="" loading="lazy" class="genre-art-img" />`;
       card.appendChild(art);
     });
   }

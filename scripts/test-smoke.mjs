@@ -36,7 +36,9 @@ const HOME_TRACKS = [
   { id: 'home-5', title: 'Trap de prueba', artist: 'Duki', duration: 205, durationSeconds: 205, durationText: '3:25' },
   { id: 'home-6', title: 'Cumbia de prueba', artist: 'Silvestre', duration: 210, durationSeconds: 210, durationText: '3:30' },
   { id: 'home-7', title: 'Electrónica de prueba', artist: 'Calvin Harris', duration: 190, durationSeconds: 190, durationText: '3:10' },
-  { id: 'home-8', title: 'Balada de prueba', artist: 'Sin Bandera', duration: 230, durationSeconds: 230, durationText: '3:50' }
+  { id: 'home-8', title: 'Balada de prueba', artist: 'Sin Bandera', duration: 230, durationSeconds: 230, durationText: '3:50' },
+  { id: 'home-9', title: 'Workout de prueba', artist: 'Eminem', duration: 185, durationSeconds: 185, durationText: '3:05' },
+  { id: 'home-10', title: 'Hits de prueba', artist: 'Lady Gaga', duration: 175, durationSeconds: 175, durationText: '2:55' }
 ].map((track) => ({
   ...track,
   thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
@@ -329,12 +331,26 @@ async function run() {
     const landing = await page.evaluate(() => ({
       discover: document.querySelectorAll('#searchDiscoverList [data-discover-idx]').length,
       covers: document.querySelectorAll('#searchDiscoverList img').length,
+      coverVids: Array.from(document.querySelectorAll('#searchDiscoverList img')).map((img) => img.getAttribute('data-vid') || ''),
+      genreCards: document.querySelectorAll('#searchGenresWrap [data-genre-key]').length,
       genreArt: document.querySelectorAll('#searchGenresWrap .genre-art-img').length,
+      genreVids: Array.from(document.querySelectorAll('#searchGenresWrap .genre-art-img')).map((img) => img.getAttribute('data-vid') || ''),
       continueCards: document.querySelectorAll('#searchContinueList [data-continue-idx]').length
     }));
     assert.ok(landing.discover >= 3, `La landing de Buscar no generó varias mezclas: ${landing.discover}`);
     assert.ok(landing.covers >= landing.discover, `Cada mezcla debe tener portada: ${landing.covers}/${landing.discover}`);
     assert.ok(landing.genreArt >= 2, `Los géneros no recibieron portadas: ${landing.genreArt}`);
+    assert.strictEqual(landing.genreArt, landing.genreCards, `Cada género debe tener una portada: ${landing.genreArt}/${landing.genreCards}`);
+    assert.strictEqual(
+      new Set(landing.genreVids.filter(Boolean)).size,
+      landing.genreVids.length,
+      `Portadas de género repetidas: ${landing.genreVids.join(', ')}`
+    );
+    assert.strictEqual(
+      new Set(landing.coverVids.filter(Boolean)).size,
+      landing.coverVids.length,
+      `Portadas de mezclas repetidas: ${landing.coverVids.join(', ')}`
+    );
     assert.ok(landing.continueCards >= 1, 'No apareció "Sigue escuchando" con el historial');
 
     // Radio desde Buscar: al elegir una canción, la cola debe seguir con
