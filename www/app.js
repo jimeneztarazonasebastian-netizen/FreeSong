@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.16 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.17 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.16';
+  const APP_VERSION = '3.9.17';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -586,13 +586,21 @@
   let ytPlayer = null;
   let isYtReady = false;
   let ytProgressTimer = null;
+  let ytStartWatchdog = null;
+
+  function clearYtStartWatchdog() {
+    if (ytStartWatchdog) {
+      clearTimeout(ytStartWatchdog);
+      ytStartWatchdog = null;
+    }
+  }
 
   function initYouTubeEngine() {
     if (ytPlayer || !window.YT || !window.YT.Player) return;
     try {
       ytPlayer = new YT.Player('ytDeck', {
-        height: '2',
-        width: '2',
+        height: '200',
+        width: '200',
         videoId: '',
         playerVars: {
           autoplay: 0,
@@ -628,6 +636,7 @@
   function onYtStateChange(event) {
     if (!isYtMode) return;
     if (event.data === 1) { // PLAYING
+      clearYtStartWatchdog();
       S.isPlaying = true;
       userIntentionalPause = false;
       consecutiveStreamFailures = 0;
@@ -660,6 +669,7 @@
   function onYtError(event) {
     console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
     stopYtProgressTimer();
+    clearYtStartWatchdog();
     if (!noteStreamFailure()) return;
     playNext(true);
   }
@@ -757,6 +767,20 @@
       setTimeout(() => attempt(), 1200);
       setTimeout(() => attempt(true), 3000);
     }
+
+    // Si YouTube no logra arrancar (embed bloqueado o buffering eterno), no
+    // dejes la cola colgada: pasa a la siguiente pista.
+    clearYtStartWatchdog();
+    ytStartWatchdog = setTimeout(() => {
+      ytStartWatchdog = null;
+      if (!isYtMode || !S.isPlaying || userIntentionalPause) return;
+      try {
+        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === 1) return;
+      } catch {}
+      console.warn('[FreeSong] YouTube Web no arrancó; pasando a la siguiente.');
+      if (!noteStreamFailure()) return;
+      playNext(true);
+    }, 16000);
   }
 
   // --- Manejo de Fallback Automático en Fallas de Audio ---
@@ -773,6 +797,7 @@
     }
     isYtMode = false;
     stopYtProgressTimer();
+    clearYtStartWatchdog();
     if (streamWatchdogTimer) {
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
@@ -2292,6 +2317,7 @@
     }
     isYtMode = false;
     stopYtProgressTimer();
+    clearYtStartWatchdog();
     keepAudioAlive();
 
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
