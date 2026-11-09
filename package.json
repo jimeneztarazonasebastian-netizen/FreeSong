@@ -10,11 +10,12 @@
     "css": "tailwindcss -i src/input.css -o www/app.css --minify",
     "css:watch": "tailwindcss -i src/input.css -o www/app.css --watch",
     "icons": "node scripts/prepare.mjs",
-    "test": "node scripts/version.mjs --check && node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs && node scripts/test-smoke.mjs && node scripts/test-crossfade.mjs && node scripts/test-ytfallback.mjs",
+    "test": "node scripts/version.mjs --check && node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs && node scripts/test-smoke.mjs && node scripts/test-crossfade.mjs && node scripts/test-ytfallback.mjs && node scripts/test-ios-ended.mjs",
     "test:unit": "node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs",
     "test:smoke": "node scripts/test-smoke.mjs",
     "test:crossfade": "node scripts/test-crossfade.mjs",
     "test:ytfallback": "node scripts/test-ytfallback.mjs",
+    "test:ios-ended": "node scripts/test-ios-ended.mjs",
     "version:check": "node scripts/version.mjs --check",
     "version:set": "node scripts/version.mjs"
   },

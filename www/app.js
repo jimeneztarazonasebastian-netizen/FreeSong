@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.17 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.18 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.17';
+  const APP_VERSION = '3.9.18';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -289,6 +289,16 @@
   let lastSkipTimestamp = 0;
   let consecutiveStreamFailures = 0;
   let consecutiveSkippedTracks = 0;
+
+  // Fin de pista: iOS no siempre entrega el evento `ended` (sobre todo con la
+  // pantalla bloqueada o la app en segundo plano). Estas piezas añaden una
+  // detección alternativa y un reintento de play() sin gesto.
+  let endOfTrackTimer = null;
+  let lastFinishedTrackId = '';
+  let lastFinishedAt = 0;
+  let autoPlayRetryTimer = null;
+  let autoPlayAttempts = 0;
+  let pendingAutoPlayTrackId = '';
   const MAX_STREAM_FAILURES = 3; // fallbacks/saltos seguidos antes de detenerse
   const MAX_SKIPPED_TRACKS = 4; // pistas seguidas que se saltan antes de parar
 
@@ -298,6 +308,80 @@
 
   function getInactivePlayer() {
     return audioDecks[1 - activeDeckIdx];
+  }
+
+  function clearEndOfTrackTimer() {
+    if (endOfTrackTimer) {
+      clearTimeout(endOfTrackTimer);
+      endOfTrackTimer = null;
+    }
+  }
+
+  // Respaldo del evento `ended`: si el tiempo llega al final y el deck se queda
+  // parado (iOS puede no emitir `ended` en segundo plano), avanza igualmente.
+  function scheduleEndOfTrackCheck(deck, track, duration) {
+    if (!track || endOfTrackTimer) return;
+    endOfTrackTimer = setTimeout(() => {
+      endOfTrackTimer = null;
+      if (!deck || isYtMode || isCrossfading || isTransitioningTrack) return;
+      if (!S.isPlaying || userIntentionalPause) return;
+      if (S.queue[S.currentIndex] !== track || deck !== getActivePlayer()) return;
+      const dur = duration || getEffectiveDuration(deck, track);
+      const cur = deck.currentTime || 0;
+      // `ended` puede seguir llegando un instante después; solo actúa si el
+      // deck está realmente detenido al final.
+      if (!deck.ended && !(dur > 0 && cur >= dur - 0.25)) return;
+      console.warn('[FreeSong] Fin de pista sin evento ended; avanzando.');
+      handleTrackFinished(track);
+    }, 700);
+  }
+
+  function clearAutoPlayRetry() {
+    if (autoPlayRetryTimer) {
+      clearTimeout(autoPlayRetryTimer);
+      autoPlayRetryTimer = null;
+    }
+    autoPlayAttempts = 0;
+    pendingAutoPlayTrackId = '';
+  }
+
+  // En iOS el cambio automático de pista no ocurre dentro de un gesto. Si
+  // Safari rechaza el play(), se reintenta unas cuantas veces (también desde
+  // `ensurePlaybackAlive` al tocar la pantalla) en vez de quedarse en silencio.
+  function armAutoPlayRetry(track, player) {
+    clearAutoPlayRetry();
+    if (!track || !player) return;
+    pendingAutoPlayTrackId = track.id;
+    S.isPlaying = true;
+    updatePlayPauseIcons(true, true);
+
+    const attempt = () => {
+      autoPlayRetryTimer = null;
+      if (!track || pendingAutoPlayTrackId !== track.id) return;
+      if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
+      if (player !== getActivePlayer()) return;
+      autoPlayAttempts++;
+      let promise;
+      try {
+        promise = player.play();
+      } catch (err) {
+        promise = Promise.reject(err);
+      }
+      Promise.resolve(promise).then(() => {
+        pendingAutoPlayTrackId = '';
+      }).catch(() => {
+        if (autoPlayAttempts >= 6) {
+          pendingAutoPlayTrackId = '';
+          S.isPlaying = false;
+          updatePlayPauseIcons(false, false);
+          showToast('Toca play para continuar', 2600);
+          return;
+        }
+        autoPlayRetryTimer = setTimeout(attempt, 900);
+      });
+    };
+
+    autoPlayRetryTimer = setTimeout(attempt, 350);
   }
 
   // --- Sesión persistente entre aperturas de la app (PWA en iPhone) ---
@@ -574,7 +658,26 @@
       return;
     }
     const p = getActivePlayer();
-    if (p && p.paused) p.play().catch(() => {});
+    if (p && p.paused) {
+      // Si iOS perdió el final mientras la app estaba en segundo plano, no
+      // reinicies la misma canción al volver: avanza a la siguiente.
+      const current = S.queue[S.currentIndex];
+      if (current && !isYtMode) {
+        const cur = p.currentTime || 0;
+        const dur = getEffectiveDuration(p, current);
+        if (p.ended || (dur > 0 && cur >= dur - 0.5)) {
+          handleTrackFinished(current);
+          return;
+        }
+      }
+      // Si el cambio automático de pista quedó pendiente (iOS rechazó play()
+      // sin gesto), cualquier toque o retorno a la app lo reintenta.
+      if (pendingAutoPlayTrackId && S.queue[S.currentIndex] && S.queue[S.currentIndex].id === pendingAutoPlayTrackId) {
+        armAutoPlayRetry(S.queue[S.currentIndex], p);
+        return;
+      }
+      p.play().catch(() => {});
+    }
   }
 
   // Despertar la sesión de audio al primer toque físico en la pantalla
@@ -671,7 +774,7 @@
     stopYtProgressTimer();
     clearYtStartWatchdog();
     if (!noteStreamFailure()) return;
-    playNext(true);
+    playNext(true, true);
   }
 
   function startYtProgressTimer() {
@@ -779,7 +882,7 @@
       } catch {}
       console.warn('[FreeSong] YouTube Web no arrancó; pasando a la siguiente.');
       if (!noteStreamFailure()) return;
-      playNext(true);
+      playNext(true, true);
     }, 16000);
   }
 
@@ -837,7 +940,7 @@
     setTimeout(() => {
       if (userIntentionalPause) return;
       if (S.queue[S.currentIndex] && S.queue[S.currentIndex].id !== (track && track.id)) return;
-      playNext(true);
+      playNext(true, true);
     }, 600);
   }
 
@@ -927,7 +1030,7 @@
       // Si el error llega cuando estamos cerca del final (< 3s), tratar como
       // fin natural de la canción en vez de reiniciar desde 0.
       if (resumeAt > 0 && knownDuration > 0 && resumeAt > knownDuration - 3) {
-        handleTrackFinished();
+        handleTrackFinished(track);
         return;
       }
 
@@ -1063,6 +1166,8 @@
         clearTimeout(streamWatchdogTimer);
         streamWatchdogTimer = null;
       }
+      clearEndOfTrackTimer();
+      if (idx === activeDeckIdx) clearAutoPlayRetry();
       if (idx === activeDeckIdx && S.queue[S.currentIndex]) {
         // Un arranque desde 0 sí es una reproducción limpia; una reanudación a
         // mitad de canción conserva el nivel de fallback para no reintentar sin fin.
@@ -1094,6 +1199,17 @@
       if (isTransitioningTrack) return;
 
       if (idx === activeDeckIdx && !isCrossfading) {
+        // iOS puede emitir `pause` al llegar al final sin `ended` (o en
+        // segundo plano). Eso NO es una pausa del usuario: hay que avanzar.
+        const currentTrack = S.queue[S.currentIndex];
+        const dur = getEffectiveDuration(deck, currentTrack);
+        const cur = deck.currentTime || 0;
+        const reachedEnd = deck.ended || (dur > 0 && cur >= dur - 0.5);
+        if (reachedEnd && S.isPlaying && !userIntentionalPause && !isYtMode) {
+          handleTrackFinished(currentTrack);
+          return;
+        }
+
         if (document.visibilityState === 'hidden' && S.isPlaying && !userIntentionalPause) {
           setTimeout(() => {
             if (S.isPlaying && !userIntentionalPause && deck.paused && !isTransitioningTrack) {
@@ -1110,7 +1226,12 @@
 
     deck.addEventListener('ended', () => {
       if (idx === activeDeckIdx && !isCrossfading && !isTransitioningTrack) {
-        handleTrackFinished();
+        // Un `ended` tardío de una fuente anterior no debe avanzar la pista nueva.
+        const d = deck.duration;
+        const atEnd = deck.ended || (isFinite(d) && d > 0 && (deck.currentTime || 0) >= d - 0.5);
+        if (!atEnd) return;
+        clearEndOfTrackTimer();
+        handleTrackFinished(S.queue[S.currentIndex]);
       }
     });
 
@@ -1159,8 +1280,15 @@
         }
 
         // El fin natural de pista se gestiona por el evento 'ended' nativo del reproductor.
-        // Crossfade adaptativo
+        // Respaldo para iOS: si el deck se detiene al final sin emitir `ended`,
+        // un temporizador lo detecta y avanza igualmente.
         const timeLeft = dur - cur;
+        if (timeLeft <= 0.4 && !isCrossfading) {
+          scheduleEndOfTrackCheck(deck, track, dur);
+        } else if (timeLeft > 0.6) {
+          clearEndOfTrackTimer();
+        }
+        // Crossfade adaptativo
         if (
           S.crossfade &&
           !isIOS &&
@@ -1200,8 +1328,17 @@
     });
   });
 
-  function handleTrackFinished() {
+  function handleTrackFinished(finishedTrack) {
     if (isTransitioningTrack) return;
+
+    const current = finishedTrack || S.queue[S.currentIndex];
+    const now = Date.now();
+    // `ended` y el respaldo por tiempo pueden coincidir: evita saltar dos veces.
+    if (current && current.id === lastFinishedTrackId && now - lastFinishedAt < 1500) return;
+    lastFinishedTrackId = current ? current.id : '';
+    lastFinishedAt = now;
+
+    clearEndOfTrackTimer();
     isTransitioningTrack = true;
 
     if (trackTransitionTimeout) clearTimeout(trackTransitionTimeout);
@@ -1249,7 +1386,7 @@
       }
     }
 
-    playNext(true);
+    playNext(true, true);
   }
 
   // --- Inyección Automática de Smart Shuffle ✨ ---
@@ -1291,7 +1428,7 @@
       navigator.mediaSession.setActionHandler('play', () => resumePlayback());
       navigator.mediaSession.setActionHandler('pause', () => pausePlayback());
       navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
-      navigator.mediaSession.setActionHandler('nexttrack', () => playNext(true));
+      navigator.mediaSession.setActionHandler('nexttrack', () => playNext(true, true));
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime != null) {
           const p = getActivePlayer();
@@ -2285,8 +2422,10 @@
   }
 
   // --- Reproducción y Cambio de Pista Maestro ---
-  function playTrack(index, immediate = false) {
+  function playTrack(index, immediate = false, fromEnded = false) {
     isTransitioningTrack = false;
+    clearEndOfTrackTimer();
+    clearAutoPlayRetry();
     if (trackTransitionTimeout) {
       clearTimeout(trackTransitionTimeout);
       trackTransitionTimeout = null;
@@ -2368,10 +2507,16 @@
     } else {
       // Si el otro deck ya tiene esta pista precargada, se reproduce desde ESE
       // deck. Antes se descartaba su buffer y se volvía a pedir la canción en
-      // el deck actual: eso añadía 1-3 s en cada cambio automático (y en iPhone).
+      // el deck actual: eso añadía 1-3 s en cada cambio (y en iPhone).
+      // Excepción iOS: en un cambio automático el deck precargado nunca se ha
+      // reproducido con un gesto, y Safari puede rechazar su play(). En ese
+      // caso se usa el deck que acaba de sonar (ya desbloqueado), aunque haya
+      // que volver a pedir el audio; la fiabilidad manda.
+      const canReusePrefetched = !(isIOS && fromEnded);
       const prefetched = getInactivePlayer();
       const prefetchedSrc = prefetched ? (prefetched.currentSrc || prefetched.src || '') : '';
       if (
+        canReusePrefetched &&
         prefetched &&
         prefetched.dataset.prefetchedId === track.id &&
         prefetchedSrc &&
@@ -2418,6 +2563,7 @@
             inact.removeAttribute('src');
             inact.load();
             delete inact.dataset.prefetchedId;
+            delete inact.dataset.trackId;
             inact.volume = targetVolume;
           } catch {}
         }
@@ -2437,6 +2583,12 @@
             playPromise.catch((err) => {
               if (err.name !== 'AbortError') {
                 console.warn('inPlayer play error:', err);
+                if (fromEnded) {
+                  // Cambio automático sin gesto (iOS): reintenta en vez de
+                  // quedarse en silencio.
+                  armAutoPlayRetry(track, inPlayer);
+                  return;
+                }
                 reusingPrefetched = false;
                 delete inPlayer.dataset.prefetchedId;
                 if (S.queue[S.currentIndex] === track && !userIntentionalPause) {
@@ -2460,6 +2612,10 @@
             playPromise.catch((err) => {
               if (err.name !== 'AbortError') {
                 console.warn('inPlayer play error:', err);
+                if (fromEnded) {
+                  armAutoPlayRetry(track, inPlayer);
+                  return;
+                }
                 S.isPlaying = false;
                 updatePlayPauseIcons(false, false);
               }
@@ -2586,6 +2742,8 @@
   function pausePlayback() {
     userIntentionalPause = true;
     isTransitioningTrack = false;
+    clearEndOfTrackTimer();
+    clearAutoPlayRetry();
     // Si se pausa en pleno fundido, se cierra ya y la interfaz pasa a la pista
     // entrante (la que realmente va a reanudarse).
     if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
@@ -2673,15 +2831,17 @@
     else resumePlayback();
   }
 
-  function playNext(immediate = true) {
+  function playNext(immediate = true, fromEnded = false) {
     isTransitioningTrack = false;
     if (trackTransitionTimeout) {
       clearTimeout(trackTransitionTimeout);
       trackTransitionTimeout = null;
     }
     const now = Date.now();
-    // Bloqueo de seguridad de 300ms para evitar colisiones de clics rápidos
-    if (now - lastSkipTimestamp < 300) return;
+    // Bloqueo de seguridad de 300ms para evitar colisiones de clics rápidos.
+    // Un fin de pista nunca debe bloquearse: si la canción era muy corta o el
+    // usuario buscó el final, hay que avanzar igualmente.
+    if (!fromEnded && now - lastSkipTimestamp < 300) return;
     lastSkipTimestamp = now;
     haptic('light');
 
@@ -2692,7 +2852,7 @@
     }
     const nextIdx = getNextIndex(true);
     if (nextIdx >= 0) {
-      playTrack(nextIdx, typeof immediate === 'boolean' ? immediate : true);
+      playTrack(nextIdx, typeof immediate === 'boolean' ? immediate : true, fromEnded);
     } else {
       // Fin de la cola con la repetición desactivada
       isTransitioningTrack = false;
@@ -5628,7 +5788,7 @@
         S.queue.splice(S.currentIndex + 1, 0, ...fresh);
         renderQueue();
         showToast(`🎧 DJ IA: Ahora en vibe ${vibe.name}`);
-        playNext(true);
+        playNext(true, true);
       }
     } catch {
       showToast('Error al cambiar de vibe');

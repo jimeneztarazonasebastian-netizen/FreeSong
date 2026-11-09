@@ -36,12 +36,13 @@ npm run version:set -- 3.9.6  # actualiza la versión en los cuatro archivos
 
 ## ✅ Pruebas automáticas
 
-`npm test` ejecuta cuatro capas:
+`npm test` ejecuta cinco capas:
 
 - **Unitarias** (`npm run test:unit`): helpers puros de `www/util.js`, lectura segura de `www/storage.js` y parseo de letras de `www/lyrics.js` en Node, sin navegador.
 - **Humo** (`npm run test:smoke`): abre Chrome real en modo headless y comprueba buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.
 - **Crossfade** (`npm run test:crossfade`): verifica que durante el fundido la tarjeta y la letra siguen en la canción que suena, y que solo cambian al terminar.
 - **Respaldo YouTube** (`npm run test:ytfallback`): simula un vídeo que la instancia solo ofrece como SABR y un proxy caído; comprueba que la app cambia al reproductor de YouTube Web en vez de quedarse cargando.
+- **Fin de pista en iPhone** (`npm run test:ios-ended`): emula Safari de iPhone con relay disponible y comprueba que al acabar una canción suena la siguiente en el mismo deck ya desbloqueado, que avanza aunque iOS pierda el evento `ended` y que no salta dos pistas.
 
 Requiere Google Chrome instalado. Usa `playwright-core` con el canal `chrome`, así que no descarga navegadores adicionales.
 
@@ -51,6 +52,7 @@ npm run test:unit       # solo helpers puros
 npm run test:smoke      # solo Chrome headless
 npm run test:crossfade  # solo regresión del crossfade
 npm run test:ytfallback # solo respaldo de YouTube
+npm run test:ios-ended  # solo fin de pista en iPhone
 ```
 
 ## 🧩 Estructura del cliente
