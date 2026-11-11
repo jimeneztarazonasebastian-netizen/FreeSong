@@ -308,8 +308,17 @@ export default async function handler(req, res) {
 
   if (!rawTrack) {
     const err = JSON.stringify({ error: 'Falta nombre de pista', syncedLyrics: null });
-    if (res && res.status) return res.status(400).send(err);
-    return new Response(err, { status: 400, headers: { 'Content-Type': 'application/json' } });
+    // Los errores no se cachean: un fallo puntual no debe repetirse durante horas.
+    if (res && res.setHeader) {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.statusCode = 400;
+      return res.end(err);
+    }
+    return new Response(err, {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store, max-age=0' }
+    });
   }
 
   const cacheKey = `${normalize(rawTrack)}|${normalize(rawArtist)}|${Math.round(Number(rawDuration) || 0)}`;
@@ -350,7 +359,15 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const errPayload = JSON.stringify({ error: err.message, syncedLyrics: null, plainLyrics: null });
-    if (res && res.status) return res.status(500).send(errPayload);
-    return new Response(errPayload, { status: 500, headers: { 'Content-Type': 'application/json' } });
+    if (res && res.setHeader) {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.statusCode = 500;
+      return res.end(errPayload);
+    }
+    return new Response(errPayload, {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store, max-age=0' }
+    });
   }
 }

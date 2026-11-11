@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.19 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.20 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.19';
+  const APP_VERSION = '3.9.20';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -2159,10 +2159,10 @@
   }
 
   async function downloadTrack(track) {
-    if (!track || !track.id) return;
+    if (!track || !track.id) return false;
     if (S.isDownloadingMap[track.id]) {
       showToast('Ya se está descargando esta canción');
-      return;
+      return false;
     }
     S.isDownloadingMap[track.id] = true;
     showToast(`Descargando "${track.title}"...`, 3000);
@@ -2263,10 +2263,12 @@
         renderLibrary();
       }
       showToast(`✓ "${track.title}" descargada para escuchar offline`, 2800);
+      return true;
     } catch (err) {
       console.error('Error al descargar:', err);
       const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
       showToast(`Error al descargar "${track.title}"${detail}`, 5000);
+      return false;
     } finally {
       delete S.isDownloadingMap[track.id];
     }
@@ -2324,12 +2326,9 @@
     let done = 0;
     let failed = 0;
     for (const t of pending) {
-      try {
-        await downloadTrack(t);
-        done++;
-      } catch {
-        failed++;
-      }
+      const ok = await downloadTrack(t);
+      if (ok) done++;
+      else failed++;
     }
     haptic('success');
     showToast(`✓ ${done} descargadas${failed ? `, ${failed} fallaron` : ''}`, 3200);
@@ -4145,6 +4144,8 @@
 
   // --- Vista / Perfil del Artista Completo (Estilo Spotify) ---
   let currentArtistTracks = [];
+  // Evita que la respuesta de un artista anterior pise al que se abrió después.
+  let artistRequestToken = 0;
 
   function parseArtistCollabs(rawName) {
     if (!rawName) return [];
@@ -4172,6 +4173,7 @@
     const primaryArtist = allArtists[0] || rawArtistName.replace(/\s*-\s*Topic$/i, '').trim();
     if (!primaryArtist || primaryArtist === 'Artista' || primaryArtist === 'FreeSong Music') return;
 
+    const requestToken = ++artistRequestToken;
     const modal = $('artistViewModal');
     if (!modal) return;
     // Si ya estaba abierto (artista → artista) no se agrega otra entrada de historial
@@ -4226,6 +4228,7 @@
       const isBrowseId = String(rawArtistName).startsWith('UC');
       const res = await fetch(`/api/artist?${isBrowseId ? 'id=' : 'name='}${encodeURIComponent(rawArtistName)}`);
       const data = await res.json();
+      if (requestToken !== artistRequestToken) return;
       const tracks = data.topSongs || data.tracks || [];
       const albums = [...(data.albums || []), ...(data.singles || [])];
       const similar = data.similar || [];
@@ -4369,6 +4372,7 @@
       }
 
     } catch (err) {
+      if (requestToken !== artistRequestToken) return;
       topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">Error al cargar información del artista</p>`;
     }
   }
@@ -4381,6 +4385,7 @@
 
   // --- Vista de Colección Completa: Álbumes y Playlists (SimpMusic Engine) ---
   let currentCollectionTracks = [];
+  let collectionRequestToken = 0;
 
   function closeCollection() {
     const modal = $('collectionModal');
@@ -4392,6 +4397,7 @@
 
   async function openCollection(type, browseId, titleFallback = '') {
     if (!browseId) return;
+    const requestToken = ++collectionRequestToken;
     const modal = $('collectionModal');
     if (!modal) return;
     if (modal.classList.contains('hidden')) pushModalState('collection');
@@ -4412,6 +4418,7 @@
         : `/api/playlist?id=${encodeURIComponent(browseId)}`;
       const res = await fetch(endpoint);
       const data = await res.json();
+      if (requestToken !== collectionRequestToken) return;
 
       const meta = isAlbum ? data.album : data.playlist;
       const tracks = data.tracks || [];
@@ -4488,6 +4495,7 @@
       });
 
     } catch (err) {
+      if (requestToken !== collectionRequestToken) return;
       $('collectionTracksList').innerHTML = '<div class="py-12 text-center text-zinc-500 text-xs">Error al cargar la colección</div>';
     }
   }
@@ -5796,7 +5804,11 @@
   }
 
   // --- Carga de Inicio (Home con Chips) ---
+  // Si se tocan varios chips seguidos, la respuesta lenta de un chip anterior
+  // no debe sobrescribir la categoría que la persona acaba de elegir.
+  let homeLoadToken = 0;
   async function loadHomeContent(category = 'todo') {
+    const token = ++homeLoadToken;
     const container = $('homeShelves');
     container.innerHTML = '<div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">Cargando música...</div>';
 
@@ -5804,6 +5816,7 @@
       const url = category === 'todo' ? '/api/home' : `/api/home?category=${encodeURIComponent(category)}`;
       const res = await fetch(url);
       const data = await res.json();
+      if (token !== homeLoadToken) return;
 
       if (!data.shelves || data.shelves.length === 0) {
         container.innerHTML = '<p class="text-center py-10 text-zinc-500 text-sm">No se encontraron canciones</p>';
@@ -5833,6 +5846,12 @@
       }
 
       const shelvesToRender = category === 'todo' ? data.shelves.slice(1) : data.shelves;
+      // Si Inicio devuelve una sola lista, las canciones después del Top 5 no
+      // aparecían en ninguna parte. Se muestran como una parrilla más.
+      if (category === 'todo') {
+        const rest = (data.shelves[0]?.items || []).slice(5);
+        if (rest.length) shelvesToRender.push({ title: 'Más para ti', items: rest });
+      }
       if (shelvesToRender.length === 0) {
         container.innerHTML = '';
         return;
@@ -5875,6 +5894,7 @@
         });
       });
     } catch {
+      if (token !== homeLoadToken) return;
       container.innerHTML = '<p class="text-center py-10 text-zinc-500 text-sm">Error al cargar recomendaciones</p>';
     }
   }
@@ -5914,6 +5934,7 @@
   function renderTrendingList(items) {
     const list = $('trendingList');
     if (!list) return;
+    $('trendingSection')?.classList.remove('hidden');
     const top5 = items.slice(0, 5);
 
     list.innerHTML = top5.map((t, idx) => `
@@ -6196,73 +6217,195 @@
     applyGenreArt();
   }
 
-  // Pinta portadas reales dentro de las tarjetas de género. Primero busca una
-  // canción de esa vibra en las recomendaciones y, si no hay coincidencia, usa
-  // una portada libre del mismo pool: como en Spotify, ninguna tarjeta queda
-  // vacía y ninguna repite la portada de otra.
-  function applyGenreArt() {
-    const tracks = allHomeTracks();
-    const cards = $$('[data-genre-key]');
-    if (!tracks.length || !cards.length) return;
+  // Portadas de género: la tarjeta pide a /api/search una canción real de ese
+  // género (la misma ruta que usa la búsqueda, sin añadir funciones de Vercel).
+  // Mientras llega, se usa una coincidencia del pool de Inicio; si no hay,
+  // queda el adorno ♪ en vez de una portada que no pegue con el género.
+  const GENRE_ART_CACHE_KEY = 'fs_genre_art_v1';
+  const GENRE_ART_TTL = 7 * 24 * 60 * 60 * 1000;
+  const GENRE_ART_CONCURRENCY = 3;
+  let genreArtHydrating = false;
 
-    const normalize = (value) => String(value || '')
+  function readGenreArtCache() {
+    const store = window.FreeSongStorage;
+    return store ? store.readObject(GENRE_ART_CACHE_KEY) : {};
+  }
+
+  function saveGenreArtCache(cache) {
+    const store = window.FreeSongStorage;
+    if (store) store.write(GENRE_ART_CACHE_KEY, cache);
+  }
+
+  function genreArtKey(card) {
+    return String(card.getAttribute('data-genre-key') || card.getAttribute('data-genre-q') || '');
+  }
+
+  function paintGenreCover(card, track, source) {
+    if (!card || !track || !track.id || !track.thumbnail) return;
+    const vid = String(track.id);
+    const existing = card.querySelector('.genre-art');
+    if (existing && existing.getAttribute('data-vid') === vid) return;
+    existing?.remove();
+
+    const art = document.createElement('span');
+    art.className = 'genre-art';
+    art.setAttribute('data-vid', vid);
+    art.setAttribute('data-source', source || '');
+    art.setAttribute('aria-hidden', 'true');
+    art.innerHTML = `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(vid)}" alt="" loading="lazy" class="genre-art-img" />`;
+    card.appendChild(art);
+  }
+
+  // Pinta al instante las portadas ya resueltas en visitas anteriores.
+  function applyCachedGenreArt(cards) {
+    const cache = readGenreArtCache();
+    const usedIds = new Set();
+    const now = Date.now();
+    cards.forEach((card) => {
+      const entry = cache[genreArtKey(card)];
+      if (!entry || !entry.id || !entry.thumbnail) return;
+      if (now - Number(entry.at || 0) > GENRE_ART_TTL) return;
+      if (usedIds.has(String(entry.id))) return;
+      paintGenreCover(card, entry, 'genre');
+      usedIds.add(String(entry.id));
+    });
+    return usedIds;
+  }
+
+  function normalizeGenreText(value) {
+    return String(value || '')
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase();
-    const withArt = tracks.filter((track) => track && track.thumbnail);
-    const pool = (withArt.length ? withArt : tracks)
-      .map((track) => ({ track, hay: normalize(`${track.title} ${track.artist}`) }));
+  }
+
+  // Coincidencia rápida con las recomendaciones de Inicio (arte coherente, sin
+  // aleatorio). Se sustituye por la búsqueda real del género cuando llega.
+  function paintHomeGenreMatches(cards) {
+    const tracks = allHomeTracks();
+    if (!tracks.length) return;
+
+    const pool = tracks
+      .filter((track) => track && track.thumbnail)
+      .map((track) => ({ track, hay: normalizeGenreText(`${track.title} ${track.artist}`) }));
     if (!pool.length) return;
 
     const usedIds = new Set();
-    const picks = new Array(cards.length).fill(null);
+    cards.forEach((card) => {
+      const art = card.querySelector('.genre-art');
+      if (art && art.getAttribute('data-vid')) usedIds.add(art.getAttribute('data-vid'));
+    });
 
-    // 1) Coincidencia real de género, sin repetir portada.
-    cards.forEach((card, cardIdx) => {
+    cards.forEach((card) => {
+      if (card.querySelector('.genre-art')) return;
       const keys = String(card.getAttribute('data-genre-key') || '')
-        .split('|').map((key) => normalize(key).trim()).filter(Boolean);
+        .split('|').map((key) => normalizeGenreText(key).trim()).filter(Boolean);
       if (!keys.length) return;
-      const match = pool.find((entry) => !usedIds.has(entry.track.id)
+      const match = pool.find((entry) => !usedIds.has(String(entry.track.id))
         && keys.some((key) => entry.hay.includes(key)));
       if (!match) return;
-      usedIds.add(match.track.id);
-      picks[cardIdx] = match.track;
+      usedIds.add(String(match.track.id));
+      paintGenreCover(card, match.track, 'home');
+    });
+  }
+
+  // Último recurso si la búsqueda no responde: ninguna tarjeta queda vacía.
+  function fillGenreArtGaps(cards) {
+    const tracks = allHomeTracks().filter((track) => track && track.thumbnail);
+    if (!tracks.length) return;
+
+    const usedIds = new Set();
+    cards.forEach((card) => {
+      const art = card.querySelector('.genre-art');
+      if (art && art.getAttribute('data-vid')) usedIds.add(art.getAttribute('data-vid'));
     });
 
-    // 2) Completar las que no tenían match con portadas únicas del pool.
     let cursor = 0;
-    cards.forEach((card, cardIdx) => {
-      if (picks[cardIdx]) return;
+    cards.forEach((card) => {
+      if (card.querySelector('.genre-art')) return;
       let track = null;
-      for (let step = 0; step < pool.length; step++) {
-        const candidate = pool[(cursor + step) % pool.length].track;
-        if (usedIds.has(candidate.id)) continue;
+      for (let step = 0; step < tracks.length; step++) {
+        const candidate = tracks[(cursor + step) % tracks.length];
+        if (usedIds.has(String(candidate.id))) continue;
         track = candidate;
-        cursor = (cursor + step + 1) % pool.length;
+        cursor = (cursor + step + 1) % tracks.length;
         break;
       }
-      // Solo se repite si hay menos canciones que tarjetas.
-      if (!track) track = pool[cardIdx % pool.length].track;
-      usedIds.add(track.id);
-      picks[cardIdx] = track;
+      if (!track) track = tracks[0];
+      usedIds.add(String(track.id));
+      paintGenreCover(card, track, 'home');
     });
+  }
 
-    cards.forEach((card, cardIdx) => {
-      const track = picks[cardIdx];
-      if (!track) return;
-
-      const vid = String(track.id);
-      const existing = card.querySelector('.genre-art');
-      if (existing && existing.getAttribute('data-vid') === vid) return;
-      existing?.remove();
-
-      const art = document.createElement('span');
-      art.className = 'genre-art';
-      art.setAttribute('data-vid', vid);
-      art.setAttribute('aria-hidden', 'true');
-      art.innerHTML = `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(vid)}" alt="" loading="lazy" class="genre-art-img" />`;
-      card.appendChild(art);
+  async function hydrateGenreArt() {
+    if (genreArtHydrating) return;
+    const cards = Array.from($$('[data-genre-key]'));
+    const pending = cards.filter((card) => {
+      const art = card.querySelector('.genre-art');
+      return !art || art.getAttribute('data-source') !== 'genre';
     });
+    if (!pending.length) return;
+
+    genreArtHydrating = true;
+    try {
+      const usedIds = new Set();
+      cards.forEach((card) => {
+        const art = card.querySelector('.genre-art');
+        if (art && art.getAttribute('data-source') === 'genre' && art.getAttribute('data-vid')) {
+          usedIds.add(art.getAttribute('data-vid'));
+        }
+      });
+      const cache = readGenreArtCache();
+      let cursor = 0;
+
+      const worker = async () => {
+        while (cursor < pending.length) {
+          const card = pending[cursor++];
+          const query = String(card.getAttribute('data-genre-q') || '').trim();
+          if (!query) continue;
+          try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=songs`);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const list = Array.isArray(data.items) ? data.items
+              : (Array.isArray(data.tracks) ? data.tracks : []);
+            // IDs ya pintados (incluidas otras tarjetas que acaban de llegar).
+            const liveUsed = new Set(Array.from($$('#searchGenresWrap .genre-art'))
+              .map((art) => art.getAttribute('data-vid')).filter(Boolean));
+            const pick = list.find((track) => track && track.id && track.thumbnail
+              && !usedIds.has(String(track.id)) && !liveUsed.has(String(track.id)));
+            if (!pick) continue;
+
+            usedIds.add(String(pick.id));
+            paintGenreCover(card, pick, 'genre');
+            cache[genreArtKey(card)] = {
+              id: String(pick.id),
+              title: pick.title || '',
+              artist: pick.artist || '',
+              thumbnail: thumbAt(pick.thumbnail, 320),
+              at: Date.now()
+            };
+            saveGenreArtCache(cache);
+          } catch {}
+        }
+      };
+
+      await Promise.all(Array.from(
+        { length: Math.min(GENRE_ART_CONCURRENCY, pending.length) },
+        () => worker()
+      ));
+    } finally {
+      fillGenreArtGaps(cards);
+      genreArtHydrating = false;
+    }
+  }
+
+  function applyGenreArt() {
+    const cards = $$('[data-genre-key]');
+    if (!cards.length) return;
+    applyCachedGenreArt(cards);
+    paintHomeGenreMatches(cards);
+    hydrateGenreArt().catch(() => {});
   }
 
   function renderSearchLanding() {
@@ -6275,6 +6418,8 @@
   let suggestionTimer = null;
   let currentSearchResults = [];
   let searchAbortController = null;
+  // Distingue la búsqueda vigente de una continuación antigua que llega tarde.
+  let searchRequestToken = 0;
 
   function setupSearch() {
     const input = $('searchInput');
@@ -6422,6 +6567,7 @@
 
     if (!isContinuation) {
       // Cancela la búsqueda anterior: si llega tarde no debe pisar los resultados nuevos.
+      searchRequestToken++;
       if (searchAbortController) {
         try { searchAbortController.abort(); } catch {}
       }
@@ -6443,6 +6589,8 @@
       Store.write('fs_recent_searches', S.recentSearches);
     }
 
+    const requestToken = searchRequestToken;
+
     try {
       const searchType = S.searchType || 'songs';
       let url = `/api/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(searchType)}`;
@@ -6454,6 +6602,10 @@
         signal: isContinuation ? undefined : searchAbortController.signal
       });
       const data = await res.json();
+
+      // Una respuesta de una búsqueda anterior (incluida una continuación) no
+      // debe mezclarse con los resultados de la consulta actual.
+      if (requestToken !== searchRequestToken) return;
 
       // Si el usuario sigue escribiendo, descarta esta respuesta.
       const currentInput = $('searchInput');

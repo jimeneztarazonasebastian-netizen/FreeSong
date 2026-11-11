@@ -111,9 +111,11 @@ export function getRunsText(runs, separator = '') {
 
 export function sendJson(res, data, status = 200, cacheSec = 1800) {
   const payload = JSON.stringify(data);
-  const cacheHeader = cacheSec > 0 
-    ? `public, s-maxage=${cacheSec}, stale-while-revalidate=${cacheSec * 2}`
-    : 'no-store, max-age=0';
+  // Los errores nunca se cachean: un 500 transitorio no debe quedarse 30 min
+  // en el CDN y repetirse aunque YouTube ya esté respondiendo.
+  const cacheHeader = status >= 400 || cacheSec <= 0
+    ? 'no-store, max-age=0'
+    : `public, s-maxage=${cacheSec}, stale-while-revalidate=${cacheSec * 2}`;
 
   if (res) {
     if (typeof res.setHeader === 'function') {

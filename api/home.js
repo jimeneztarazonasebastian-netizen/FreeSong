@@ -1,4 +1,24 @@
 // api/home.js - Pantalla de inicio de YouTube Music con categorías y extracción precisa de duración
+
+// YouTube Music puede tardar o quedarse colgado. Sin timeout, la función de
+// Vercel agota su tiempo y devuelve un 504 sin cuerpo útil. Un tope de 8 s deja
+// margen para el fallback y para responder siempre JSON.
+const UPSTREAM_TIMEOUT_MS = 8000;
+
+function ytMusicFetch(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Origin': 'https://music.youtube.com',
+      'Referer': 'https://music.youtube.com/'
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+  });
+}
+
 export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const category = (req.query && (req.query.category || req.query.tag)) || urlObj.searchParams.get('category') || urlObj.searchParams.get('tag');
@@ -29,20 +49,12 @@ export default async function handler(req, res) {
     const searchQuery = categoryQueries[category.toLowerCase()] || `${category} canciones exitos`;
 
     try {
-      const ytRes = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Origin': 'https://music.youtube.com',
-          'Referer': 'https://music.youtube.com/'
-        },
-        body: JSON.stringify({
-          context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20240101.01.00', gl: 'US', hl: 'es' } },
-          query: searchQuery,
-          params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
-        })
+      const ytRes = await ytMusicFetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
+        context: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20240101.01.00', gl: 'US', hl: 'es' } },
+        query: searchQuery,
+        params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D'
       });
+      if (!ytRes.ok) throw new Error(`HTTP ${ytRes.status}`);
       const data = await ytRes.json();
       const secList = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
       const items = [];
@@ -110,27 +122,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    const ytRes = await fetch('https://music.youtube.com/youtubei/v1/browse?prettyPrint=false', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Origin': 'https://music.youtube.com',
-        'Referer': 'https://music.youtube.com/'
+    const ytRes = await ytMusicFetch('https://music.youtube.com/youtubei/v1/browse?prettyPrint=false', {
+      context: {
+        client: {
+          clientName: 'WEB_REMIX',
+          clientVersion: '1.20240101.01.00',
+          gl: 'US',
+          hl: 'es'
+        }
       },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: 'WEB_REMIX',
-            clientVersion: '1.20240101.01.00',
-            gl: 'US',
-            hl: 'es'
-          }
-        },
-        browseId: 'FEmusic_home'
-      })
+      browseId: 'FEmusic_home'
     });
 
+    if (!ytRes.ok) throw new Error(`HTTP ${ytRes.status}`);
     const data = await ytRes.json();
     const sections = data.contents?.singleColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
 
@@ -233,7 +237,14 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const errPayload = JSON.stringify({ error: err.message, shelves: [] });
+    // Un fallo transitorio de YouTube no debe quedar cacheado por el CDN.
+    const errHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store, max-age=0' };
+    if (res && res.setHeader) {
+      res.statusCode = 500;
+      Object.entries(errHeaders).forEach(([k, v]) => res.setHeader(k, v));
+      return res.end(errPayload);
+    }
     if (res && res.status) return res.status(500).send(errPayload);
-    return new Response(errPayload, { status: 500, headers: { 'Content-Type': 'application/json' } });
+    return new Response(errPayload, { status: 500, headers: errHeaders });
   }
 }

@@ -704,9 +704,10 @@ export default async function handler(req, res) {
   const full = param('full') === '1' || param('full') === 'true';
 
   const node = !!(res && res.setHeader);
+  // Estas respuestas son siempre errores: nunca deben quedar cacheadas.
   const json = (status, body) => node
-    ? (res.statusCode = status, res.setHeader('Content-Type', 'application/json'), res.setHeader('Access-Control-Allow-Origin', '*'), res.end(JSON.stringify(body)))
-    : new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+    ? (res.statusCode = status, res.setHeader('Content-Type', 'application/json'), res.setHeader('Access-Control-Allow-Origin', '*'), res.setHeader('Cache-Control', 'no-store, max-age=0'), res.end(JSON.stringify(body)))
+    : new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, max-age=0' } });
 
   if (req.method === 'OPTIONS') {
     const cors = {
