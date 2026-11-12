@@ -10,7 +10,7 @@
     "css": "tailwindcss -i src/input.css -o www/app.css --minify",
     "css:watch": "tailwindcss -i src/input.css -o www/app.css --watch",
     "icons": "node scripts/prepare.mjs",
-    "test": "node scripts/version.mjs --check && node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs && node scripts/test-smoke.mjs && node scripts/test-crossfade.mjs && node scripts/test-ytfallback.mjs && node scripts/test-ios-ended.mjs && node scripts/test-ios-background.mjs && node scripts/test-download.mjs",
+    "test": "node scripts/version.mjs --check && node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs && node scripts/test-smoke.mjs && node scripts/test-crossfade.mjs && node scripts/test-ytfallback.mjs && node scripts/test-ios-ended.mjs && node scripts/test-ios-background.mjs && node scripts/test-download.mjs && node scripts/test-diag.mjs",
     "test:unit": "node scripts/test-util.mjs && node scripts/test-storage.mjs && node scripts/test-lyrics.mjs",
     "test:smoke": "node scripts/test-smoke.mjs",
     "test:crossfade": "node scripts/test-crossfade.mjs",
@@ -18,6 +18,7 @@
     "test:ios-ended": "node scripts/test-ios-ended.mjs",
     "test:ios-background": "node scripts/test-ios-background.mjs",
     "test:download": "node scripts/test-download.mjs",
+    "test:diag": "node scripts/test-diag.mjs",
     "version:check": "node scripts/version.mjs --check",
     "version:set": "node scripts/version.mjs"
   },

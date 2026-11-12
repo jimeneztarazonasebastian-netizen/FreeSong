@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.21 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.22 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.21';
+  const APP_VERSION = '3.9.22';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -78,7 +78,17 @@
     const noop = () => {};
     return api && typeof api.inc === 'function'
       ? api
-      : { init: noop, inc: noop, recordStart: noop, render: noop, reset: noop, copy: noop };
+      : {
+        init: noop,
+        inc: noop,
+        log: noop,
+        setSnapshot: noop,
+        share: noop,
+        recordStart: noop,
+        render: noop,
+        reset: noop,
+        copy: noop
+      };
   })();
   Diag.init({ version: APP_VERSION, toast: showToast });
 
@@ -401,6 +411,7 @@
           pendingAutoPlayTrackId = track.id;
           S.isPlaying = false;
           updatePlayPauseIcons(false, false);
+          Diag.log('autoplay-blocked', { id: track.id, attempts: autoPlayAttempts, bg: isBackground() });
           if (!isBackground()) showToast('Toca play para continuar', 2600);
           return;
         }
@@ -689,6 +700,9 @@
   function ensurePlaybackAlive() {
     const hasPendingRecovery = !!pendingStreamRecovery || !!pendingYtStart;
     if ((!S.isPlaying && !autoPlayBlocked && !hasPendingRecovery) || userIntentionalPause) return;
+    // Un arranque/recuperación pendiente no puede ejecutarse con la pantalla
+    // bloqueada: se resuelve al volver a primer plano (visibilitychange).
+    if (isBackground() && hasPendingRecovery) return;
     // Reafirma la categoría de audio: Safari puede reiniciarla tras suspender.
     setupAudioSession();
     keepAudioAlive();
@@ -727,7 +741,11 @@
         if (target > 1) {
           try { p.currentTime = target; } catch {}
         }
+        // El intento anterior pudo quedar colgado al suspender iOS: libera el
+        // guard para que la recuperación abra una fuente nueva de verdad.
+        current._recovering = false;
         S.isPlaying = true;
+        Diag.log('recovery-now', { id: current.id, at: Math.round(target) });
         handleStreamFailure(current, p);
         return;
       } else {
@@ -752,12 +770,13 @@
         armAutoPlayRetry(current, p);
         return;
       }
-      p.play().catch(() => {
+      p.play().catch((err) => {
         if (!isIOSDevice || !S.isPlaying) return;
         autoPlayBlocked = true;
         pendingAutoPlayTrackId = current ? current.id : '';
         S.isPlaying = false;
         updatePlayPauseIcons(false, false);
+        Diag.log('play-rejected', { id: current ? current.id : '', bg: isBackground(), e: err });
         if (!isBackground()) showToast('Toca play para continuar', 2600);
       });
     }
@@ -854,6 +873,7 @@
 
   function onYtError(event) {
     console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
+    Diag.log('yt-error', { code: event && event.data, id: S.currentTrack ? S.currentTrack.id : '' });
     stopYtProgressTimer();
     clearYtStartWatchdog();
     // Con la pantalla bloqueada el iframe no puede arrancar. Se reintenta al
@@ -1125,8 +1145,11 @@
     }
     if (S.queue[S.currentIndex] !== track) return;
     // Varios eventos 'error' pueden dispararse seguidos por el mismo corte.
-    if (track._recovering) return;
+    // Si iOS suspendió la app a mitad de una recuperación, el guard puede
+    // quedarse pegado; caducarlo permite reintentar al volver a primer plano.
+    if (track._recovering && Date.now() - (Number(track._recoveringAt) || 0) < 12000) return;
     track._recovering = true;
+    track._recoveringAt = Date.now();
 
     try {
       const player = deck && deck === getActivePlayer() ? deck : getActivePlayer();
@@ -1148,11 +1171,21 @@
         return;
       }
 
+      Diag.log('stream-fail', {
+        id: track.id,
+        step: Number(track._fallbackStep) || 0,
+        at: Math.round(resumeAt),
+        dur: Math.round(knownDuration),
+        bg: isIOSDevice && isBackground(),
+        src: describeAudioSource(player.currentSrc || player.src)
+      });
+
       // Con la pantalla bloqueada iOS no permite abrir una fuente nueva sin
       // gesto. Cambiar `src` en ese momento deja la app en silencio y en 0:00.
       // Se guarda la posición y se recupera al volver a primer plano.
       if (isIOSDevice && isBackground()) {
         pendingStreamRecovery = { trackId: track.id, seconds: resumeAt, at: Date.now() };
+        Diag.log('recovery-deferred', { id: track.id, seconds: Math.round(resumeAt) });
         // Si el deck sigue sonando, no toques la UI; si ya se detuvo, deja la
         // intención de reproducir para retomarla al volver.
         if (player.paused) {
@@ -1164,12 +1197,40 @@
 
       const step = Number(track._fallbackStep) || 0;
       if (step === 0) Diag.inc('recoveries');
+      // Reintenta con una URL nueva sin esperar resoluciones lentas: el relay
+      // directo sobrevive al corte del proxy; si no hay relay en ~3 s, el proxy
+      // con `backup` responde en 1-2 s.
+      const retryIfRejected = () => {
+        if (!S.isPlaying || userIntentionalPause || isYtMode) return;
+        if (S.queue[S.currentIndex] !== track) return;
+        armAutoPlayRetry(track, player);
+      };
       if (step >= 1) {
+        // YouTube Web no puede sonar con la pantalla bloqueada. Antes de caer
+        // en él, prueba otra publicación de la misma canción en el relay.
+        if (!track._altTried && !isDownloaded(track.id) && navigator.onLine !== false) {
+          track._altTried = true;
+          const alt = await Promise.race([
+            resolveRelayAlternative(track).catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve(null), 4500))
+          ]);
+          if (alt && alt.url) {
+            if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
+            rememberRelaySource(track, alt);
+            track._fallbackStep = 0;
+            Diag.log('relay-alt', { id: track.id, videoId: alt.videoId || '' });
+            if (switchPlayerSource(player, alt.url, resumeAt, retryIfRejected)) {
+              armStreamWatchdog(track, 7000);
+              return;
+            }
+          }
+        }
         // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
         // la última vía que entrega audio (vídeos que la instancia solo ofrece
         // como segmentos SABR). Mejor eso que un spinner infinito.
         if (!track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
           track._ytFallback = true;
+          Diag.log('yt-fallback', { id: track.id, at: Math.round(resumeAt) });
           showToast('Cambiando a una fuente alternativa de audio…', 2600);
           playWithYouTubeEngine(track, resumeAt);
           return;
@@ -1179,15 +1240,6 @@
         return;
       }
 
-      // El fallo más común no es una URL rota: el proxy de Vercel corta la
-      // conexión a los ~15 s. Antes de gastar otro reintento en el proxy,
-      // intenta el relay directo (resuelve en 1-3 s) y continúa la canción
-      // donde iba. Se omite si el que falló fue el propio relay.
-      const retryIfRejected = () => {
-        if (!S.isPlaying || userIntentionalPause || isYtMode) return;
-        if (S.queue[S.currentIndex] !== track) return;
-        armAutoPlayRetry(track, player);
-      };
       const failedOnRelay = isDirectRelayUrl(player.src);
       if (!failedOnRelay && navigator.onLine !== false) {
         const direct = await Promise.race([
@@ -1234,6 +1286,7 @@
 
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
   document.addEventListener('visibilitychange', () => {
+    Diag.log('visibility', { state: document.visibilityState });
     if (document.visibilityState === 'hidden') {
       if (isCrossfading && pendingTrackCommit) {
         // Al ocultarse la app, el fundido se cierra y la sesión guarda la
@@ -1250,6 +1303,17 @@
       const curTrack = S.queue[S.currentIndex];
       if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
         rememberPosition(curTrack.id, ap.currentTime);
+      }
+      // Si se bloqueó el teléfono mientras la canción aún cargaba (0:00), iOS
+      // congela la carga. Al volver hay que abrir una fuente nueva, no llamar
+      // play() sobre la conexión muerta.
+      if (curTrack && S.isPlaying && !userIntentionalPause && ap && ap.paused && (ap.currentTime || 0) < 0.5) {
+        if (isYtMode) {
+          pendingYtStart = { trackId: curTrack.id, seconds: lastKnownSecondsFor(curTrack.id), at: Date.now() };
+        } else {
+          pendingStreamRecovery = { trackId: curTrack.id, seconds: lastKnownSecondsFor(curTrack.id), at: Date.now() };
+        }
+        Diag.log('start-deferred', { id: curTrack.id, yt: !!isYtMode });
       }
       saveSession(true);
       ensurePlaybackAlive();
@@ -1491,6 +1555,7 @@
 
     clearEndOfTrackTimer();
     isTransitioningTrack = true;
+    Diag.log('track-finished', { id: current ? current.id : '', yt: !!isYtMode, bg: isBackground() });
 
     if (trackTransitionTimeout) clearTimeout(trackTransitionTimeout);
     trackTransitionTimeout = setTimeout(() => {
@@ -1802,6 +1867,7 @@
           return source;
         } catch (err) {
           console.warn(`[FreeSong] Relay ${base} falló para ${videoId}:`, err.message);
+          Diag.log('relay-fail', { id: videoId, host: describeAudioSource(base), e: err });
         }
       }
       relaySourceFailures.set(cacheKey, Date.now() + RELAY_FAIL_TTL_MS);
@@ -2404,6 +2470,7 @@
     S.isDownloadingMap[track.id] = true;
     showToast(`Descargando "${track.title}"...`, 3000);
 
+    const downloadStarted = Date.now();
     await acquireDownloadWakeLock();
     try {
       const CHUNK_SIZE = 512 * 1024;
@@ -2537,10 +2604,12 @@
       if (S.libFilter === 'downloads') {
         renderLibrary();
       }
+      Diag.log('download-ok', { id: track.id, bytes: blob.size, ms: Date.now() - downloadStarted, origin });
       showToast(`✓ "${track.title}" descargada para escuchar offline`, 2800);
       return true;
     } catch (err) {
       console.error('Error al descargar:', err);
+      Diag.log('download-error', { id: track.id, ms: Date.now() - downloadStarted, e: err });
       const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
       showToast(`Error al descargar "${track.title}"${detail}`, 5000);
       return false;
@@ -2726,6 +2795,8 @@
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
+    track._recovering = false;
+    track._altTried = false;
     lastKnownPosition = { id: track.id, seconds: 0, at: Date.now() };
 
     // Si veníamos de YouTube Engine, pausarlo al cambiar de pista
@@ -7937,6 +8008,7 @@
     $('healthCheckBtn')?.addEventListener('click', checkServiceHealth);
     $('diagResetBtn')?.addEventListener('click', () => Diag.reset());
     $('diagCopyBtn')?.addEventListener('click', () => Diag.copy());
+    $('diagShareBtn')?.addEventListener('click', () => Diag.share());
 
     // Restablecer datos
     $('btnClearData').addEventListener('click', async () => {
@@ -8088,6 +8160,81 @@
       }
     }
   });
+
+  // --- Informe de diagnóstico (JSON) ---
+  // Resume el estado real del reproductor en el momento de exportar. Se manda
+  // junto a los eventos para entender fallos que solo ocurren en un iPhone real
+  // (pantalla bloqueada, play() rechazado, relays caídos, descargas cortadas).
+  function describeAudioSource(src) {
+    if (!src) return '';
+    try {
+      const url = new URL(src, location.href);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return String(src).split('?')[0].slice(0, 120);
+    }
+  }
+
+  function buildDiagSnapshot() {
+    const current = S.queue[S.currentIndex] || S.currentTrack || null;
+    const deckState = (deck, index) => {
+      if (!deck) return null;
+      return {
+        deck: index === activeDeckIdx ? 'active' : 'inactive',
+        id: deck.id || '',
+        track: deck.dataset.trackId || deck.dataset.prefetchedId || '',
+        paused: !!deck.paused,
+        time: isFinite(deck.currentTime) ? deck.currentTime : 0,
+        duration: isFinite(deck.duration) ? deck.duration : 0,
+        readyState: deck.readyState,
+        networkState: deck.networkState,
+        src: describeAudioSource(deck.currentSrc || deck.src || '')
+      };
+    };
+    return {
+      index: S.currentIndex,
+      track: current
+        ? {
+          id: current.id,
+          title: current.title,
+          artist: current.artist || '',
+          duration: current.durationSeconds || current.duration || 0
+        }
+        : null,
+      queueLength: S.queue.length,
+      isPlaying: !!S.isPlaying,
+      userIntentionalPause,
+      ytMode: !!isYtMode,
+      ytBlocked: !!pendingYtStart,
+      autoPlayBlocked,
+      autoPlayPending: pendingAutoPlayTrackId,
+      streamRecoveryPending: pendingStreamRecovery
+        ? { trackId: pendingStreamRecovery.trackId, seconds: pendingStreamRecovery.seconds }
+        : null,
+      lastKnownPosition: lastKnownPosition.id
+        ? { id: lastKnownPosition.id, seconds: lastKnownPosition.seconds, ageMs: Date.now() - lastKnownPosition.at }
+        : null,
+      crossfading: !!isCrossfading,
+      consecutiveFailures: consecutiveStreamFailures,
+      decks: audioDecks.map(deckState),
+      settings: {
+        quality: S.audioQuality,
+        normalize: !!S.audioNormalize,
+        crossfade: !!S.crossfade,
+        crossfadeDuration: S.crossfadeDuration,
+        playbackRate: S.playbackRate,
+        repeat: S.repeat,
+        shuffle: S.shuffleMode,
+        autoplay: !!S.autoplayInfinite
+      },
+      offline: {
+        downloads: S.downloads.length,
+        downloading: Object.keys(S.isDownloadingMap).filter((id) => S.isDownloadingMap[id]),
+        cachedBlobs: S.offlineBlobUrls.size
+      }
+    };
+  }
+  Diag.setSnapshot(buildDiagSnapshot);
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
