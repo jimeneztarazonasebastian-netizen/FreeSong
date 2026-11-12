@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.20 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.21 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.20';
+  const APP_VERSION = '3.9.21';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -299,8 +299,30 @@
   let autoPlayRetryTimer = null;
   let autoPlayAttempts = 0;
   let pendingAutoPlayTrackId = '';
+  // iOS puede rechazar play() cuando el cambio de pista ocurrió con la pantalla
+  // bloqueada. No se abandona: queda "bloqueado" hasta el próximo toque/retorno.
+  let autoPlayBlocked = false;
+  // Última posición fiable del deck. iOS a veces devuelve currentTime = 0 al
+  // bloquear la pantalla o al abortar una conexión; se usa para no reanudar en 0.
+  let lastKnownPosition = { id: '', seconds: 0, at: 0 };
+  // Recuperación de stream aplazada hasta que la app vuelva a primer plano.
+  let pendingStreamRecovery = null;
+  // Arranque de YouTube Web aplazado: el iframe no reproduce con la pantalla
+  // bloqueada, así que se lanza al volver a la app (no en segundo plano).
+  let pendingYtStart = null;
   const MAX_STREAM_FAILURES = 3; // fallbacks/saltos seguidos antes de detenerse
   const MAX_SKIPPED_TRACKS = 4; // pistas seguidas que se saltan antes de parar
+
+  function rememberPosition(trackId, seconds) {
+    if (!trackId || !isFinite(seconds) || seconds < 0.5) return;
+    lastKnownPosition = { id: trackId, seconds, at: Date.now() };
+  }
+
+  function lastKnownSecondsFor(trackId, maxAgeMs = 60000) {
+    if (!trackId || !lastKnownPosition.id || lastKnownPosition.id !== trackId) return 0;
+    if (Date.now() - lastKnownPosition.at > maxAgeMs) return 0;
+    return lastKnownPosition.seconds > 0.5 ? lastKnownPosition.seconds : 0;
+  }
 
   function getActivePlayer() {
     return audioDecks[activeDeckIdx];
@@ -343,6 +365,7 @@
     }
     autoPlayAttempts = 0;
     pendingAutoPlayTrackId = '';
+    autoPlayBlocked = false;
   }
 
   // En iOS el cambio automático de pista no ocurre dentro de un gesto. Si
@@ -369,15 +392,19 @@
       }
       Promise.resolve(promise).then(() => {
         pendingAutoPlayTrackId = '';
+        autoPlayBlocked = false;
       }).catch(() => {
         if (autoPlayAttempts >= 6) {
-          pendingAutoPlayTrackId = '';
+          // No borres la intención de reproducir: iOS la sigue bloqueando
+          // hasta que haya un gesto. Al volver a la app o pulsar play se retoma.
+          autoPlayBlocked = true;
+          pendingAutoPlayTrackId = track.id;
           S.isPlaying = false;
           updatePlayPauseIcons(false, false);
-          showToast('Toca play para continuar', 2600);
+          if (!isBackground()) showToast('Toca play para continuar', 2600);
           return;
         }
-        autoPlayRetryTimer = setTimeout(attempt, 900);
+        autoPlayRetryTimer = setTimeout(attempt, Math.min(4000, 900 + autoPlayAttempts * 350));
       });
     };
 
@@ -407,6 +434,14 @@
     } else if (!isYtMode) {
       const p = getActivePlayer();
       if (p && isFinite(p.currentTime) && p.currentTime > 0) position = p.currentTime;
+    }
+
+    // iOS puede devolver 0 al suspender la página justo antes de guardar. Si
+    // estábamos reproduciendo, conserva la última posición real conocida para
+    // que al desbloquear/reabrir no vuelva a empezar la canción desde 0:00.
+    if (positionOverride === null && position <= 0.5 && S.isPlaying && !userIntentionalPause && S.currentTrack) {
+      const known = lastKnownSecondsFor(S.currentTrack.id, 20000);
+      if (known > 1) position = known;
     }
 
     Store.write(SESSION_KEY, {
@@ -488,6 +523,7 @@
       try {
         if (isFinite(player.duration) && player.duration > 0 && target < player.duration - 1) {
           player.currentTime = target;
+          rememberPosition(track.id, target);
         }
       } catch {}
     };
@@ -605,11 +641,6 @@
     document.documentElement.style.setProperty('--tint', `${r} ${g} ${b}`);
   }
 
-  // Detección de pantalla bloqueada o pestaña en segundo plano
-  function isBackground() {
-    return document.visibilityState === 'hidden';
-  }
-
   // --- Mantenedor de sesión de audio nativo en móviles (iOS Safari / Android) ---
   // Un audio HTML5 real con volumen mínimo mantiene la categoría AVAudioSession activa en WebKit.
   // En Android no hace falta y un segundo elemento de audio puede robar el foco al principal.
@@ -625,9 +656,18 @@
   }
   function keepAudioAlive() {
     if (!isIOSDevice) return;
+    // Si el deck principal ya está sonando, la sesión de audio está activa:
+    // arrancar otro elemento (aunque sea mudo) podría robarle el foco.
+    const main = getActivePlayer();
+    if (main && !main.paused) return;
     if (silentLoop.paused) {
       silentLoop.play().catch(() => {});
     }
+  }
+
+  function pauseAudioKeepAlive() {
+    if (!isIOSDevice) return;
+    try { silentLoop.pause(); } catch {}
   }
 
   // Safari 16.4+: declara la sesión como reproducción para que iOS no pause el audio
@@ -647,8 +687,21 @@
   // Si iOS pausó el audio por pasar a segundo plano (sin que el usuario pausara),
   // retómalo en cuanto vuelve a haber oportunidad.
   function ensurePlaybackAlive() {
-    if (!S.isPlaying || userIntentionalPause) return;
+    const hasPendingRecovery = !!pendingStreamRecovery || !!pendingYtStart;
+    if ((!S.isPlaying && !autoPlayBlocked && !hasPendingRecovery) || userIntentionalPause) return;
+    // Reafirma la categoría de audio: Safari puede reiniciarla tras suspender.
+    setupAudioSession();
     keepAudioAlive();
+    if (pendingYtStart) {
+      const track = S.queue[S.currentIndex];
+      if (track && track.id === pendingYtStart.trackId) {
+        const seconds = pendingYtStart.seconds;
+        pendingYtStart = null;
+        playWithYouTubeEngine(track, seconds);
+        return;
+      }
+      pendingYtStart = null;
+    }
     if (isYtMode) {
       try {
         if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
@@ -658,11 +711,34 @@
       return;
     }
     const p = getActivePlayer();
-    if (p && p.paused) {
+    const current = S.queue[S.currentIndex];
+    if (!p) return;
+
+    // Un fallo de stream ocurrido con la pantalla bloqueada se dejó pendiente:
+    // iOS no permite abrir una fuente nueva sin gesto. Al volver, se recupera
+    // conservando la posición real (nunca desde 0:00).
+    if (pendingStreamRecovery) {
+      if (!p.paused && (p.currentTime || 0) > 0.5) {
+        pendingStreamRecovery = null;
+      } else if (current && pendingStreamRecovery.trackId === current.id) {
+        const rec = pendingStreamRecovery;
+        pendingStreamRecovery = null;
+        const target = rec.seconds > 1 ? rec.seconds : lastKnownSecondsFor(current.id);
+        if (target > 1) {
+          try { p.currentTime = target; } catch {}
+        }
+        S.isPlaying = true;
+        handleStreamFailure(current, p);
+        return;
+      } else {
+        pendingStreamRecovery = null;
+      }
+    }
+
+    if (p.paused) {
       // Si iOS perdió el final mientras la app estaba en segundo plano, no
       // reinicies la misma canción al volver: avanza a la siguiente.
-      const current = S.queue[S.currentIndex];
-      if (current && !isYtMode) {
+      if (current) {
         const cur = p.currentTime || 0;
         const dur = getEffectiveDuration(p, current);
         if (p.ended || (dur > 0 && cur >= dur - 0.5)) {
@@ -672,11 +748,18 @@
       }
       // Si el cambio automático de pista quedó pendiente (iOS rechazó play()
       // sin gesto), cualquier toque o retorno a la app lo reintenta.
-      if (pendingAutoPlayTrackId && S.queue[S.currentIndex] && S.queue[S.currentIndex].id === pendingAutoPlayTrackId) {
-        armAutoPlayRetry(S.queue[S.currentIndex], p);
+      if (pendingAutoPlayTrackId && current && current.id === pendingAutoPlayTrackId) {
+        armAutoPlayRetry(current, p);
         return;
       }
-      p.play().catch(() => {});
+      p.play().catch(() => {
+        if (!isIOSDevice || !S.isPlaying) return;
+        autoPlayBlocked = true;
+        pendingAutoPlayTrackId = current ? current.id : '';
+        S.isPlaying = false;
+        updatePlayPauseIcons(false, false);
+        if (!isBackground()) showToast('Toca play para continuar', 2600);
+      });
     }
   }
 
@@ -773,6 +856,18 @@
     console.warn('[FreeSong] Error en reproductor YouTube Web:', event.data);
     stopYtProgressTimer();
     clearYtStartWatchdog();
+    // Con la pantalla bloqueada el iframe no puede arrancar. Se reintenta al
+    // volver en vez de saltar canciones a ciegas y perder la posición.
+    if (isIOSDevice && isBackground()) {
+      let seconds = 0;
+      try {
+        if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') seconds = ytPlayer.getCurrentTime() || 0;
+      } catch {}
+      if (S.currentTrack) {
+        pendingYtStart = { trackId: S.currentTrack.id, seconds: seconds > 1 ? seconds : 0, at: Date.now() };
+      }
+      return;
+    }
     if (!noteStreamFailure()) return;
     playNext(true, true);
   }
@@ -819,6 +914,7 @@
 
   function playWithYouTubeEngine(track, startAt = 0) {
     if (!track) return;
+    pendingYtStart = null;
     isYtMode = true;
     S.isPlaying = true;
     userIntentionalPause = false;
@@ -880,6 +976,16 @@
       try {
         if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === 1) return;
       } catch {}
+      if (isIOSDevice && isBackground()) {
+        let seconds = 0;
+        try {
+          if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') seconds = ytPlayer.getCurrentTime() || 0;
+        } catch {}
+        if (S.currentTrack) {
+          pendingYtStart = { trackId: S.currentTrack.id, seconds: seconds > 1 ? seconds : 0, at: Date.now() };
+        }
+        return;
+      }
       console.warn('[FreeSong] YouTube Web no arrancó; pasando a la siguiente.');
       if (!noteStreamFailure()) return;
       playNext(true, true);
@@ -892,6 +998,7 @@
     consecutiveStreamFailures = 0;
     userIntentionalPause = true;
     S.isPlaying = false;
+    pauseAudioKeepAlive();
     try {
       audioDecks.forEach((deck) => deck.pause());
     } catch {}
@@ -975,7 +1082,7 @@
   // para pasar del proxy de Vercel (corta la conexión a los ~15 s) al relay
   // directo sin reiniciar la canción ni perder el hilo.
   let playbackSourceToken = 0;
-  function switchPlayerSource(player, url, resumeAt = 0) {
+  function switchPlayerSource(player, url, resumeAt = 0, onPlayRejected = null) {
     if (!player || !url) return false;
     const pos = isFinite(resumeAt) && resumeAt > 0.05 ? resumeAt : 0;
     const token = ++playbackSourceToken;
@@ -994,7 +1101,11 @@
       player.load();
       if (pos > 0) seek();
       const pr = player.play();
-      if (pr && pr.catch) pr.catch(() => {});
+      if (pr && pr.catch) {
+        pr.catch(() => {
+          if (typeof onPlayRejected === 'function') onPlayRejected();
+        });
+      }
       return true;
     } catch {
       return false;
@@ -1026,11 +1137,28 @@
       try {
         if (isFinite(player.currentTime) && player.currentTime > 1) resumeAt = player.currentTime;
       } catch {}
+      // Si iOS ya reinició currentTime a 0 al suspender el media pipeline,
+      // recupera la última posición real en vez de reanudar desde el principio.
+      if (resumeAt <= 1) resumeAt = lastKnownSecondsFor(track.id);
       const knownDuration = getEffectiveDuration(player, track);
       // Si el error llega cuando estamos cerca del final (< 3s), tratar como
       // fin natural de la canción en vez de reiniciar desde 0.
       if (resumeAt > 0 && knownDuration > 0 && resumeAt > knownDuration - 3) {
         handleTrackFinished(track);
+        return;
+      }
+
+      // Con la pantalla bloqueada iOS no permite abrir una fuente nueva sin
+      // gesto. Cambiar `src` en ese momento deja la app en silencio y en 0:00.
+      // Se guarda la posición y se recupera al volver a primer plano.
+      if (isIOSDevice && isBackground()) {
+        pendingStreamRecovery = { trackId: track.id, seconds: resumeAt, at: Date.now() };
+        // Si el deck sigue sonando, no toques la UI; si ya se detuvo, deja la
+        // intención de reproducir para retomarla al volver.
+        if (player.paused) {
+          S.isPlaying = true;
+          updatePlayPauseIcons(true, true);
+        }
         return;
       }
 
@@ -1055,6 +1183,11 @@
       // conexión a los ~15 s. Antes de gastar otro reintento en el proxy,
       // intenta el relay directo (resuelve en 1-3 s) y continúa la canción
       // donde iba. Se omite si el que falló fue el propio relay.
+      const retryIfRejected = () => {
+        if (!S.isPlaying || userIntentionalPause || isYtMode) return;
+        if (S.queue[S.currentIndex] !== track) return;
+        armAutoPlayRetry(track, player);
+      };
       const failedOnRelay = isDirectRelayUrl(player.src);
       if (!failedOnRelay && navigator.onLine !== false) {
         const direct = await Promise.race([
@@ -1066,7 +1199,7 @@
           rememberRelaySource(track, direct);
           // El relay ya está sonando: no consumas un reintento del proxy.
           track._fallbackStep = 0;
-          if (switchPlayerSource(player, direct.url, resumeAt)) {
+          if (switchPlayerSource(player, direct.url, resumeAt, retryIfRejected)) {
             armStreamWatchdog(track, 7000);
             return;
           }
@@ -1089,7 +1222,7 @@
       if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
 
       try {
-        if (switchPlayerSource(player, nextUrl, resumeAt)) {
+        if (switchPlayerSource(player, nextUrl, resumeAt, retryIfRejected)) {
           armStreamWatchdog(track, 7000);
         }
         return;
@@ -1111,10 +1244,21 @@
         const activeP = getActivePlayer();
         if (activeP) activeP.volume = S.audioNormalize ? 0.88 : 1;
       }
+      // Guarda la posición AHORA, antes de que iOS pueda suspender el media
+      // pipeline y devolver currentTime = 0.
+      const ap = getActivePlayer();
+      const curTrack = S.queue[S.currentIndex];
+      if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
+        rememberPosition(curTrack.id, ap.currentTime);
+      }
       saveSession(true);
       ensurePlaybackAlive();
     } else {
+      setupAudioSession();
       ensurePlaybackAlive();
+      if (autoPlayBlocked && !userIntentionalPause) {
+        showToast('Toca play para continuar', 3000);
+      }
     }
   });
 
@@ -1124,6 +1268,11 @@
   // Guarda la sesión al salir; NO pausa el audio (iOS lo mantiene en segundo plano).
   window.addEventListener('pagehide', () => {
     if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
+    const ap = getActivePlayer();
+    const curTrack = S.queue[S.currentIndex];
+    if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
+      rememberPosition(curTrack.id, ap.currentTime);
+    }
     saveSession(true);
   });
   window.addEventListener('beforeunload', () => saveSession(true));
@@ -1182,6 +1331,7 @@
       }
       if (idx === activeDeckIdx) consecutiveStreamFailures = 0;
       if (idx === activeDeckIdx) consecutiveSkippedTracks = 0;
+      if (idx === activeDeckIdx) pendingStreamRecovery = null;
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -1250,6 +1400,7 @@
       // el deck audible sigue siendo el saliente.
       const deckTrackId = deck.dataset.trackId;
       const track = (deckTrackId && S.queue.find((t) => t && t.id === deckTrackId)) || S.queue[S.currentIndex];
+      if (track && cur > 0.5) rememberPosition(track.id, cur);
       const dur = getEffectiveDuration(deck, track);
 
       if (dur > 0) {
@@ -1355,6 +1506,7 @@
 
     // Repetir una pista: reiniciar aquí (no en playNext, que también usa el botón "siguiente")
     if (S.repeat === 'one') {
+      if (current) lastKnownPosition = { id: current.id, seconds: 0, at: Date.now() };
       if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
         try {
           ytPlayer.seekTo(0, true);
@@ -1432,7 +1584,10 @@
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime != null) {
           const p = getActivePlayer();
-          if (p) p.currentTime = details.seekTime;
+          if (p) {
+            p.currentTime = details.seekTime;
+            rememberPosition(track.id, details.seekTime);
+          }
         }
       });
     } catch {}
@@ -1635,6 +1790,7 @@
             itag: String(fmt.itag),
             size: relaySizeOf(fmt),
             relay: base,
+            videoId,
             expires: Date.now() + RELAY_URL_TTL_MS
           };
           relaySources.set(cacheKey, source);
@@ -1763,6 +1919,7 @@
       for (const candidate of candidates) {
         const source = await resolveRelaySource(candidate.id, S.audioQuality);
         if (!source) continue;
+        source.videoId = candidate.id;
         // Guárdala también bajo el id original: los siguientes cambios de pista
         // la encontrarán sin repetir la búsqueda.
         relaySources.set(cacheKey, source);
@@ -1860,8 +2017,14 @@
       if ((player.src || '').startsWith('blob:')) return;
 
       rememberRelaySource(track, source);
-      const resumeAt = isFinite(player.currentTime) ? player.currentTime : 0;
-      switchPlayerSource(player, source.url, resumeAt);
+      const resumeAt = isFinite(player.currentTime) && player.currentTime > 0.5
+        ? player.currentTime
+        : lastKnownSecondsFor(track.id);
+      switchPlayerSource(player, source.url, resumeAt, () => {
+        if (!S.isPlaying || userIntentionalPause || isYtMode) return;
+        if (S.queue[S.currentIndex] !== track) return;
+        armAutoPlayRetry(track, player);
+      });
     }).catch(() => {});
   }
 
@@ -2111,51 +2274,125 @@
 
   // Descarga por fragmentos de 512 KB. Evita el límite de tamaño de respuesta de
   // Vercel (una canción larga supera los 4.5 MB de `full=1`) y permite reintentar
-  // solo el fragmento que falló. Devuelve el blob completo ya verificado.
-  async function fetchAudioChunk(track, start, end) {
-    let lastError = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+  // solo el fragmento que falló. Primero intenta el relay directo (Invidious,
+  // con CORS y Range); si no responde, usa el proxy de Vercel. Devuelve el blob
+  // completo ya verificado.
+  async function fetchAudioChunk(track, start, end, options = {}) {
+    const { source = null, videoId = '', totalHint = 0 } = options;
+
+    async function request(targetUrl, origin) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30000);
+      // En redes móviles lentas 30 s se quedaba corto y abortaba fragmentos
+      // válidos a medio bajar.
+      const timer = setTimeout(() => controller.abort(), 45000);
       try {
-        const qs = new URLSearchParams({
-          id: track.id,
-          itag: S.audioQuality,
-          title: track.title || '',
-          artist: track.artist || ''
-        });
-        // Cada reintento pide una resolución nueva al proxy para evitar URLs caducadas.
-        if (attempt > 0) {
-          qs.set('backup', '1');
-          qs.set('r', String(Date.now()));
-        }
-        const res = await fetch(`/api/stream?${qs.toString()}`, {
+        const res = await fetch(targetUrl, {
           headers: { Range: `bytes=${start}-${end}` },
+          // Un fragmento abortado no debe quedar en la caché HTTP del iPhone y
+          // repetirse truncado en el siguiente intento.
+          cache: 'no-store',
           signal: controller.signal
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const buffer = await res.arrayBuffer();
+        if (buffer.byteLength < 1000) throw new Error('Fragmento vacío');
+        // El origen ignoró el Range y devolvió la pista entera.
+        if (res.status === 200) {
+          return { buffer, totalBytes: buffer.byteLength, complete: true, origin };
+        }
+
         const contentRange = res.headers.get('content-range') || '';
         const rangeMatch = contentRange.match(/bytes\s+\d+-\d+\/(\d+)/i);
-        const totalBytes = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
+        const totalBytes = rangeMatch ? parseInt(rangeMatch[1], 10) : (totalHint || 0);
         const expected = totalBytes > 0 ? Math.min(end, totalBytes - 1) - start + 1 : 0;
-
-        if (buffer.byteLength < 1000) throw new Error('Fragmento vacío');
         if (expected > 0 && buffer.byteLength < expected) {
           throw new Error(`Fragmento incompleto (${buffer.byteLength}/${expected})`);
         }
-        return { buffer, totalBytes, complete: res.status === 200 };
-      } catch (err) {
-        lastError = err;
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
-        }
+        return { buffer, totalBytes, complete: false, origin };
       } finally {
         clearTimeout(timer);
       }
     }
+
+    let lastError = null;
+    // 1. Relay directo: no consume funciones de Vercel y suele ser el único
+    //    camino para los vídeos que el proxy devuelve 502 (SABR).
+    if (source && source.url) {
+      try {
+        return await request(source.url, 'relay');
+      } catch (err) {
+        lastError = err;
+        // La URL pudo caducar: pide una nueva antes de rendirse.
+        try {
+          const fresh = await resolveDownloadSource(track);
+          if (fresh && fresh.url && fresh.url !== source.url) {
+            return await request(fresh.url, 'relay');
+          }
+        } catch {}
+      }
+    }
+
+    // 2. Proxy de Vercel por fragmentos (con reintentos independientes).
+    const qs = new URLSearchParams({
+      id: videoId || track.id,
+      itag: S.audioQuality,
+      title: track.title || '',
+      artist: track.artist || '',
+      // Evita que el proxy elija itag 18 (vídeo+AAC, el doble de tamaño) cuando
+      // la descarga es solo de audio.
+      audio: '1'
+    });
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        // Cada reintento pide una resolución nueva al proxy para evitar URLs caducadas.
+        const suffix = attempt > 0 ? `&backup=1&r=${Date.now()}` : '';
+        return await request(`/api/stream?${qs.toString()}${suffix}`, 'proxy');
+      } catch (err) {
+        lastError = err;
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        }
+      }
+    }
     throw lastError || new Error('No se pudo descargar el fragmento');
+  }
+
+  // Resuelve la misma fuente que usa el reproductor. Si el vídeo original no
+  // está en la instancia, busca otra publicación idéntica de la canción.
+  async function resolveDownloadSource(track) {
+    if (!track || !track.id) return null;
+    try {
+      const source = await resolveRelaySource(track.id, S.audioQuality);
+      if (source && source.url) return source;
+      return await resolveRelayAlternative(track);
+    } catch {
+      return null;
+    }
+  }
+
+  // --- Pantalla encendida durante la descarga ---
+  // iOS aborta los fetch si la pantalla se bloquea; el wake lock evita que se
+  // apague sola mientras se bajan varias canciones.
+  let downloadWakeLock = null;
+  let downloadWakeLockRefs = 0;
+
+  async function acquireDownloadWakeLock() {
+    downloadWakeLockRefs++;
+    if (downloadWakeLock || !('wakeLock' in navigator)) return;
+    try {
+      downloadWakeLock = await navigator.wakeLock.request('screen');
+      downloadWakeLock.addEventListener('release', () => { downloadWakeLock = null; });
+    } catch {
+      downloadWakeLock = null;
+    }
+  }
+
+  function releaseDownloadWakeLock() {
+    downloadWakeLockRefs = Math.max(0, downloadWakeLockRefs - 1);
+    if (downloadWakeLockRefs > 0 || !downloadWakeLock) return;
+    try { downloadWakeLock.release(); } catch {}
+    downloadWakeLock = null;
   }
 
   async function downloadTrack(track) {
@@ -2167,6 +2404,7 @@
     S.isDownloadingMap[track.id] = true;
     showToast(`Descargando "${track.title}"...`, 3000);
 
+    await acquireDownloadWakeLock();
     try {
       const CHUNK_SIZE = 512 * 1024;
       let parts = [];
@@ -2174,34 +2412,71 @@
       let totalBytes = 0;
       let lastProgress = -1;
       let restarted = false;
+      let origin = '';
+
+      // La misma fuente que usa el reproductor: relay directo primero, proxy
+      // como respaldo. Así las canciones que dan 502 en Vercel también se
+      // pueden descargar.
+      const direct = await resolveDownloadSource(track);
+      let relay = direct && direct.url ? direct : null;
+      const videoId = (relay && relay.videoId) ? relay.videoId : track.id;
+
+      const restart = (message) => {
+        if (restarted) throw new Error(message);
+        restarted = true;
+        parts = [];
+        offset = 0;
+        totalBytes = 0;
+        lastProgress = -1;
+        origin = '';
+      };
 
       // Pide fragmentos consecutivos hasta cubrir el total que informa Content-Range.
       while (totalBytes === 0 || offset < totalBytes) {
         const end = offset + CHUNK_SIZE - 1;
-        const { buffer, totalBytes: total, complete } = await fetchAudioChunk(track, offset, end);
+        const chunk = await fetchAudioChunk(track, offset, end, {
+          source: relay,
+          videoId,
+          totalHint: totalBytes
+        });
 
-        // Si el proxy resolvió otra calidad a mitad de la descarga, el archivo
-        // quedaría corrupto: empieza de cero una vez.
-        if (total > 0 && totalBytes > 0 && total !== totalBytes) {
-          if (restarted) throw new Error('La calidad del audio cambió durante la descarga');
-          restarted = true;
-          parts = [];
-          offset = 0;
-          totalBytes = 0;
-          lastProgress = -1;
+        // El relay dejó de responder a mitad: continúa por el proxy. Si ya
+        // había fragmentos del relay, reinicia una vez para no mezclar.
+        if (chunk.origin === 'proxy' && relay) {
+          if (parts.length > 0) {
+            restart('La fuente del audio cambió durante la descarga');
+            relay = null;
+            continue;
+          }
+          relay = null;
+        }
+
+        if (origin && chunk.origin !== origin && parts.length > 0) {
+          restart('La fuente del audio cambió durante la descarga');
           continue;
         }
-        if (total > 0) totalBytes = total;
-        parts.push(buffer);
-        offset += buffer.byteLength;
+        origin = chunk.origin;
 
-        if (complete && !totalBytes) {
+        // Si resolvió otra calidad a mitad de la descarga, el archivo quedaría
+        // corrupto: empieza de cero una vez.
+        if (chunk.totalBytes > 0 && totalBytes > 0 && chunk.totalBytes !== totalBytes) {
+          restart('La calidad del audio cambió durante la descarga');
+          continue;
+        }
+        if (chunk.totalBytes > 0) totalBytes = chunk.totalBytes;
+
+        if (chunk.complete) {
           // El origen ignoró el Range y devolvió la canción entera de una vez.
-          totalBytes = offset;
+          parts = [chunk.buffer];
+          offset = chunk.buffer.byteLength;
+          totalBytes = chunk.buffer.byteLength;
           break;
         }
+
+        parts.push(chunk.buffer);
+        offset += chunk.buffer.byteLength;
         if (totalBytes > 0 && offset >= totalBytes) break;
-        if (buffer.byteLength < CHUNK_SIZE && totalBytes > 0 && offset < totalBytes) {
+        if (chunk.buffer.byteLength < CHUNK_SIZE && totalBytes > 0 && offset < totalBytes) {
           throw new Error(`Descarga incompleta (${offset}/${totalBytes} bytes)`);
         }
 
@@ -2271,6 +2546,7 @@
       return false;
     } finally {
       delete S.isDownloadingMap[track.id];
+      releaseDownloadWakeLock();
     }
   }
 
@@ -2423,6 +2699,8 @@
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false, fromEnded = false) {
     isTransitioningTrack = false;
+    pendingStreamRecovery = null;
+    pendingYtStart = null;
     clearEndOfTrackTimer();
     clearAutoPlayRetry();
     if (trackTransitionTimeout) {
@@ -2448,6 +2726,7 @@
 
     userIntentionalPause = false;
     track._fallbackStep = 0;
+    lastKnownPosition = { id: track.id, seconds: 0, at: Date.now() };
 
     // Si veníamos de YouTube Engine, pausarlo al cambiar de pista
     if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
@@ -2489,8 +2768,17 @@
     }
 
     if (preferYt) {
-      const resumeAt = S.pendingResume && S.pendingResume.id === track.id ? S.pendingResume.seconds : 0;
+      let resumeAt = S.pendingResume && S.pendingResume.id === track.id ? S.pendingResume.seconds : 0;
+      if (resumeAt <= 1) resumeAt = lastKnownSecondsFor(track.id);
       S.pendingResume = null;
+      // El iframe de YouTube no puede sonar con la pantalla bloqueada; lanzarlo
+      // ahí dejaría el reproductor mudo y en 0. Se aplaza a primer plano.
+      if (isIOSDevice && isBackground()) {
+        pendingYtStart = { trackId: track.id, seconds: resumeAt, at: Date.now() };
+        S.isPlaying = true;
+        updatePlayPauseIcons(true, false);
+        return;
+      }
       S.isPlaying = true;
       updatePlayPauseIcons(true, true);
       playWithYouTubeEngine(track, resumeAt);
@@ -2743,6 +3031,9 @@
     isTransitioningTrack = false;
     clearEndOfTrackTimer();
     clearAutoPlayRetry();
+    pendingStreamRecovery = null;
+    pendingYtStart = null;
+    pauseAudioKeepAlive();
     // Si se pausa en pleno fundido, se cierra ya y la interfaz pasa a la pista
     // entrante (la que realmente va a reanudarse).
     if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
@@ -2778,6 +3069,9 @@
 
   function resumePlayback() {
     userIntentionalPause = false;
+    clearAutoPlayRetry();
+    pendingStreamRecovery = null;
+    pendingYtStart = null;
     keepAudioAlive();
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
@@ -2798,6 +3092,13 @@
         if (S.currentIndex >= 0 && S.queue[S.currentIndex]) {
           playTrack(S.currentIndex, true);
           return;
+        }
+      }
+      // Si iOS reinició la posición al suspender, retoma donde iba de verdad.
+      if ((p.currentTime || 0) <= 0.5 && S.currentTrack) {
+        const known = lastKnownSecondsFor(S.currentTrack.id);
+        if (known > 1) {
+          try { p.currentTime = known; } catch {}
         }
       }
       p.playbackRate = S.playbackRate;
@@ -2858,6 +3159,7 @@
       userIntentionalPause = true;
       S.isPlaying = false;
       try { getActivePlayer().pause(); } catch {}
+      pauseAudioKeepAlive();
       updatePlayPauseIcons(false, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     }
@@ -2876,6 +3178,7 @@
     const p = getActivePlayer();
     if (p && p.currentTime > 3) {
       p.currentTime = 0;
+      if (S.currentTrack) lastKnownPosition = { id: S.currentTrack.id, seconds: 0, at: Date.now() };
       return;
     }
     let prevIdx = S.currentIndex - 1;
@@ -7264,6 +7567,7 @@
       const dur = getEffectiveDuration(p, track);
       if (p && dur > 0) {
         p.currentTime = (pct / 100) * dur;
+        if (track) rememberPosition(track.id, p.currentTime);
       }
     });
 

@@ -77,7 +77,7 @@ const isMediaType = (ct) => {
 // 1. Prioriza itag 18 (MP4 con audio AAC estéreo a 44.1kHz).
 //    Es el formato progresivo móvil de YouTube que NO se corta a 1MB con error 403.
 // 2. Fallback a AAC adaptativo (itags 140 / 139) y WebM Opus (itags 251 / 250).
-function pickFormat(formats, wantedItag) {
+function pickFormat(formats, wantedItag, audioOnly = false) {
   const audios = (formats || []).filter((f) => f.url && ((f.mimeType || '').startsWith('audio/') || (f.mimeType || '').includes('video/mp4')));
   if (!audios.length) return null;
 
@@ -85,7 +85,8 @@ function pickFormat(formats, wantedItag) {
   const f18 = byItag(18);
 
   // 1. Formato universal no estrangulado: itag 18 (MP4 progresivo con audio AAC-LC estéreo 44.1kHz).
-  if (f18 && (!wantedItag || wantedItag === '18' || wantedItag === '140')) {
+  //    En descargas (audioOnly) se evita porque incluye vídeo y pesa el doble.
+  if (f18 && !audioOnly && (!wantedItag || wantedItag === '18' || wantedItag === '140')) {
     return f18;
   }
 
@@ -94,7 +95,7 @@ function pickFormat(formats, wantedItag) {
     return byItag(wantedItag);
   }
 
-  if (f18) return f18;
+  if (f18 && !audioOnly) return f18;
 
   // 3. AAC MP4 adaptativo (140 = 128k, 139 = 48k, 141 = 256k)
   const mp4Audio = audios.filter((f) => /^audio\/mp4/.test(f.mimeType || ''));
@@ -185,8 +186,8 @@ function getVisitorData() {
 }
 
 
-function resolveWithClient(client, videoId, wantedItag) {
-  const dedupeKey = `${client.name}:${videoId}:${wantedItag || ''}`;
+function resolveWithClient(client, videoId, wantedItag, audioOnly = false) {
+  const dedupeKey = `${client.name}:${videoId}:${wantedItag || ''}:${audioOnly ? 'a' : 'v'}`;
   const pending = pendingResolves.get(dedupeKey);
   if (pending) return pending;
 
@@ -229,7 +230,7 @@ function resolveWithClient(client, videoId, wantedItag) {
       ...(data.streamingData?.formats || []),
       ...(data.streamingData?.adaptiveFormats || [])
     ];
-    const fmt = pickFormat(allFormats, wantedItag);
+    const fmt = pickFormat(allFormats, wantedItag, audioOnly);
     if (!fmt) throw new Error('no audio format with url');
 
     return { url: fmt.url, ua: client.ua, itag: fmt.itag, mimeType: fmt.mimeType };
@@ -495,8 +496,8 @@ async function tryAltCandidates(altIds, itag, range, cacheKey, state, errors) {
   return { ok: false };
 }
 
-async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '', duration = 0, prewarm = false) {
-  const cacheKey = `${videoId}:${itag}`;
+async function getUpstream(videoId, itag, range, backupIndex, title = '', artist = '', duration = 0, prewarm = false, audioOnly = false) {
+  const cacheKey = `${videoId}:${itag}${audioOnly ? ':a' : ''}`;
   const errors = [];
 
   // 1. URL ya resuelta: evita pedir metadatos en cada fragmento de la canción.
@@ -620,7 +621,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
 
         for (const client of CLIENTS) {
           try {
-            const target = await resolveWithClient(client, altVideoId, itag);
+            const target = await resolveWithClient(client, altVideoId, itag, audioOnly);
             const resp = await openUpstream(target, range);
             cacheTarget(altKey, target);
             cacheTarget(cacheKey, target);
@@ -638,7 +639,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   // 6. Clientes nativos (respaldo final; desde Vercel suelen fallar).
   for (const client of CLIENTS) {
     try {
-      const target = await resolveWithClient(client, videoId, itag);
+      const target = await resolveWithClient(client, videoId, itag, audioOnly);
       const resp = await openUpstream(target, range);
       cacheTarget(cacheKey, target);
       return { upstream: resp, errors };
@@ -700,6 +701,8 @@ export default async function handler(req, res) {
   const artist = param('artist') || '';
   const duration = Math.max(0, parseInt(param('dur') || '0', 10) || 0);
   const prewarm = param('prewarm') === '1';
+  // En descargas se pide solo la pista de audio (sin el vídeo de itag 18).
+  const audioOnly = param('audio') === '1';
   // full=1 se usa para descargas: devuelve la pista completa en vez de un fragmento.
   const full = param('full') === '1' || param('full') === 'true';
 
@@ -743,7 +746,7 @@ export default async function handler(req, res) {
     ? 'bytes=0-1'
     : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
 
-  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm);
+  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm, audioOnly);
 
   if (buffer) {
     return serveBuffer(buffer, req, res, node, startByte, endByte, full);
