@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.22 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.23 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.22';
+  const APP_VERSION = '3.9.23';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -845,6 +845,7 @@
       S.isPlaying = true;
       userIntentionalPause = false;
       consecutiveStreamFailures = 0;
+      pauseAudioKeepAlive();
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       startYtProgressTimer();
@@ -1225,11 +1226,49 @@
             }
           }
         }
+        // En iPhone, YouTube Web no puede sonar con la pantalla bloqueada.
+        // Antes de caer en él, guarda la canción como audio local (blob): la
+        // reproducción desde memoria sigue funcionando al bloquear el teléfono
+        // y queda disponible offline para las próximas veces.
+        if (isIOSDevice && !track._blobTried && !isDownloaded(track.id) && navigator.onLine !== false) {
+          track._blobTried = true;
+          Diag.log('blob-prepare', { id: track.id });
+          const blobStarted = Date.now();
+          let prepared = false;
+          try {
+            prepared = await Promise.race([
+              downloadTrack(track, { forPlayback: true }),
+              new Promise((resolve) => setTimeout(() => resolve(false), 30000))
+            ]);
+          } catch {}
+          const blobUrl = S.offlineBlobUrls.get(track.id);
+          if (prepared && blobUrl) {
+            if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
+            track._fallbackStep = 0;
+            Diag.log('blob-playback', { id: track.id, at: Math.round(resumeAt), ms: Date.now() - blobStarted });
+            if (switchPlayerSource(player, blobUrl, resumeAt, retryIfRejected)) {
+              armStreamWatchdog(track, 7000);
+              return;
+            }
+          }
+        }
+        // En iPhone no se usa YouTube Web: suena mientras la pantalla está
+        // encendida, pero iOS lo pausa al bloquear el teléfono (el fallo que
+        // reporta el usuario). Si el audio local tampoco se pudo preparar,
+        // pasa a la siguiente en vez de dejar una sesión que se cortará.
+        if (isIOSDevice) {
+          Diag.log('yt-skip-ios', { id: track.id });
+          showToast('Esta canción no se pudo preparar; pasando a la siguiente…', 3200);
+          noteStreamFailure();
+          skipFailedTrack(track);
+          return;
+        }
         // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
         // la última vía que entrega audio (vídeos que la instancia solo ofrece
         // como segmentos SABR). Mejor eso que un spinner infinito.
-        if (!track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
+        if (!isIOSDevice && !track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
           track._ytFallback = true;
+          track._ytFallbackAt = Date.now();
           Diag.log('yt-fallback', { id: track.id, at: Math.round(resumeAt) });
           showToast('Cambiando a una fuente alternativa de audio…', 2600);
           playWithYouTubeEngine(track, resumeAt);
@@ -1396,6 +1435,9 @@
       if (idx === activeDeckIdx) consecutiveStreamFailures = 0;
       if (idx === activeDeckIdx) consecutiveSkippedTracks = 0;
       if (idx === activeDeckIdx) pendingStreamRecovery = null;
+      // La sesión ya está activa con audio real: el bucle mudo de respaldo
+      // sobra y no debe competir por el foco de audio de iOS.
+      if (idx === activeDeckIdx) pauseAudioKeepAlive();
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -2461,14 +2503,15 @@
     downloadWakeLock = null;
   }
 
-  async function downloadTrack(track) {
+  async function downloadTrack(track, options = {}) {
     if (!track || !track.id) return false;
+    const forPlayback = !!options.forPlayback;
     if (S.isDownloadingMap[track.id]) {
       showToast('Ya se está descargando esta canción');
       return false;
     }
     S.isDownloadingMap[track.id] = true;
-    showToast(`Descargando "${track.title}"...`, 3000);
+    showToast(forPlayback ? 'Preparando audio para la pantalla bloqueada…' : `Descargando "${track.title}"...`, 3000);
 
     const downloadStarted = Date.now();
     await acquireDownloadWakeLock();
@@ -2550,7 +2593,7 @@
         const pct = totalBytes > 0 ? Math.min(99, Math.floor((offset / totalBytes) * 100)) : 0;
         if (pct >= lastProgress + 10) {
           lastProgress = pct;
-          showToast(`Descargando "${track.title}"... ${pct}%`, 1600);
+          showToast(forPlayback ? `Preparando audio… ${pct}%` : `Descargando "${track.title}"... ${pct}%`, 1600);
         }
       }
 
@@ -2604,12 +2647,18 @@
       if (S.libFilter === 'downloads') {
         renderLibrary();
       }
-      Diag.log('download-ok', { id: track.id, bytes: blob.size, ms: Date.now() - downloadStarted, origin });
-      showToast(`✓ "${track.title}" descargada para escuchar offline`, 2800);
+      Diag.log('download-ok', { id: track.id, bytes: blob.size, ms: Date.now() - downloadStarted, origin, forPlayback });
+      showToast(
+        forPlayback
+          ? '✓ Audio listo: seguirá con la pantalla bloqueada'
+          : `✓ "${track.title}" descargada para escuchar offline`,
+        2800
+      );
       return true;
     } catch (err) {
       console.error('Error al descargar:', err);
-      Diag.log('download-error', { id: track.id, ms: Date.now() - downloadStarted, e: err });
+      Diag.log('download-error', { id: track.id, ms: Date.now() - downloadStarted, e: err, forPlayback });
+      if (forPlayback) return false;
       const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
       showToast(`Error al descargar "${track.title}"${detail}`, 5000);
       return false;
@@ -2782,8 +2831,12 @@
     }
     const track = S.queue[index];
     // Pistas que ya agotaron relay y proxy: YouTube Web las entrega sin pasar
-    // por Invidious. Se recuerda para no repetir los reintentos en cada toque.
-    const preferYt = !isDownloaded(track.id) && !!track._ytFallback && navigator.onLine !== false;
+    // por Invidious. Solo se recuerda unos minutos: al reintentar más tarde se
+    // vuelve a probar HTML5 (YouTube Web no funciona en segundo plano en iOS).
+    const ytFresh = !!track._ytFallback && Date.now() - (Number(track._ytFallbackAt) || 0) < 3 * 60 * 1000;
+    // En iPhone el iframe de YouTube no puede sonar con la pantalla bloqueada:
+    // si se usa, la música se detiene al bloquear. Mejor relay/audio local.
+    const preferYt = !isIOSDevice && !isDownloaded(track.id) && ytFresh && navigator.onLine !== false;
     const wasYtMode = isYtMode;
     // Crossfade elegante SOLO de forma automática al final natural (!immediate).
     // Si la pista anterior sonaba por YouTube Web no hay deck que fundir.
@@ -2797,6 +2850,7 @@
     track._fallbackStep = 0;
     track._recovering = false;
     track._altTried = false;
+    track._blobTried = false;
     lastKnownPosition = { id: track.id, seconds: 0, at: Date.now() };
 
     // Si veníamos de YouTube Engine, pausarlo al cambiar de pista
