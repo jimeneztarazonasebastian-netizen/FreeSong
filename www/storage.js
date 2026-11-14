@@ -45,5 +45,13 @@
     }
   }
 
-  window.FreeSongStorage = { read, readArray, readObject, readRaw, write };
+  function writeRaw(key, value) {
+    try { localStorage.setItem(key, String(value)); return true; } catch { return false; }
+  }
+
+  function remove(key) {
+    try { localStorage.removeItem(key); return true; } catch { return false; }
+  }
+
+  window.FreeSongStorage = { read, readArray, readObject, readRaw, write, writeRaw, remove };
 })();

@@ -10,7 +10,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Configurar sesión de audio nativa de iOS en segundo plano
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay])
+            // Playback ya admite A2DP y AirPlay. allowBluetooth es una opción
+            // de grabación y puede hacer fallar setCategory con esta categoría.
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Error al activar AVAudioSession: \(error.localizedDescription)")

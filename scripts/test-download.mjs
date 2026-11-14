@@ -61,6 +61,10 @@ const TRACKS = [
   }
 ];
 
+// Metadatos remotos manipulados: las comillas y etiquetas son texto.
+TRACKS[1].thumbnail = 'x" onerror="window.mediaInjected=true';
+TRACKS[1].durationText = '<img src=x onerror=window.durationInjected=true>';
+
 const AUDIO_HEADERS = {
   'Content-Type': 'audio/wav',
   'Accept-Ranges': 'bytes',
@@ -280,6 +284,7 @@ async function run() {
     assert.equal(await page.locator('#artistTopTracksList img').count(), 0);
     assert.equal(await page.evaluate(() => window.artistInjected === true), false);
 
+    assert.equal(await page.evaluate(() => !!window.mediaInjected || !!window.durationInjected), false, 'Las portadas y duraciones no deben ejecutar HTML');
     assert.deepEqual(pageErrors, [], `Errores de página: ${pageErrors.join(' | ')}`);
     console.log('DESCARGAS OK');
   } finally {

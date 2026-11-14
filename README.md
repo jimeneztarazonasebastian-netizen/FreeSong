@@ -12,7 +12,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 - **Herramientas de audio**: Ecualizador, velocidad (Slowed & Reverb / Nightcore), temporizador de apagado.
 - **Playlists propias**: crea, renombra y elimina playlists; abre una para ver, quitar o reproducir sus canciones (guardadas solo en tu dispositivo).
 - **Atajos de teclado (escritorio)**: `Espacio` reproducir/pausar, `←`/`→` retroceder/adelantar 5 s, `Shift+←`/`Shift+→` canción anterior/siguiente.
-- **100% Privado y Seguro**: Sin anuncios, sin rastreadores, sin analíticas. Tus favoritos y playlists se guardan únicamente en tu dispositivo.
+- **Datos locales**: Tus favoritos y playlists se guardan en tu dispositivo. FreeSong no incorpora analíticas propias; YouTube, las instancias de audio y los proveedores de letras y portadas reciben las peticiones necesarias para prestar sus servicios.
 - **Actualizaciones sin cortes**: cuando hay una versión nueva, la app muestra un aviso y solo recarga al tocar **Actualizar**, para no interrumpir la música.
 
 ## 🚀 Despliegue en Vercel
@@ -115,3 +115,7 @@ La cookie de YouTube (`YOUTUBE_COOKIE`) sigue siendo útil porque evita el `LOGI
 5. Ejecuta `vercel --prod --yes` y vuelve a abrir la app.
 
 La cookie caduca si cierras sesión o Google la invalida; en ese caso repite los pasos. Si el relay y la cookie fallan a la vez, la app reintenta dos veces con una resolución nueva y luego usa el motor alternativo de YouTube; si tampoco hay audio, salta a la siguiente canción (máximo 3 fallos seguidos).
+
+## Auditoría y verificación
+
+Consulta [AUDITORIA.md](AUDITORIA.md) para los fallos corregidos, la cobertura de pruebas y las comprobaciones pendientes en iPhone real. `npm run test:pwa` comprueba el primer arranque offline, la conservación de cachés y el uso con almacenamiento bloqueado. GitHub Actions ejecuta la compilación y las pruebas web en cada cambio.

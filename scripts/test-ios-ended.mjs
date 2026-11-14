@@ -188,6 +188,11 @@ async function run() {
     );
 
     // 1) Fin natural: debe seguir en el mismo deck ya desbloqueado.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
     await page.waitForFunction(
       () => /Cancion iPhone 2/.test(document.getElementById('playerTitle')?.textContent || ''),
       null,
@@ -214,11 +219,31 @@ async function run() {
     await delay(1500);
     const stable = await page.evaluate(() => document.getElementById('playerTitle')?.textContent || '');
     assert.match(stable, /Cancion iPhone 3/, `Saltó dos pistas seguidas: ${stable}`);
+    await waitForTrackPlaying(page, 'ios-4', 16000);
+    const fourth = await playingDeck(page);
+    assert.equal(fourth.id, firstDeck.id, 'Tres avances con la pantalla oculta deben conservar el mismo deck');
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.getElementById('playerShuffleBtn').click();
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some((a) => a.dataset.prefetchedId));
+    const planned = await page.evaluate(() => Array.from(document.querySelectorAll('audio')).find((a) => a.dataset.prefetchedId)?.dataset.prefetchedId);
+    // Consultar otra vez la precarga no debe volver a sortear la siguiente.
+    await page.evaluate(() => {
+      const deck = Array.from(document.querySelectorAll('audio')).find((a) => a.dataset.trackId === 'ios-4');
+      deck.currentTime = 6;
+    });
+    await delay(250);
+    await page.evaluate(() => document.getElementById('playerNextBtn').click());
+    await waitForTrackPlaying(page, planned);
 
     assert.deepEqual(pageErrors, [], `Errores JS: ${pageErrors.join(' | ')}`);
     console.log('IOS ENDED OK');
     console.log('  fin natural: usa el mismo deck y suena la pista 2');
     console.log('  sin evento ended: el respaldo por posición avanza a la pista 3');
+    console.log('  oculto: avanza hasta la pista 4; aleatorio: reproduce la pista precargada');
   } finally {
     await browser.close().catch(() => {});
     server.kill();

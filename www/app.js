@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.25 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.26 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -54,7 +54,9 @@
     readArray: () => [],
     readObject: () => ({}),
     readRaw: (_key, fallback = null) => fallback,
-    write: () => false
+    write: () => false,
+    writeRaw: () => false,
+    remove: () => false
   };
 
   // --- Letras (www/lyrics.js) ---
@@ -69,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.25';
+  const APP_VERSION = '3.9.26';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -172,6 +174,13 @@
   const Pwa = window.FreeSongPwa;
 
   // --- Estado Global de la Aplicación (v3.0.0 Ultra) ---
+  const validTracks = (list) => Array.isArray(list)
+    ? list.filter((t) => t && typeof t.id === 'string' && typeof t.title === 'string')
+    : [];
+  const validPlaylists = (list) => Array.isArray(list)
+    ? list.filter((p) => p && typeof p.id === 'string' && typeof p.name === 'string')
+      .map((p) => ({ ...p, tracks: validTracks(p.tracks) }))
+    : [];
   const S = {
     queue: [],
     currentIndex: -1,
@@ -180,16 +189,16 @@
     crossfadeDuration: 6,
     shuffleMode: 0, // 0: Desactivado, 1: Aleatorio Normal, 2: Smart Shuffle ✨
     repeat: 'all', // 'off', 'all', 'one'
-    favorites: Store.readArray('fs_favorites'),
-    downloads: Store.readArray('fs_downloads'),
+    favorites: validTracks(Store.readArray('fs_favorites')),
+    downloads: validTracks(Store.readArray('fs_downloads')),
     offlineBlobUrls: new Map(),
     currentTrack: null,
     pendingResume: null, // { id, seconds } para retomar donde se quedó al reabrir
     isDownloadingMap: {},
-    recentSearches: Store.readArray('fs_recent_searches'),
+    recentSearches: Store.readArray('fs_recent_searches').filter((q) => typeof q === 'string'),
     djVibeIndex: 0,
-    history: Store.readArray('fs_history'),
-    playlists: Store.readArray('fs_playlists'),
+    history: validTracks(Store.readArray('fs_history')),
+    playlists: validPlaylists(Store.readArray('fs_playlists')),
     stats: (() => {
       const saved = Store.readObject('fs_stats');
       return {
@@ -244,7 +253,7 @@
 
   function saveVisualPrefs() {
     try {
-      localStorage.setItem(VISUAL_KEY, JSON.stringify({
+      Store.writeRaw(VISUAL_KEY, JSON.stringify({
         aurora: S.auroraEnabled,
         auroraIntensity: S.auroraIntensity,
         haptics: S.haptics,
@@ -486,7 +495,7 @@
     // Ignora sesiones de hace más de una semana.
     if (data.savedAt && Date.now() - Number(data.savedAt) > 7 * 24 * 3600 * 1000) return false;
 
-    S.queue = data.queue.filter((t) => t && t.id);
+    S.queue = validTracks(data.queue);
     if (S.queue.length === 0) return false;
     S.currentIndex = Math.min(Math.max(0, Number(data.currentIndex) | 0), S.queue.length - 1);
     S.currentTrack = S.queue[S.currentIndex];
@@ -666,7 +675,7 @@
     try { document.body.appendChild(silentLoop); } catch {}
   }
   function keepAudioAlive() {
-    if (!isIOSDevice) return;
+    if (!isIOSDevice || !S.isPlaying || userIntentionalPause) return;
     // Si el deck principal ya está sonando, la sesión de audio está activa:
     // arrancar otro elemento (aunque sea mudo) podría robarle el foco.
     const main = getActivePlayer();
@@ -801,6 +810,7 @@
   }
 
   function initYouTubeEngine() {
+    if (isIOSDevice) return;
     if (ytPlayer || !window.YT || !window.YT.Player) return;
     try {
       ytPlayer = new YT.Player('ytDeck', {
@@ -1155,6 +1165,14 @@
     try {
       const player = deck && deck === getActivePlayer() ? deck : getActivePlayer();
       if (!player) return;
+      const canRecover = () => {
+        if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode || player !== getActivePlayer()) return false;
+        if (isIOSDevice && isBackground()) {
+          pendingStreamRecovery = { trackId: track.id, seconds: lastKnownSecondsFor(track.id), at: Date.now() };
+          return false;
+        }
+        return true;
+      };
 
       // Guarda la posición: un fallo a mitad de canción debe continuar donde iba.
       let resumeAt = 0;
@@ -1215,6 +1233,7 @@
             resolveRelayAlternative(track).catch(() => null),
             new Promise((resolve) => setTimeout(() => resolve(null), 4500))
           ]);
+          if (!canRecover()) return;
           if (alt && alt.url) {
             if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
             rememberRelaySource(track, alt);
@@ -1241,6 +1260,7 @@
               new Promise((resolve) => setTimeout(() => resolve(false), 30000))
             ]);
           } catch {}
+          if (!canRecover()) return;
           const blobUrl = S.offlineBlobUrls.get(track.id);
           if (prepared && blobUrl) {
             if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
@@ -1285,6 +1305,7 @@
           resolveRelaySource(track.id, S.audioQuality).catch(() => null),
           new Promise((resolve) => setTimeout(() => resolve(null), 3000))
         ]);
+        if (!canRecover()) return;
         if (direct && direct.url) {
           if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
           rememberRelaySource(track, direct);
@@ -1310,7 +1331,7 @@
       }
       const nextUrl = buildStreamUrl(track, track._fallbackStep);
 
-      if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
+      if (!canRecover()) return;
 
       try {
         if (switchPlayerSource(player, nextUrl, resumeAt, retryIfRejected)) {
@@ -1701,6 +1722,7 @@
   }
 
   // --- Siguiente Canción y Precarga ---
+  let plannedShuffle = null;
   // manualSkip=true lo usa el botón "siguiente": con repetir-una el avance manual
   // debe pasar a la siguiente pista, mientras que el fin de pista la repite.
   function getNextIndex(manualSkip = false) {
@@ -1710,10 +1732,15 @@
     if (!manualSkip && S.repeat === 'one') return S.currentIndex;
     let next = S.currentIndex + 1;
     if (S.shuffleMode > 0) {
+      if (plannedShuffle && plannedShuffle.current === S.queue[S.currentIndex] && plannedShuffle.index === S.currentIndex) {
+        const plannedIndex = S.queue.indexOf(plannedShuffle.next);
+        if (plannedIndex >= 0 && (plannedIndex !== S.currentIndex || S.queue.length === 1)) return plannedIndex;
+      }
       next = Math.floor(Math.random() * S.queue.length);
       if (next === S.currentIndex && S.queue.length > 1) {
         next = (next + 1) % S.queue.length;
       }
+      plannedShuffle = { current: S.queue[S.currentIndex], index: S.currentIndex, next: S.queue[next] };
       return next;
     }
     if (next >= S.queue.length) {
@@ -1793,7 +1820,7 @@
           entries.push([key, src]);
           if (entries.length >= RELAY_DISK_CACHE_MAX) break;
         }
-        localStorage.setItem(RELAY_DISK_CACHE_KEY, JSON.stringify(entries));
+        Store.writeRaw(RELAY_DISK_CACHE_KEY, JSON.stringify(entries));
       } catch {}
     }, 400);
   }
@@ -2113,6 +2140,7 @@
   // ~15 s; el relay aguanta la canción completa. Nunca toca copias offline.
   function upgradePlaybackToRelay(track, player) {
     if (!track || !player || isYtMode || !S.isPlaying || userIntentionalPause) return;
+    if (isIOSDevice && isBackground()) return;
     if (isDirectRelayUrl(player.src)) return;
     const currentSrc = player.src || '';
     if (currentSrc.startsWith('blob:') || isDownloaded(track.id)) return;
@@ -2125,6 +2153,9 @@
       if ((player.src || '').startsWith('blob:')) return;
 
       rememberRelaySource(track, source);
+      // La resolución pudo comenzar antes del bloqueo. Guarda el enlace para
+      // la próxima pista, pero no reinicies el audio que ya está sonando.
+      if (isIOSDevice && isBackground()) return;
       const resumeAt = isFinite(player.currentTime) && player.currentTime > 0.5
         ? player.currentTime
         : lastKnownSecondsFor(track.id);
@@ -2283,10 +2314,12 @@
     if (!S.autoplayInfinite || !track || isFetchingRelated) return;
     const remaining = S.queue.length - 1 - S.currentIndex;
     if (remaining < 4) {
+      const queue = S.queue;
       isFetchingRelated = true;
       try {
         const res = await fetch(`/api/queue?id=${encodeURIComponent(track.id)}`, { signal });
         const data = await res.json();
+        if (signal?.aborted || S.queue !== queue) return;
         if (data.tracks && data.tracks.length > 0) {
           const existingIds = new Set(S.queue.map((t) => t.id));
           const newTracks = data.tracks.filter((t) => !existingIds.has(t.id));
@@ -2365,6 +2398,7 @@
     if (!('caches' in window) || !S.downloads || S.downloads.length === 0) return;
     try {
       const cache = await caches.open('freesong-offline-audio-v1');
+      const missing = new Set();
       for (const item of S.downloads) {
         if (!item || !item.id || S.offlineBlobUrls.has(item.id)) continue;
         const match = await cache.match('/offline-audio/' + item.id);
@@ -2372,8 +2406,17 @@
           const blob = await match.blob();
           if (blob && blob.size > 1000) {
             S.offlineBlobUrls.set(item.id, URL.createObjectURL(blob));
+          } else {
+            missing.add(item.id);
           }
+        } else {
+          missing.add(item.id);
         }
+      }
+      if (missing.size) {
+        S.downloads = S.downloads.filter((t) => !missing.has(t.id));
+        Store.write('fs_downloads', S.downloads);
+        if (S.libFilter === 'downloads') renderLibrary();
       }
     } catch (e) {
       console.warn('initOfflineBlobs error:', e);
@@ -2822,6 +2865,7 @@
 
   // --- Reproducción y Cambio de Pista Maestro ---
   function playTrack(index, immediate = false, fromEnded = false) {
+    plannedShuffle = null;
     isTransitioningTrack = false;
     pendingStreamRecovery = null;
     pendingYtStart = null;
@@ -2999,6 +3043,7 @@
           const playPromise = inPlayer.play();
           if (playPromise && playPromise.catch) {
             playPromise.catch((err) => {
+              if (S.queue[S.currentIndex] !== track || userIntentionalPause || inPlayer.dataset.trackId !== track.id) return;
               if (err.name !== 'AbortError') {
                 console.warn('inPlayer play error:', err);
                 if (fromEnded) {
@@ -3028,6 +3073,7 @@
           const playPromise = inPlayer.play();
           if (playPromise && playPromise.catch) {
             playPromise.catch((err) => {
+              if (S.queue[S.currentIndex] !== track || userIntentionalPause || inPlayer.dataset.trackId !== track.id) return;
               if (err.name !== 'AbortError') {
                 console.warn('inPlayer play error:', err);
                 if (fromEnded) {
@@ -3182,11 +3228,14 @@
     const p = getActivePlayer();
     if (p && !p.paused) {
       const fromVol = p.volume;
-      // 80 ms de fundido: quita el corte seco de un equipo barato.
-      rampVolume(p, fromVol, 0, 80, () => {
+      const finishPause = () => {
         try { p.pause(); } catch {}
         try { p.volume = fromVol || getTargetVolume(); } catch {}
-      });
+      };
+      // Los temporizadores pueden suspenderse al bloquear: la pausa remota
+      // debe llegar al elemento de audio dentro del propio evento.
+      if (isIOSDevice || isBackground()) finishPause();
+      else rampVolume(p, fromVol, 0, 80, finishPause);
     } else if (p) {
       try { p.pause(); } catch {}
     }
@@ -3339,12 +3388,12 @@
 
   function saveLyricsCache() {
     try {
-      localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(lyricsCache));
+      Store.writeRaw(LYRICS_CACHE_KEY, JSON.stringify(lyricsCache));
     } catch {
       // Cuota llena: conserva solo las 20 letras más recientes.
       const entries = Object.entries(lyricsCache).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 20);
       lyricsCache = Object.fromEntries(entries);
-      try { localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(lyricsCache)); } catch {}
+      try { Store.writeRaw(LYRICS_CACHE_KEY, JSON.stringify(lyricsCache)); } catch {}
     }
   }
 
@@ -3582,7 +3631,7 @@
 
     if (S.lyricsOffset) lyricOffsets[track.id] = S.lyricsOffset;
     else delete lyricOffsets[track.id];
-    try { localStorage.setItem(LYRICS_OFFSET_KEY, JSON.stringify(lyricOffsets)); } catch {}
+    try { Store.writeRaw(LYRICS_OFFSET_KEY, JSON.stringify(lyricOffsets)); } catch {}
 
     updateLyricOffsetUI();
     lyricsActiveIdx = -1;
@@ -4364,10 +4413,10 @@
       container.innerHTML = filtered.map((t, idx) => `
         <div class="flex items-center justify-between p-2 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press" data-similar-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
-            <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-10 h-10 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+            <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-10 h-10 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
               <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
-              <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0 ml-2">
@@ -4689,12 +4738,12 @@
           <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-artist-track-idx="${idx}">
             <div class="flex items-center gap-3 min-w-0 flex-1">
               <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-              <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+              <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
                 <div class="flex items-center gap-1.5 mt-0.5">
                   ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                  <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                  <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
                 </div>
               </div>
             </div>
@@ -4745,9 +4794,9 @@
         if (albums.length > 0) {
           if (albumsSectionEl) albumsSectionEl.classList.remove('hidden');
           albumsListEl.innerHTML = albums.map((alb) => `
-            <div class="p-3 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/90 border border-zinc-800/60 transition cursor-pointer press flex flex-col justify-between group" data-album-id="${alb.id}" data-album-title="${esc(alb.title)}">
+            <div class="p-3 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/90 border border-zinc-800/60 transition cursor-pointer press flex flex-col justify-between group" data-album-id="${esc(alb.id)}" data-album-title="${esc(alb.title)}">
               <div class="aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
-                <img src="${thumbAt(alb.thumbnail || 'icons/icon-192.png', 480)}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+                <img src="${esc(thumbAt(alb.thumbnail || 'icons/icon-192.png', 480))}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
               </div>
               <div class="min-w-0">
                 <p class="text-xs font-bold text-white truncate group-hover:text-emerald-400 transition">${esc(alb.title)}</p>
@@ -4779,13 +4828,13 @@
         ].filter(a => a.name.toLowerCase() !== primaryArtist.toLowerCase());
 
         simListEl.innerHTML = simToShow.map((art) => `
-          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${art.name}">
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-similar-artist="${esc(art.name)}">
             <div class="flex items-center gap-3">
               ${art.thumbnail ? `
-                <img src="${thumbAt(art.thumbnail, 160)}" class="w-10 h-10 rounded-full object-cover bg-zinc-800 shadow-md" loading="lazy" />
+                <img src="${esc(thumbAt(art.thumbnail, 160))}" class="w-10 h-10 rounded-full object-cover bg-zinc-800 shadow-md" loading="lazy" />
               ` : `
                 <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-black font-black text-xs shadow-md">
-                  ${art.name.slice(0, 2).toUpperCase()}
+                  ${esc(art.name.slice(0, 2).toUpperCase())}
                 </div>
               `}
               <div>
@@ -4880,12 +4929,12 @@
         <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/50 hover:bg-zinc-800/80 border border-zinc-800/50 transition cursor-pointer press group" data-coll-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
             <span class="w-5 text-center text-xs font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-            <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+            <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
             <div class="min-w-0 flex-1">
               <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
               <div class="flex items-center gap-1.5 mt-0.5">
                 ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
               </div>
             </div>
           </div>
@@ -5113,7 +5162,7 @@
       <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/80 border border-zinc-800/80 hover:bg-zinc-800 transition cursor-pointer press" data-stat-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span class="w-5 text-center text-sm font-black text-emerald-400 shrink-0">#${idx + 1}</span>
-          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
+          <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
             <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)} • ${count} veces</p>
@@ -5175,12 +5224,12 @@
       if (S.currentIndex >= 0 && S.currentIndex < S.queue.length) {
         const t = S.queue[S.currentIndex];
         nowPlayingWrap.innerHTML = `
-          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
+          <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-emerald-400 truncate">${esc(t.title)}</p>
             <div class="flex items-center gap-1.5 mt-0.5">
               ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold" title="Descargada">✓</span>' : ''}
-              <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+              <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
@@ -5214,12 +5263,12 @@
             <circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>
           </svg>
         </button>
-        <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" alt="" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" loading="lazy" />
+        <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" alt="" class="w-9 h-9 rounded-lg object-cover bg-zinc-800 shrink-0" loading="lazy" />
         <div class="min-w-0 flex-1 ml-2.5">
           <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
           <div class="flex items-center gap-1.5 mt-0.5">
             ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-            <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <p class="text-[10px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
           </div>
         </div>
         <div class="flex items-center gap-0.5 shrink-0 ml-2">
@@ -5999,13 +6048,13 @@
 
   function recordBackup() {
     const now = new Date().toISOString();
-    try { localStorage.setItem(BACKUP_KEY, now); } catch {}
+    try { Store.writeRaw(BACKUP_KEY, now); } catch {}
     S.lastBackup = now;
     renderBackupStatus();
   }
 
   function backupAgeDays() {
-    const iso = S.lastBackup || localStorage.getItem(BACKUP_KEY);
+    const iso = S.lastBackup || Store.readRaw(BACKUP_KEY);
     if (!iso) return null;
     const t = new Date(iso).getTime();
     if (!isFinite(t)) return null;
@@ -6039,9 +6088,9 @@
       // Como mucho un recordatorio cada 3 días: abrir la app a diario no debe
       // convertirse en un aviso constante.
       try {
-        const last = Number(localStorage.getItem('fs_backup_reminder_at') || 0);
+        const last = Number(Store.readRaw('fs_backup_reminder_at') || 0);
         if (last && Date.now() - last < 3 * 86400000) return;
-        localStorage.setItem('fs_backup_reminder_at', String(Date.now()));
+        Store.writeRaw('fs_backup_reminder_at', String(Date.now()));
       } catch {}
       showToast('💾 Hace tiempo que no haces una copia de seguridad. La tienes en Ajustes → Copia de Seguridad.', 4200);
     }
@@ -6080,19 +6129,21 @@
         const parsed = JSON.parse(event.target.result);
         if (parsed.favorites || parsed.playlists || parsed.downloads) {
           if (Array.isArray(parsed.favorites)) {
-            S.favorites = parsed.favorites;
+            S.favorites = validTracks(parsed.favorites);
             Store.write('fs_favorites', S.favorites);
           }
           if (Array.isArray(parsed.downloads)) {
-            S.downloads = parsed.downloads;
+            // El JSON contiene metadatos, no los bytes de audio. Conserva solo
+            // descargas cuya copia local existe realmente en este dispositivo.
+            S.downloads = validTracks(parsed.downloads).filter((t) => S.offlineBlobUrls.has(t.id));
             Store.write('fs_downloads', S.downloads);
           }
           if (Array.isArray(parsed.playlists)) {
-            S.playlists = parsed.playlists;
+            S.playlists = validPlaylists(parsed.playlists);
             Store.write('fs_playlists', S.playlists);
           }
           if (Array.isArray(parsed.history)) {
-            S.history = parsed.history;
+            S.history = validTracks(parsed.history);
             Store.write('fs_history', S.history);
           }
           if (parsed.stats) {
@@ -6146,8 +6197,8 @@
       const cookieText = data.cookieConfigured ? 'cookie ✓' : 'sin cookie';
 
       if (data.ok) {
-        setHealthStatus('ok', 'Todo en orden',
-          `Motor: ${engine.latencyMs != null ? engine.latencyMs + ' ms' : 'ok'} · ${relayText} · ${cookieText}`);
+        setHealthStatus('ok', 'Búsqueda disponible',
+          `Motor: ${engine.latencyMs != null ? engine.latencyMs + ' ms' : 'ok'} · ${relayText}. El audio se comprueba al reproducir.`);
       } else {
         const why = [];
         if (!engine.reachable) why.push('motor sin respuesta');
@@ -6300,13 +6351,13 @@
             ${shelf.items.map((t, itemIdx) => `
               <div class="group relative rounded-2xl bg-zinc-900/60 p-2.5 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-shelf-idx="${sIdx}" data-item-idx="${itemIdx}">
                 <div class="w-full aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
-                  <img src="${thumbAt(t.thumbnail, 480)}" data-vid="${esc(t.id)}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+                  <img src="${esc(thumbAt(t.thumbnail, 480))}" data-vid="${esc(t.id)}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
                   <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
                     <div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-lg">
                       <svg class="w-5 h-5"><use href="#i-play"/></svg>
                     </div>
                   </div>
-                  ${t.durationText ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[9px] font-mono font-bold text-white">${t.durationText}</span>` : ''}
+                  ${t.durationText ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[9px] font-mono font-bold text-white">${esc(t.durationText)}</span>` : ''}
                 </div>
                 <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
                 <p class="text-[11px] text-zinc-400 truncate mt-0.5">${esc(t.artist)}</p>
@@ -6345,7 +6396,7 @@
 
     grid.innerHTML = source.map((t, idx) => `
       <div class="flex items-center rounded-xl bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 overflow-hidden cursor-pointer press shadow-sm group" data-quick-idx="${idx}">
-        <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
+        <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
         <span class="text-xs font-bold text-white px-2.5 truncate flex-1 leading-tight">${esc(t.title)}</span>
         <div class="w-7 h-7 rounded-full bg-emerald-500 text-black flex items-center justify-center mr-2 opacity-0 group-hover:opacity-100 transition shadow-md shrink-0">
           <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
@@ -6375,10 +6426,10 @@
       <div class="flex items-center justify-between p-2 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800/80 border border-zinc-800/60 transition cursor-pointer press group" data-trend-idx="${idx}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span class="w-5 text-center text-sm font-black ${idx === 0 ? 'text-emerald-400' : 'text-zinc-500'} shrink-0">${idx + 1}</span>
-          <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
+          <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-11 h-11 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" />
           <div class="min-w-0 flex-1">
             <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
-            <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+            <p class="text-[11px] text-zinc-400 truncate">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
           </div>
         </div>
         <div class="flex items-center gap-1 shrink-0 ml-2">
@@ -6513,7 +6564,7 @@
     list.innerHTML = items.map((track, idx) => `
       <button type="button" class="w-32 shrink-0 text-left press" data-continue-idx="${idx}">
         <div class="relative w-32 h-32 rounded-lg overflow-hidden bg-zinc-800">
-          <img src="${thumbAt(track.thumbnail, 320)}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />
+          <img src="${esc(thumbAt(track.thumbnail, 320))}" data-vid="${esc(track.id)}" alt="" loading="lazy" class="w-full h-full object-cover" />
           <span class="absolute bottom-2 right-2 w-9 h-9 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg shadow-black/40">
             <svg class="w-4 h-4"><use href="#i-play"/></svg>
           </span>
@@ -6603,7 +6654,7 @@
       return `
         <button type="button" class="w-32 shrink-0 text-left press" data-discover-idx="${idx}">
           <div class="relative w-32 h-32 rounded-lg overflow-hidden bg-zinc-800">
-            <img src="${thumbAt(cover && cover.thumbnail, 320)}" data-vid="${esc((cover && cover.id) || '')}" alt="" loading="lazy" class="w-full h-full object-cover" />
+            <img src="${esc(thumbAt(cover && cover.thumbnail, 320))}" data-vid="${esc((cover && cover.id) || '')}" alt="" loading="lazy" class="w-full h-full object-cover" />
             <span class="absolute bottom-2 right-2 w-9 h-9 rounded-full bg-emerald-500 text-black flex items-center justify-center shadow-lg shadow-black/40">
               <svg class="w-4 h-4"><use href="#i-play"/></svg>
             </span>
@@ -6686,7 +6737,7 @@
     art.setAttribute('data-vid', vid);
     art.setAttribute('data-source', source || '');
     art.setAttribute('aria-hidden', 'true');
-    art.innerHTML = `<img src="${thumbAt(track.thumbnail, 160)}" data-vid="${esc(vid)}" alt="" loading="lazy" class="genre-art-img" />`;
+    art.innerHTML = `<img src="${esc(thumbAt(track.thumbnail, 160))}" data-vid="${esc(vid)}" alt="" loading="lazy" class="genre-art-img" />`;
     card.appendChild(art);
   }
 
@@ -6985,7 +7036,7 @@
 
     $('btnRecentClear')?.addEventListener('click', () => {
       S.recentSearches = [];
-      localStorage.removeItem('fs_recent_searches');
+      Store.remove('fs_recent_searches');
       renderRecentSearches();
       showToast('Historial de búsquedas eliminado');
     });
@@ -7086,9 +7137,9 @@
       let html = '';
       if (searchType === 'artists') {
         html = items.map((art) => `
-          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-artist-browse="${art.id}" data-artist-name="${esc(art.name || art.title)}" data-artist-thumb="${esc(art.thumbnail || '')}">
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-artist-browse="${esc(art.id)}" data-artist-name="${esc(art.name || art.title)}" data-artist-thumb="${esc(art.thumbnail || '')}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${thumbAt(art.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-full object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${esc(thumbAt(art.thumbnail || 'icons/icon-192.png', 160))}" class="w-12 h-12 rounded-full object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <p class="text-sm font-bold text-white truncate">${esc(art.name || art.title)}</p>
@@ -7104,9 +7155,9 @@
         `).join('');
       } else if (searchType === 'albums') {
         html = items.map((alb) => `
-          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-album-browse="${alb.id}" data-album-title="${esc(alb.title)}">
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-album-browse="${esc(alb.id)}" data-album-title="${esc(alb.title)}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${thumbAt(alb.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${esc(thumbAt(alb.thumbnail || 'icons/icon-192.png', 160))}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-bold text-white truncate">${esc(alb.title)}</p>
                 <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(alb.artist)}${alb.year ? ' • ' + esc(alb.year) : ''} • Álbum</p>
@@ -7119,9 +7170,9 @@
         `).join('');
       } else if (searchType === 'playlists') {
         html = items.map((pl) => `
-          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-playlist-browse="${pl.id}" data-playlist-title="${esc(pl.title)}">
+          <div class="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/60 hover:bg-zinc-800 border border-zinc-800/60 transition cursor-pointer press group" data-playlist-browse="${esc(pl.id)}" data-playlist-title="${esc(pl.title)}">
             <div class="flex items-center gap-3.5 min-w-0 flex-1">
-              <img src="${thumbAt(pl.thumbnail || 'icons/icon-192.png', 160)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
+              <img src="${esc(thumbAt(pl.thumbnail || 'icons/icon-192.png', 160))}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-md" loading="lazy" />
               <div class="min-w-0 flex-1">
                 <p class="text-sm font-bold text-white truncate">${esc(pl.title)}</p>
                 <p class="text-xs text-zinc-400 truncate mt-0.5">${esc(pl.author)}${pl.trackCount ? ' • ' + esc(pl.trackCount) : ''}</p>
@@ -7140,12 +7191,12 @@
           return `
             <div class="flex items-center justify-between p-2.5 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press group" data-search-idx="${globalIdx}">
               <div class="flex items-center gap-3 min-w-0 flex-1">
-                <img src="${thumbAt(t.thumbnail, 160)}" data-vid="${esc(t.id)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
+                <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0 shadow-sm" loading="lazy" />
                 <div class="min-w-0 flex-1">
                   <p class="text-sm font-bold text-white truncate">${esc(t.title)}</p>
                   <div class="flex items-center gap-1.5 mt-0.5">
                     ${isDownloaded(t.id) ? '<span class="text-[10px] text-emerald-400 font-bold">✓</span>' : ''}
-                    <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${t.durationText}` : ''}</p>
+                    <p class="text-xs text-zinc-400 truncate cursor-pointer hover:text-emerald-400 artist-link" data-artist="${esc(t.artist)}">${esc(t.artist)}${t.durationText ? ` • ${esc(t.durationText)}` : ''}</p>
                   </div>
                 </div>
               </div>
@@ -7322,10 +7373,11 @@
 
     S.sleepTimerMinutes = minNum;
     S.sleepTimerRemainingSec = minNum * 60;
+    const deadline = Date.now() + minNum * 60000;
     setSleepBadge(`${minNum}m`);
 
     S.sleepTimerInterval = setInterval(() => {
-      S.sleepTimerRemainingSec--;
+      S.sleepTimerRemainingSec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       const rem = S.sleepTimerRemainingSec;
       if (rem <= 0) {
         clearSleepTimer();
@@ -7727,6 +7779,8 @@
 
     shuffleBtn.addEventListener('click', () => {
       S.shuffleMode = (S.shuffleMode + 1) % 3;
+      plannedShuffle = null;
+      prefetchNextTrack();
       syncShuffleButton();
       if (S.shuffleMode === 0) showToast('Aleatorio desactivado');
       else if (S.shuffleMode === 1) showToast('Aleatorio normal activado');
@@ -7993,14 +8047,14 @@
 
     xfToggle.addEventListener('change', () => {
       S.crossfade = xfToggle.checked;
-      localStorage.setItem('fs_crossfade', S.crossfade.toString());
+      Store.writeRaw('fs_crossfade', S.crossfade.toString());
       xfWrap.classList.toggle('hidden', !S.crossfade);
     });
 
     xfRange.addEventListener('input', () => {
       S.crossfadeDuration = parseInt(xfRange.value, 10);
       xfLabel.textContent = `${S.crossfadeDuration} segundos`;
-      localStorage.setItem('fs_crossfade_dur', S.crossfadeDuration.toString());
+      Store.writeRaw('fs_crossfade_dur', S.crossfadeDuration.toString());
     });
 
     // Ajustes de aspecto personalizables (aurora, haptics, micro-fundido)
@@ -8059,7 +8113,7 @@
     $('settingNormalizeToggle').checked = S.audioNormalize;
     $('settingNormalizeToggle').addEventListener('change', (e) => {
       S.audioNormalize = e.target.checked;
-      localStorage.setItem('fs_normalize', S.audioNormalize.toString());
+      Store.writeRaw('fs_normalize', S.audioNormalize.toString());
       const p = getActivePlayer();
       if (p) p.volume = S.audioNormalize ? 0.88 : 1.0;
       showToast(S.audioNormalize ? 'Normalización activada' : 'Normalización desactivada');
@@ -8068,14 +8122,14 @@
     $('settingAutoplayToggle').checked = S.autoplayInfinite;
     $('settingAutoplayToggle').addEventListener('change', (e) => {
       S.autoplayInfinite = e.target.checked;
-      localStorage.setItem('fs_autoplay', S.autoplayInfinite.toString());
+      Store.writeRaw('fs_autoplay', S.autoplayInfinite.toString());
       showToast(S.autoplayInfinite ? 'Autoplay infinito activado' : 'Autoplay desactivado');
     });
 
     $('settingQualitySelect').value = S.audioQuality;
     $('settingQualitySelect').addEventListener('change', (e) => {
       S.audioQuality = e.target.value;
-      localStorage.setItem('fs_quality', S.audioQuality);
+      Store.writeRaw('fs_quality', S.audioQuality);
       showToast(S.audioQuality === '140' ? 'Calidad Alta (AAC 128k)' : 'Ahorro de datos (AAC 48k)');
     });
 
@@ -8114,7 +8168,7 @@
 
     // Banner PWA para iPhone / Safari
     const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-    const pwaDismissed = localStorage.getItem('fs_pwa_dismissed') === 'true';
+    const pwaDismissed = Store.readRaw('fs_pwa_dismissed') === 'true';
     const pwaBanner = $('pwaBanner');
     if (pwaBanner && isIOS && !isStandalone && !pwaDismissed) {
       pwaBanner.classList.remove('hidden');
@@ -8123,7 +8177,7 @@
     if (pwaClose) {
       pwaClose.addEventListener('click', () => {
         if (pwaBanner) pwaBanner.classList.add('hidden');
-        localStorage.setItem('fs_pwa_dismissed', 'true');
+        Store.writeRaw('fs_pwa_dismissed', 'true');
       });
     }
 
@@ -8337,7 +8391,7 @@
     // sesión guardada, al menos muestra la última canción escuchada.
     if (!restoreSession()) {
       try {
-        const savedTrack = localStorage.getItem('fs_last_track');
+        const savedTrack = Store.readRaw('fs_last_track');
         if (savedTrack) {
           const lastTrack = JSON.parse(savedTrack);
           if (lastTrack && lastTrack.id) {

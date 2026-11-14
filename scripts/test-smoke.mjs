@@ -398,8 +398,9 @@ async function run() {
     await page.evaluate(() => {
       localStorage.setItem('fs_favorites', '{no es json');
       localStorage.setItem('fs_stats', '[1,2]');
-      localStorage.setItem('fs_playlists', '"texto"');
-      localStorage.setItem('fs_history', 'null');
+      localStorage.setItem('fs_playlists', '[null,{"id":"bad"}]');
+      localStorage.setItem('fs_history', '[null,{"id":"missing-title"}]');
+      localStorage.setItem('fs_downloads', '[null,42]');
       localStorage.setItem('fs_visual_v1', 'roto');
     });
     await page.reload({ waitUntil: 'load' });

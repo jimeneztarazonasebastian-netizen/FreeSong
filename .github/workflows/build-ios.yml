@@ -9,12 +9,14 @@ on:
       - 'www/**'
       - 'ios/**'
       - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.json'
       - '.github/workflows/build-ios.yml'
 
 jobs:
   build-ios:
     name: Compilar IPA para iPhone
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
@@ -22,10 +24,10 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Instalar dependencias
-        run: npm install
+        run: npm ci
 
       - name: Compilar estilos y assets web
         run: npm run build

@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.25: Network-First para App Shell (actualización inmediata)
+// Service worker de FreeSong v3.9.26: Network-First para App Shell (actualización inmediata)
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.25';
+const VERSION = 'freesong-v3.9.26';
 const SHELL = [
   './',
   'index.html',
@@ -33,7 +33,7 @@ self.addEventListener('activate', (event) => {
     caches.keys()
       .then((keys) => Promise.all(
         keys
-          .filter((k) => k !== VERSION && !k.startsWith('freesong-offline-'))
+          .filter((k) => k !== VERSION && /^freesong-v\d/.test(k))
           .map((k) => caches.delete(k))
       ))
       .then(() => self.clients.claim())
@@ -55,6 +55,21 @@ self.addEventListener('fetch', (event) => {
   // No interceptar llamadas de API ni audio offline
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/offline-audio/')) return;
 
+  // El HTML pide app.js?v=...; install precarga app.js sin query. Ambas
+  // peticiones deben encontrar la misma copia al arrancar sin conexión.
+  const cachedShell = async () => {
+    const cache = await caches.open(VERSION);
+    return (await cache.match(req, { ignoreSearch: true })) ||
+      (req.mode === 'navigate' ? cache.match('index.html') : undefined);
+  };
+  const remember = (res) => {
+    if (res && res.status === 200 && res.type !== 'opaque') {
+      const copy = res.clone();
+      event.waitUntil(caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {}));
+    }
+    return res;
+  };
+
   // ESTRATEGIA NETWORK-FIRST para '/', 'index.html', 'app.js', 'app.css' y navegación
   const isCoreAsset = req.mode === 'navigate' ||
     url.pathname === '/' ||
@@ -66,28 +81,19 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          if (res && res.status === 200) {
-            const copy = res.clone();
-            caches.open(VERSION).then((c) => c.put(req, copy));
-          }
-          return res;
+          if (res.status >= 500) return cachedShell().then((cached) => cached || res);
+          return remember(res);
         })
-        .catch(() => caches.match(req).then((cached) => cached || (req.mode === 'navigate' ? caches.match('index.html') : null)))
+        .catch(async () => (await cachedShell()) || Response.error())
     );
     return;
   }
 
   // Otros activos estáticos (iconos, fuentes): Cache-First con actualización de fondo
   event.respondWith(
-    caches.match(req).then((cached) => {
+    cachedShell().then((cached) => {
       if (cached) return cached;
-      return fetch(req).then((res) => {
-        if (res && res.status === 200) {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put(req, copy));
-        }
-        return res;
-      });
+      return fetch(req).then(remember);
     })
   );
 });

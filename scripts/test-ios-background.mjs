@@ -106,6 +106,8 @@ async function run() {
     args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--disable-background-timer-throttling', '--disable-renderer-backgrounding']
   });
   const pageErrors = [];
+  let releaseRelay;
+  const relayGate = new Promise((resolve) => { releaseRelay = resolve; });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', userAgent: IOS_UA });
     const page = await context.newPage();
@@ -130,6 +132,7 @@ async function run() {
         if (url.pathname === '/api/v1/search') return json(route, []);
         const match = /^\/api\/v1\/videos\/([^/]+)$/.exec(url.pathname);
         if (match) {
+          if (match[1] === 'bg-1') await relayGate;
           return json(route, {
             videoId: decodeURIComponent(match[1]),
             adaptiveFormats: [
@@ -183,6 +186,11 @@ async function run() {
       return { id: deck?.id || '', src: deck?.src || '', time: deck?.currentTime || 0, token: deck?.dataset.sourceToken || '' };
     });
     assert.ok(beforeError.time > 1.5, `La canción debía ir avanzada antes del fallo (${beforeError.time})`);
+    // La resolución comenzó en primer plano y termina DESPUÉS de bloquear.
+    releaseRelay();
+    await delay(300);
+    const afterLateRelay = await page.evaluate((id) => document.getElementById(id)?.src, beforeError.id);
+    assert.equal(afterLateRelay, beforeError.src, 'Un relay tardío no debe cambiar la fuente después de bloquear');
 
     // Falla real del stream (conexión cortada por el proxy) con la pantalla
     // bloqueada: iOS además suele resetear currentTime a 0.
@@ -231,11 +239,20 @@ async function run() {
     assert.equal(resumed.trackId, 'bg-1', 'Debe reanudar la misma canción');
     assert.ok(resumed.time > 1.5, `Debe reanudar donde iba, no en 0:00 (reanudó en ${resumed.time.toFixed(2)} s)`);
 
+    // Pausar desde la pantalla bloqueada debe ser síncrono, sin esperar timers.
+    const pausedImmediately = await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.getElementById('playerPlayBtn').click();
+      return Array.from(document.querySelectorAll('audio')).every((a) => a.paused);
+    });
+    assert.equal(pausedImmediately, true, 'La pausa con la pantalla bloqueada no debe depender de un fundido con timer');
+
     assert.deepEqual(pageErrors, [], `Errores JS: ${pageErrors.join(' | ')}`);
     console.log('IOS BACKGROUND OK');
     console.log('  en segundo plano: no cambia src, no salta a YouTube y no pierde la pista');
     console.log(`  al volver: reanuda en ${resumed.time.toFixed(1)} s (no en 0:00)`);
   } finally {
+    releaseRelay();
     await browser.close().catch(() => {});
     server.kill();
   }
