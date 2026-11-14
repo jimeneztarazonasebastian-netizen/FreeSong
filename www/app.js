@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.24 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.25 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.24';
+  const APP_VERSION = '3.9.25';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -6850,6 +6850,7 @@
   }
 
   let suggestionTimer = null;
+  let suggestionRequestToken = 0;
   let currentSearchResults = [];
   let searchAbortController = null;
   // Distingue la búsqueda vigente de una continuación antigua que llega tarde.
@@ -6888,6 +6889,7 @@
       clearBtn.classList.toggle('hidden', !q);
       clearTimeout(searchTimer);
       clearTimeout(suggestionTimer);
+      const suggestionToken = ++suggestionRequestToken;
 
       if (!q) {
         if (suggestionsDropdown) suggestionsDropdown.classList.add('hidden');
@@ -6905,6 +6907,7 @@
         try {
           const res = await fetch(`/api/suggestions?q=${encodeURIComponent(q)}`);
           const data = await res.json();
+          if (suggestionToken !== suggestionRequestToken) return;
           const queries = data.queries || [];
           if (queries.length > 0 && input.value.trim() === q && suggestionsList && suggestionsDropdown) {
             suggestionsList.innerHTML = queries.slice(0, 5).map((sq) => `
@@ -6929,6 +6932,7 @@
             suggestionsDropdown.classList.add('hidden');
           }
         } catch {
+          if (suggestionToken !== suggestionRequestToken) return;
           suggestionsDropdown?.classList.add('hidden');
         }
       }, 200);
@@ -6939,9 +6943,22 @@
       }, 450);
     });
 
-    // Cerrar sugerencias al hacer clic fuera del área de búsqueda
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const q = input.value.trim();
+        if (q) executeSearch(q, false);
+      } else if (event.key === 'Escape') {
+        suggestionRequestToken++;
+        clearTimeout(suggestionTimer);
+        suggestionsDropdown?.classList.add('hidden');
+      }
+    });
+
+    // Cerrar sugerencias al hacer clic fuera del campo y su menú.
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('#viewSearch')) {
+      if (!e.target.closest('#searchInput, #searchSuggestionsDropdown')) {
+        suggestionRequestToken++;
         suggestionsDropdown?.classList.add('hidden');
       }
     });
@@ -6985,6 +7002,9 @@
   }
 
   async function executeSearch(query, isContinuation = false) {
+    clearTimeout(searchTimer);
+    clearTimeout(suggestionTimer);
+    suggestionRequestToken++;
     const results = $('searchResults');
     const resultsList = $('searchResultsList');
     const genresWrap = $('searchGenresWrap');

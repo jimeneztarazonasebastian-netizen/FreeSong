@@ -198,7 +198,11 @@ async function run() {
           return rangeResponse(route, request);
         }
         if (url.pathname === '/api/relay-info') return json(route, { instances: ['https://relay.test'] });
-        if (url.pathname === '/api/suggestions') return json(route, { queries: [] });
+        if (url.pathname === '/api/suggestions') {
+          // Llega después de los resultados; no debe reabrir el menú encima.
+          await delay(900);
+          return json(route, { queries: ['descarga tardía'] });
+        }
         if (url.pathname === '/api/lyrics') return json(route, { syncedLyrics: '', plainLyrics: '' });
         if (url.pathname === '/api/queue') return json(route, { tracks: [] });
         if (url.pathname === '/api/health') return json(route, { ok: true, version: 'test' });
@@ -251,6 +255,7 @@ async function run() {
     });
     await waitPlaying(page);
     await waitTrack(page, 'test-relay');
+    assert.equal(await page.locator('#searchSuggestionsDropdown').isVisible(), false, 'Las sugerencias tardías no deben tapar los resultados');
     await downloadCurrent(page, 'test-relay');
     assert.equal(
       audioRequests.filter((a) => a === '1').length,
