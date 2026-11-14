@@ -1,6 +1,6 @@
 # Auditoría de FreeSong — 14 de noviembre de 2026
 
-Versión revisada: 3.9.26. Prioridad: PWA instalada desde Safari con «Agregar a inicio».
+Versión revisada: 3.9.27. Prioridad: PWA instalada desde Safari con «Agregar a inicio».
 
 ## Alcance y conclusión
 
@@ -20,6 +20,7 @@ Chrome con identificación de iPhone y visibilidad simulada; no son Safari/iOS.
 | Prioridad | Hallazgo | Corrección |
 | --- | --- | --- |
 | Alta | Una resolución tardía del relay cambiaba `src` después de bloquear. | Se conserva la fuente en marcha; se guarda el enlace resuelto para reutilizarlo. |
+| Alta | Un error definitivo al arrancar una pista oculta dejaba la cola esperando al desbloqueo. | Se salta la pista en el mismo evento, con límite de fallos consecutivos; los cortes de una pista avanzada conservan su posición. |
 | Alta | Una recuperación iniciada en primer plano podía continuar tras bloquear o cambiar de canción. | Se vuelve a comprobar pista, reproductor, pausa y visibilidad tras las esperas. |
 | Alta | La pausa remota dependía de un fundido con temporizadores. | En iOS y segundo plano se pausa inmediatamente. |
 | Alta | Cada consulta de «siguiente» en aleatorio sorteaba otra pista. | Se mantiene una elección hasta el siguiente cambio de pista; precarga y avance coinciden. |
@@ -57,6 +58,23 @@ Chrome con identificación de iPhone y visibilidad simulada; no son Safari/iOS.
 - `npm run build`, `git diff --check`, `node --check` y `npm audit`.
 - Los archivos locales de cookies y variables de entorno no están versionados.
 
+## Verificación externa
+
+El despliegue 3.9.26 del commit `203a1af` terminó en estado READY y sirvió esa
+versión desde el dominio de producción. Las tareas web e IPA de ese commit
+terminaron correctamente en GitHub Actions. Para 3.9.27 se repiten las tareas
+tras subir el ajuste final de errores al arrancar en segundo plano.
+
+Con audio real de producción e identificación de iPhone, Chrome reprodujo
+«Candy», «Fanática Sensual» y «El Teléfono» en `audioA`, sin crear iframes de
+YouTube. Se ocultó la página de forma simulada y se adelantó al final de cada
+pista después de dejar trabajar la precarga. No se dejó sonar cada canción
+completa ni se bloqueó un iPhone físico. Una prueba más agresiva que adelantó
+las canciones antes de completar la precarga agotó el tiempo de espera en el
+segundo avance; también se observaron 502 de fuentes de audio. Esto motivó el
+ajuste final para saltar errores terminales de arranque, y confirma que no debe
+prometerse disponibilidad universal del proveedor.
+
 ## Límites y riesgos que siguen abiertos
 
 1. **Bloqueo físico pendiente.** Ocultar una página en Chrome no reproduce la
@@ -65,7 +83,7 @@ Chrome con identificación de iPhone y visibilidad simulada; no son Safari/iOS.
 2. **Disponibilidad externa.** Hay una sola instancia de relay por defecto.
    YouTube, cookies, CAPTCHA, CORS y disponibilidad de la instancia pueden impedir
    canciones concretas. Los respaldos no constituyen una garantía del catálogo.
-3. **Corte de red bloqueada.** Una recuperación que requiere otra fuente se
+3. **Corte de red bloqueada.** Un error definitivo antes de arrancar puede saltarse para continuar la cola. Una recuperación a mitad de canción que requiere otra fuente se
    conserva para el retorno a primer plano. Si iOS rechaza reabrir audio sin gesto,
    puede ser necesario tocar reproducir. No se sustituye por un iframe en iPhone.
 4. **Almacenamiento del sistema.** iOS puede desalojar cachés; una copia JSON no
@@ -82,7 +100,7 @@ Chrome con identificación de iPhone y visibilidad simulada; no son Safari/iOS.
 
 ## Prueba final en el iPhone del usuario
 
-1. Abrir la PWA con red y aplicar la actualización 3.9.26.
+1. Abrir la PWA con red y aplicar la actualización 3.9.27.
 2. Iniciar una cola de al menos cuatro canciones y esperar a que la primera suene.
 3. Bloquear y dejar pasar tres cambios completos sin volver a abrir la PWA.
 4. Probar pausa, reanudación y siguiente desde la pantalla bloqueada.

@@ -238,12 +238,30 @@ async function run() {
     await delay(250);
     await page.evaluate(() => document.getElementById('playerNextBtn').click());
     await waitForTrackPlaying(page, planned);
+    await delay(400); // supera la protección contra dos saltos manuales en 300 ms
+
+    // Un error terminal justo al arrancar otra pista, ya oculto, debe saltar
+    // sin depender de un temporizador ni de volver a primer plano.
+    const afterUnavailable = await page.evaluate(() => {
+      document.getElementById('playerShuffleBtn').click();
+      document.getElementById('playerShuffleBtn').click();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      const before = window.FreeSongDiag.report().playback.index;
+      document.getElementById('playerNextBtn').click();
+      const deck = Array.from(document.querySelectorAll('audio')).find((a) => a.dataset.trackId === `ios-${(before + 1) % 4 + 1}`);
+      Object.defineProperty(deck, 'error', { configurable: true, get: () => ({ code: 4 }) });
+      deck.dispatchEvent(new Event('error'));
+      delete deck.error;
+      return (before + 2) % 4;
+    });
+    await waitForTrackPlaying(page, `ios-${afterUnavailable + 1}`);
 
     assert.deepEqual(pageErrors, [], `Errores JS: ${pageErrors.join(' | ')}`);
     console.log('IOS ENDED OK');
     console.log('  fin natural: usa el mismo deck y suena la pista 2');
     console.log('  sin evento ended: el respaldo por posición avanza a la pista 3');
     console.log('  oculto: avanza hasta la pista 4; aleatorio: reproduce la pista precargada');
+    console.log('  error definitivo al arrancar oculto: salta sin esperar al desbloqueo');
   } finally {
     await browser.close().catch(() => {});
     server.kill();

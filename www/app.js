@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.26 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.27 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -71,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.26';
+  const APP_VERSION = '3.9.27';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1075,11 +1075,13 @@
     }
     console.warn(`[FreeSong] Saltando pista no reproducible: ${track && track.title}`);
     showToast(`No se pudo reproducir "${track ? track.title : 'esta pista'}". Pasando a la siguiente...`, 2400);
-    setTimeout(() => {
+    const advance = () => {
       if (userIntentionalPause) return;
       if (S.queue[S.currentIndex] && S.queue[S.currentIndex].id !== (track && track.id)) return;
       playNext(true, true);
-    }, 600);
+    };
+    if (isIOSDevice && isBackground()) advance();
+    else setTimeout(advance, 600);
   }
 
   // Vigila el arranque de una pista. Se reprograma solo: si un intento se
@@ -1203,6 +1205,13 @@
       // gesto. Cambiar `src` en ese momento deja la app en silencio y en 0:00.
       // Se guarda la posición y se recupera al volver a primer plano.
       if (isIOSDevice && isBackground()) {
+        // Un error definitivo antes de arrancar no debe congelar la cola.
+        // Un corte de una pista avanzada conserva su posición para recuperar.
+        if (resumeAt < 1 && player.error && [2, 3, 4].includes(player.error.code)) {
+          Diag.log('background-start-failed', { id: track.id, code: player.error.code });
+          skipFailedTrack(track);
+          return;
+        }
         pendingStreamRecovery = { trackId: track.id, seconds: resumeAt, at: Date.now() };
         Diag.log('recovery-deferred', { id: track.id, seconds: Math.round(resumeAt) });
         // Si el deck sigue sonando, no toques la UI; si ya se detuvo, deja la
