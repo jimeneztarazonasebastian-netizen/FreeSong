@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.23 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.24 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -69,7 +69,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.23';
+  const APP_VERSION = '3.9.24';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -2404,20 +2404,27 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const buffer = await res.arrayBuffer();
-        if (buffer.byteLength < 1000) throw new Error('Fragmento vacío');
+        if (buffer.byteLength === 0) throw new Error('Fragmento vacío');
+        const mimeType = (res.headers.get('content-type') || 'audio/mp4').split(';')[0].trim();
+        if (!/^(audio\/|video\/mp4|application\/octet-stream)/i.test(mimeType)) {
+          throw new Error('La fuente no devolvió audio');
+        }
         // El origen ignoró el Range y devolvió la pista entera.
         if (res.status === 200) {
-          return { buffer, totalBytes: buffer.byteLength, complete: true, origin };
+          return { buffer, totalBytes: buffer.byteLength, complete: true, origin, mimeType };
         }
 
         const contentRange = res.headers.get('content-range') || '';
-        const rangeMatch = contentRange.match(/bytes\s+\d+-\d+\/(\d+)/i);
-        const totalBytes = rangeMatch ? parseInt(rangeMatch[1], 10) : (totalHint || 0);
-        const expected = totalBytes > 0 ? Math.min(end, totalBytes - 1) - start + 1 : 0;
-        if (expected > 0 && buffer.byteLength < expected) {
+        const rangeMatch = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
+        if (!rangeMatch || Number(rangeMatch[1]) !== start || Number(rangeMatch[2]) > end) {
+          throw new Error('Rango de audio inválido');
+        }
+        const totalBytes = Number(rangeMatch[3]);
+        const expected = Number(rangeMatch[2]) - start + 1;
+        if (expected <= 0 || totalBytes <= Number(rangeMatch[2]) || buffer.byteLength !== expected) {
           throw new Error(`Fragmento incompleto (${buffer.byteLength}/${expected})`);
         }
-        return { buffer, totalBytes, complete: false, origin };
+        return { buffer, totalBytes, complete: false, origin, mimeType };
       } finally {
         clearTimeout(timer);
       }
@@ -2523,6 +2530,7 @@
       let lastProgress = -1;
       let restarted = false;
       let origin = '';
+      let mimeType = 'audio/mp4';
 
       // La misma fuente que usa el reproductor: relay directo primero, proxy
       // como respaldo. Así las canciones que dan 502 en Vercel también se
@@ -2566,6 +2574,7 @@
           continue;
         }
         origin = chunk.origin;
+        mimeType = chunk.mimeType;
 
         // Si resolvió otra calidad a mitad de la descarga, el archivo quedaría
         // corrupto: empieza de cero una vez.
@@ -2586,9 +2595,6 @@
         parts.push(chunk.buffer);
         offset += chunk.buffer.byteLength;
         if (totalBytes > 0 && offset >= totalBytes) break;
-        if (chunk.buffer.byteLength < CHUNK_SIZE && totalBytes > 0 && offset < totalBytes) {
-          throw new Error(`Descarga incompleta (${offset}/${totalBytes} bytes)`);
-        }
 
         const pct = totalBytes > 0 ? Math.min(99, Math.floor((offset / totalBytes) * 100)) : 0;
         if (pct >= lastProgress + 10) {
@@ -2597,7 +2603,7 @@
         }
       }
 
-      const blob = new Blob(parts, { type: 'audio/mp4' });
+      const blob = new Blob(parts, { type: mimeType });
       if (!blob || blob.size < 1000) throw new Error('Blob de audio inválido');
       if (totalBytes > 0 && blob.size !== totalBytes) {
         throw new Error(`Descarga incompleta (${blob.size}/${totalBytes} bytes)`);
@@ -2609,7 +2615,7 @@
           '/offline-audio/' + track.id,
           new Response(blob, {
             headers: {
-              'Content-Type': 'audio/mp4',
+              'Content-Type': mimeType,
               'Content-Length': blob.size.toString()
             }
           })
@@ -4648,7 +4654,7 @@
     }
 
     const topListEl = $('artistTopTracksList');
-    topListEl.innerHTML = `<div class="py-10 text-center text-zinc-500 text-xs animate-pulse">Cargando éxitos de ${primaryArtist}...</div>`;
+    topListEl.innerHTML = `<div class="py-10 text-center text-zinc-500 text-xs animate-pulse">Cargando éxitos de ${esc(primaryArtist)}...</div>`;
     const simListEl = $('artistSimilarList');
     simListEl.innerHTML = '';
 
@@ -4673,7 +4679,7 @@
       }
 
       if (tracks.length === 0) {
-        topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${primaryArtist}</p>`;
+        topListEl.innerHTML = `<p class="py-8 text-center text-zinc-500 text-xs">No se encontraron canciones de ${esc(primaryArtist)}</p>`;
       } else {
         if (!artistThumb && !data.artist?.thumbnail && tracks[0]?.thumbnail) {
           $('artistHeroImg').src = thumbAt(tracks[0].thumbnail, 720);

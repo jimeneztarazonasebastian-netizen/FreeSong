@@ -9,7 +9,8 @@
     "scrollEnabled": true
   },
   "server": {
+    "url": "https://freesong-pied.vercel.app",
     "androidScheme": "https",
-    "iosScheme": "https"
+    "iosScheme": "capacitor"
   }
 }

@@ -25,6 +25,12 @@ Este repositorio está preconfigurado con `vercel.json` para despliegue automát
 
 ## 🛠️ Desarrollo local
 
+La app nativa de Capacitor abre `https://freesong-pied.vercel.app`, para que las rutas
+`/api/*` usen el servidor de producción. Requiere conexión para la carga inicial.
+Si cambia el dominio, actualiza `server.url` en `capacitor.config.json` y vuelve a
+ejecutar `npx cap sync ios` antes de compilar el IPA. La PWA se instala directamente
+desde ese mismo dominio.
+
 ```bash
 npm install
 npm run build   # compila Tailwind -> www/app.css
@@ -84,6 +90,15 @@ La lógica vive en `www/diag.js`, separada de `www/app.js` para mantenerla y pro
 5. **Clientes nativos** `IOS` / `ANDROID` / `ANDROID_VR` y, si el vídeo original no está disponible, otra publicación de la misma canción.
 
 El proxy sirve fragmentos de 512 KB con soporte de `Range`, así Safari puede saltar y precargar. Las descargas offline piden esos mismos fragmentos uno por uno y los unen en el dispositivo: no chocan con el límite de tamaño de respuesta de Vercel y, si falla un tramo, se reintenta solo ese fragmento. Las resoluciones simultáneas del mismo tema se comparten.
+
+Las descargas verifican la posición y el tamaño de cada rango, incluido un último
+fragmento pequeño, y conservan el tipo real de audio (AAC, MP4 o WebM).
+Como referencia de selección de formatos se revisó
+[SimpMusic](https://github.com/maxrave-dev/SimpMusic) y su módulo
+[`core`](https://github.com/maxrave-dev/core/tree/8413a257cbe45d102a9f101f2760e35b549e4d9e).
+FreeSong descarta formatos de vídeo sin audio y evita vídeo en descargas de audio.
+Los extractores nativos de SimpMusic no se ejecutan en el navegador; la disponibilidad
+de cada canción sigue dependiendo de YouTube y del relay configurado.
 
 Las instancias del relay se pueden cambiar sin tocar el código con la variable `INVIDIOUS_INSTANCES` (lista separada por comas). Si tienes tu propia instancia de Invidious con `local: true`, ponla ahí.
 

@@ -77,8 +77,13 @@ const isMediaType = (ct) => {
 // 1. Prioriza itag 18 (MP4 con audio AAC estéreo a 44.1kHz).
 //    Es el formato progresivo móvil de YouTube que NO se corta a 1MB con error 403.
 // 2. Fallback a AAC adaptativo (itags 140 / 139) y WebM Opus (itags 251 / 250).
-function pickFormat(formats, wantedItag, audioOnly = false) {
-  const audios = (formats || []).filter((f) => f.url && ((f.mimeType || '').startsWith('audio/') || (f.mimeType || '').includes('video/mp4')));
+export function pickFormat(formats, wantedItag, audioOnly = false) {
+  const audios = (formats || []).filter((f) => f.url && (
+    (f.mimeType || '').startsWith('audio/') || (!audioOnly && (
+      (f.mimeType || '').includes('video/mp4') &&
+      (String(f.itag) === '18' || f.audioQuality || Number(f.audioChannels) > 0)
+    ))
+  ));
   if (!audios.length) return null;
 
   const byItag = (n) => audios.find((f) => String(f.itag) === String(n));
@@ -763,7 +768,9 @@ export default async function handler(req, res) {
   }
 
   const rawType = (upstream.headers.get('content-type') || '').toLowerCase();
-  const contentType = rawType.includes('webm') ? 'audio/webm' : 'audio/mp4';
+  const contentType = /^(audio\/|video\/mp4)/.test(rawType)
+    ? rawType.split(';')[0].trim()
+    : 'audio/mp4';
 
   const headers = {
     'Access-Control-Allow-Origin': '*',

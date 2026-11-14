@@ -38,7 +38,8 @@ function makeWav(seconds = 4, rate = 8000) {
   return buf;
 }
 
-const WAV = makeWav();
+// 512 KiB + 44 bytes: el último rango es válido aunque mida menos de 1.000 bytes.
+const WAV = makeWav(32.768);
 const TRACKS = [
   {
     id: 'test-relay',
@@ -150,14 +151,16 @@ async function downloadCurrent(page, id) {
     id,
     { timeout: 25000 }
   );
-  const size = await page.evaluate(async (trackId) => {
+  const stored = await page.evaluate(async (trackId) => {
     const cache = await caches.open('freesong-offline-audio-v1');
     const res = await cache.match('/offline-audio/' + trackId);
-    if (!res) return 0;
+    if (!res) return null;
     const blob = await res.blob();
-    return blob.size;
+    return { bytes: Array.from(new Uint8Array(await blob.arrayBuffer())), type: blob.type };
   }, id);
-  assert.ok(size >= 1000, `La copia offline de ${id} quedó vacía (${size} bytes)`);
+  assert.ok(stored, `No se guardó ${id}`);
+  assert.equal(stored.type, 'audio/wav', 'Debe conservar el formato real del audio');
+  assert.deepEqual(Buffer.from(stored.bytes), WAV, 'La descarga debe conservar todos los bytes, incluido el último rango');
 }
 
 async function run() {
@@ -266,6 +269,11 @@ async function run() {
     await downloadCurrent(page, 'test-proxy');
     const after = audioRequests.filter((a) => a === '1').length;
     assert.ok(after > before, 'La descarga por proxy debe pedir /api/stream?audio=1');
+
+    // Un nombre externo debe mostrarse literalmente, sin crear elementos HTML.
+    await page.evaluate(() => window.openArtistPage('<img src=x onerror=window.artistInjected=true>'));
+    assert.equal(await page.locator('#artistTopTracksList img').count(), 0);
+    assert.equal(await page.evaluate(() => window.artistInjected === true), false);
 
     assert.deepEqual(pageErrors, [], `Errores de página: ${pageErrors.join(' | ')}`);
     console.log('DESCARGAS OK');
