@@ -119,3 +119,23 @@ La cookie caduca si cierras sesión o Google la invalida; en ese caso repite los
 ## Auditoría y verificación
 
 Consulta [AUDITORIA.md](AUDITORIA.md) para los fallos corregidos, la cobertura de pruebas y las comprobaciones pendientes en iPhone real. `npm run test:pwa` comprueba el primer arranque offline, la conservación de cachés y el uso con almacenamiento bloqueado. GitHub Actions ejecuta la compilación y las pruebas web en cada cambio.
+
+## Arranque rápido (3.9.28)
+
+La PWA abre el shell de la versión instalada desde su caché y comprueba nuevas
+versiones en segundo plano. La primera visita necesita red para instalar esa
+copia. Las recomendaciones anteriores aparecen inmediatamente y se actualizan
+sin vaciar la pantalla. La biblioteca se renderiza al abrir su pestaña.
+
+Solo se preparan en memoria la canción descargada actual y la siguiente; los
+otros archivos siguen en Cache API. El worker sirve los rangos de una canción
+que se elija antes de estar preparada. Las pruebas cubren reproducción offline,
+avance con visibilidad oculta, rangos parciales y apertura con red lenta.
+
+`www/app.js` conserva el código fuente. `npm run js` genera `www/app.min.js`, que
+es el archivo cargado por la página. `npm run build`, `npm test` y `npm start`
+preparan esa copia automáticamente; después de editar el motor, ejecuta
+`npm run js` antes de las pruebas individuales de navegador.
+
+La comprobación de apertura se hace con Chrome automatizado: no es una medición
+de rendimiento ni una prueba de bloqueo físico en un iPhone.

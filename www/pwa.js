@@ -40,9 +40,10 @@
 
     if (!('serviceWorker' in navigator)) return;
 
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
       registration = reg;
       if (reg.waiting) show();
+      reg.active?.postMessage({ type: 'GET_VERSION' });
     }).catch(() => {});
 
     // El service worker avisa de su versión al activarse. Solo mostramos el

@@ -117,3 +117,24 @@ prometerse disponibilidad universal del proveedor.
 La disponibilidad del catálogo y la continuidad en un iPhone físico permanecen
 condicionadas a las comprobaciones anteriores. Una auditoría y una batería de
 pruebas no permiten demostrar ausencia absoluta de errores.
+
+## Actualización de rendimiento — 15 de noviembre de 2026, v3.9.28
+
+- Shell de la versión instalada servido desde caché; las actualizaciones se
+  comprueban en segundo plano y la recarga sigue siendo una decisión del usuario.
+- Inicio persistido con recomendaciones previas mientras llega la actualización.
+- Preparación de audio limitada a actual/siguiente; la lectura de toda la
+  biblioteca al arrancar, descrita en el riesgo 4 de la auditoría, se eliminó.
+- Audio local con Range, HEAD y respuesta 416 servido por el service worker.
+- YouTube solo se carga si se requiere su respaldo en escritorio, nunca al abrir
+  la PWA en iPhone. La precarga de red se limita a dos candidatos.
+- Biblioteca renderizada al abrir la pestaña; archivo principal minificado.
+- Prueba añadida: 30 descargas, solo dos lecturas iniciales, reproducción de una
+  tercera no preparada y paso a la siguiente con la página oculta y sin red.
+- Prueba añadida: shell abierto en menos de cuatro segundos con ocho segundos de
+  latencia de red simulada. Los tiempos medidos son de Chrome en el equipo de
+  prueba, no del iPhone del usuario.
+
+La continuidad real de iOS y la disponibilidad de proveedores siguen teniendo
+los límites descritos en esta auditoría. Estas mejoras no convierten la PWA en
+un reproductor nativo ni eliminan la firma necesaria para instalar un IPA.

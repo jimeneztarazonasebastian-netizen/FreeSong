@@ -12,11 +12,21 @@ try {
     try { if ((await fetch(base)).ok) break; } catch {}
     await delay(100);
   }
-  browser = await chromium.launch({ channel: 'chrome', headless: true });
-  const context = await browser.newContext();
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
+  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' });
+  await context.addInitScript(() => {
+    const match = Cache.prototype.match;
+    window.offlineReads = 0;
+    Cache.prototype.match = function (request, ...args) {
+      if (String(request?.url || request).includes('/offline-audio/')) window.offlineReads++;
+      return match.call(this, request, ...args);
+    };
+  });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  const youtubeRequests = [];
+  page.on('request', (req) => { if (req.url().includes('youtube.com/iframe_api')) youtubeRequests.push(req.url()); });
   // Recurso del mismo origen sin JS: instala el worker sin arrancar todavía
   // la aplicación; así el test depende SOLO de la precarga de instalación.
   await page.goto(base + '/manifest.webmanifest');
@@ -32,12 +42,65 @@ try {
   assert.ok(keys.includes('another-app-cache'), 'No debe borrar cachés ajenas');
   assert.ok(keys.includes('freesong-offline-audio-v1'), 'Debe conservar audio offline');
   assert.ok(!keys.includes('freesong-v0.0.1'), 'Debe borrar solo shells antiguos');
+
+  // Biblioteca grande: abrir no debe leer todos sus archivos de audio.
+  await page.evaluate(async () => {
+    const tracks = Array.from({ length: 30 }, (_, i) => ({ id: `local-${i + 1}`, title: `Local ${i + 1}`, artist: 'Prueba', duration: 8, durationSeconds: 8, thumbnail: '' }));
+    localStorage.setItem('fs_downloads', JSON.stringify(tracks));
+    localStorage.setItem('fs_session_v2', JSON.stringify({ queue: tracks.slice(0, 3), currentIndex: 0, repeat: 'all', autoplay: false, savedAt: Date.now() }));
+    localStorage.setItem('fs_home_v1', JSON.stringify({ shelves: [{ title: 'Inicio guardado', items: tracks.slice(0, 3) }], savedAt: Date.now() }));
+    const bytes = new ArrayBuffer(44 + 8 * 8000 * 2);
+    const v = new DataView(bytes);
+    const str = (offset, text) => [...text].forEach((c, i) => v.setUint8(offset + i, c.charCodeAt(0)));
+    str(0, 'RIFF'); v.setUint32(4, bytes.byteLength - 8, true); str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, bytes.byteLength - 44, true);
+    const cache = await caches.open('freesong-offline-audio-v1');
+    for (const t of tracks) await cache.put('/offline-audio/' + t.id, new Response(bytes.slice(0), { headers: { 'Content-Type': 'audio/wav' } }));
+  });
   await context.setOffline(true);
+  const openedAt = Date.now();
   await page.goto(base + '/?offline=first-boot', { waitUntil: 'load' });
   await page.waitForFunction(() => !!window.FreeSongStorage && !!window.FreeSongUtil && !!window.FreeSongDiag);
+  await page.waitForFunction(() => window.FreeSongDiag?.report().playback?.offline.cachedBlobs === 2);
+  assert.equal(await page.evaluate(() => window.offlineReads), 2, 'Solo se preparan actual y siguiente, no las 30 descargas');
+  assert.equal(await page.locator('[data-trend-idx]').count(), 3, 'El inicio guardado aparece sin esperar al servidor');
+  console.log(`  apertura local sin red: ${Date.now() - openedAt} ms (Chrome de prueba)`);
+  assert.equal(youtubeRequests.length, 0, 'Abrir en iPhone no debe descargar el reproductor YouTube');
+  await page.locator('[data-trend-idx="2"]').click();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some((a) => a.dataset.trackId === 'local-3' && !a.paused && a.currentTime > 0.2));
+  assert.ok(await page.evaluate(() => Array.from(document.querySelectorAll('audio')).some((a) => a.src.includes('/offline-audio/local-3'))), 'Una descarga aún no preparada arranca desde el worker');
+  const deckId = await page.evaluate(() => {
+    const a = Array.from(document.querySelectorAll('audio')).find((a) => a.dataset.trackId === 'local-3');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    a.currentTime = a.duration - 0.2;
+    return a.id;
+  });
+  await page.waitForFunction((id) => { const a = document.getElementById(id); return a.dataset.trackId === 'local-1' && !a.paused && a.currentTime > 0.2; }, deckId);
+  const ranges = await page.evaluate(async () => {
+    const r = await fetch('/offline-audio/local-2', { headers: { Range: 'bytes=0-3' } });
+    const suffix = await fetch('/offline-audio/local-2', { headers: { Range: 'bytes=-4' } });
+    const bad = await fetch('/offline-audio/local-2', { headers: { Range: 'bytes=999999-' } });
+    const head = await fetch('/offline-audio/local-2', { method: 'HEAD' });
+    return { status: r.status, text: await r.text(), length: suffix.headers.get('content-length'), bad: bad.status, head: head.headers.get('content-length'), headBytes: (await head.arrayBuffer()).byteLength };
+  });
+  assert.deepEqual(ranges, { status: 206, text: 'RIFF', length: '4', bad: 416, head: '128044', headBytes: 0 });
   await page.locator('[data-nav="library"]').first().click();
   assert.equal(await page.locator('#viewLibrary').isVisible(), true);
   assert.deepEqual(errors, [], 'El shell debe arrancar offline con scripts versionados');
+  // La red existe pero tarda ocho segundos: abrir desde caché no debe esperarla.
+  await context.setOffline(false);
+  const client = await context.newCDPSession(page);
+  await client.send('Network.enable');
+  await client.send('Network.emulateNetworkConditions', { offline: false, latency: 8000, downloadThroughput: 1024 * 1024, uploadThroughput: 1024 * 1024 });
+  const slowOpenedAt = Date.now();
+  await page.goto(base + '/?slow-network=1', { waitUntil: 'domcontentloaded', timeout: 4000 });
+  await page.waitForFunction(() => !!window.FreeSongDiag && !!document.querySelector('[data-trend-idx]'), null, { timeout: 3000 });
+  assert.ok(Date.now() - slowOpenedAt < 4000, 'La interfaz local debe abrir antes de que responda la red lenta');
+  console.log(`  apertura con 8 s de latencia de red: ${Date.now() - slowOpenedAt} ms`);
+  await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   await context.close();
 
   const blocked = await browser.newContext({ serviceWorkers: 'block' });

@@ -21,7 +21,7 @@ const FILES = {
 
 const PATTERNS = {
   app: /const APP_VERSION = '(\d+\.\d+\.\d+)';/,
-  index: /app\.js\?v=(\d+\.\d+\.\d+)/,
+  index: /app(?:\.min)?\.js\?v=(\d+\.\d+\.\d+)/,
   sw: /const VERSION = 'freesong-v(\d+\.\d+\.\d+)';/,
   health: /version: '(\d+\.\d+\.\d+)',/
 };

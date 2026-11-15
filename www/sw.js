@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.27: Network-First para App Shell (actualización inmediata)
+// Service worker de FreeSong v3.9.28: App Shell local con actualizaciones de fondo
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.27';
+const VERSION = 'freesong-v3.9.28';
 const SHELL = [
   './',
   'index.html',
@@ -10,7 +10,7 @@ const SHELL = [
   'lyrics.js',
   'diag.js',
   'pwa.js',
-  'app.js',
+  'app.min.js',
   'capacitor.js',
   'manifest.webmanifest',
   'fonts/inter-latin.woff2',
@@ -45,15 +45,55 @@ self.addEventListener('activate', (event) => {
 // Permite que la app aplique una versión nueva en espera sin cerrar la pestaña.
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data?.type === 'GET_VERSION') event.source?.postMessage({ type: 'FS_SW_VERSION', version: VERSION });
 });
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (!['GET', 'HEAD'].includes(req.method) || url.origin !== self.location.origin) return;
 
-  // No interceptar llamadas de API ni audio offline
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/offline-audio/')) return;
+  if (url.pathname.startsWith('/api/')) return;
+
+  // El <audio> puede arrancar dentro del gesto sin esperar a leer toda la
+  // biblioteca en memoria. Safari solicita rangos del archivo local elegido.
+  if (url.pathname.startsWith('/offline-audio/')) {
+    event.respondWith((async () => {
+      const cache = await caches.open('freesong-offline-audio-v1');
+      const stored = await cache.match(url.pathname);
+      if (!stored) return new Response('Audio no disponible en este dispositivo', { status: 404 });
+      const blob = await stored.blob();
+      const headers = new Headers({
+        'Content-Type': stored.headers.get('content-type') || blob.type || 'audio/mp4',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store'
+      });
+      let start = 0;
+      let end = blob.size - 1;
+      const range = req.headers.get('range');
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+        if (!match || (!match[1] && !match[2])) {
+          headers.set('Content-Range', `bytes */${blob.size}`);
+          return new Response(null, { status: 416, headers });
+        }
+        if (!match[1]) start = Math.max(0, blob.size - Number(match[2]));
+        else {
+          start = Number(match[1]);
+          if (match[2]) end = Math.min(end, Number(match[2]));
+        }
+        if (start > end || start >= blob.size) {
+          headers.set('Content-Range', `bytes */${blob.size}`);
+          return new Response(null, { status: 416, headers });
+        }
+        headers.set('Content-Range', `bytes ${start}-${end}/${blob.size}`);
+      }
+      headers.set('Content-Length', String(end - start + 1));
+      return new Response(req.method === 'HEAD' ? null : blob.slice(start, end + 1), { status: range ? 206 : 200, headers });
+    })());
+    return;
+  }
+  if (req.method !== 'GET') return;
 
   // El HTML pide app.js?v=...; install precarga app.js sin query. Ambas
   // peticiones deben encontrar la misma copia al arrancar sin conexión.
@@ -70,26 +110,8 @@ self.addEventListener('fetch', (event) => {
     return res;
   };
 
-  // ESTRATEGIA NETWORK-FIRST para '/', 'index.html', 'app.js', 'app.css' y navegación
-  const isCoreAsset = req.mode === 'navigate' ||
-    url.pathname === '/' ||
-    url.pathname.endsWith('index.html') ||
-    url.pathname.endsWith('app.js') ||
-    url.pathname.endsWith('app.css');
-
-  if (isCoreAsset) {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res.status >= 500) return cachedShell().then((cached) => cached || res);
-          return remember(res);
-        })
-        .catch(async () => (await cachedShell()) || Response.error())
-    );
-    return;
-  }
-
-  // Otros activos estáticos (iconos, fuentes): Cache-First con actualización de fondo
+  // El shell de ESTA versión ya se descargó completo durante install.
+  // La actualización es otro worker con otra caché; abrir nunca espera la red.
   event.respondWith(
     cachedShell().then((cached) => {
       if (cached) return cached;

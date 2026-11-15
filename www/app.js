@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.27 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.28 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -71,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.27';
+  const APP_VERSION = '3.9.28';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -811,7 +811,17 @@
 
   function initYouTubeEngine() {
     if (isIOSDevice) return;
-    if (ytPlayer || !window.YT || !window.YT.Player) return;
+    if (!window.YT || !window.YT.Player) {
+      if (!document.getElementById('youtube-api')) {
+        const script = document.createElement('script');
+        script.id = 'youtube-api';
+        script.src = 'https://www.youtube.com/iframe_api';
+        script.async = true;
+        document.head.appendChild(script);
+      }
+      return;
+    }
+    if (ytPlayer) return;
     try {
       ytPlayer = new YT.Player('ytDeck', {
         height: '200',
@@ -844,9 +854,7 @@
   window.onYouTubeIframeAPIReady = () => {
     initYouTubeEngine();
   };
-  if (window.YT && window.YT.Player) {
-    initYouTubeEngine();
-  }
+
 
   function onYtStateChange(event) {
     if (!isYtMode) return;
@@ -2119,6 +2127,15 @@
   function getTrackStreamUrl(track) {
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
     if (offlineUrl) return offlineUrl;
+    if (isDownloaded(track.id)) {
+      if (navigator.serviceWorker?.controller) return '/offline-audio/' + encodeURIComponent(track.id);
+      // Primera visita aún sin worker: prepara la copia elegida en paralelo.
+      prepareOfflineTrack(track.id).then((url) => {
+        const player = getActivePlayer();
+        if (!url || S.queue[S.currentIndex] !== track || userIntentionalPause || isBackground()) return;
+        if (player.dataset.trackId === track.id) switchPlayerSource(player, url, lastKnownSecondsFor(track.id));
+      });
+    }
     if (track.streamUrl) {
       const isProxyUrl = /\/api\/stream\?/.test(track.streamUrl);
       // Una URL SABR/googlevideo cacheada no se puede reproducir: descártala.
@@ -2233,8 +2250,8 @@
   function prewarmTracks(tracks) {
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
-    // 6 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
-    const candidates = tracks.slice(0, 6).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
+    // 2 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
+    const candidates = tracks.slice(0, 2).filter((t) => t && t.id && !t.streamUrl && !isDownloaded(t.id));
     const primeId = candidates[0] && candidates[0].id;
 
     // Calienta el proxy en paralelo desde el primer instante para las dos
@@ -2272,7 +2289,10 @@
     prefetchLyrics(nextTrack);
 
     // Si ya está descargada, se reproducirá desde el blob offline: no gastes red.
-    if (isDownloaded(nextTrack.id)) return;
+    if (isDownloaded(nextTrack.id)) {
+      prepareOfflineTrack(nextTrack.id);
+      return;
+    }
 
     prewarmTracks([nextTrack]);
 
@@ -2403,33 +2423,48 @@
     return S.downloads.some((d) => d.id === trackId);
   }
 
-  async function initOfflineBlobs() {
-    if (!('caches' in window) || !S.downloads || S.downloads.length === 0) return;
-    try {
-      const cache = await caches.open('freesong-offline-audio-v1');
-      const missing = new Set();
-      for (const item of S.downloads) {
-        if (!item || !item.id || S.offlineBlobUrls.has(item.id)) continue;
-        const match = await cache.match('/offline-audio/' + item.id);
-        if (match) {
-          const blob = await match.blob();
-          if (blob && blob.size > 1000) {
-            S.offlineBlobUrls.set(item.id, URL.createObjectURL(blob));
-          } else {
-            missing.add(item.id);
-          }
-        } else {
-          missing.add(item.id);
-        }
-      }
-      if (missing.size) {
-        S.downloads = S.downloads.filter((t) => !missing.has(t.id));
-        Store.write('fs_downloads', S.downloads);
-        if (S.libFilter === 'downloads') renderLibrary();
-      }
-    } catch (e) {
-      console.warn('initOfflineBlobs error:', e);
+  const offlineLoads = new Map();
+  function trimOfflineBlobs(keepId = '') {
+    const next = S.queue[getNextIndex()];
+    const keep = new Set([keepId, S.currentTrack?.id, next?.id]);
+    const inUse = new Set(audioDecks.map((p) => p.src));
+    for (const [id, url] of S.offlineBlobUrls) {
+      if (keep.has(id) || inUse.has(url)) continue;
+      URL.revokeObjectURL(url);
+      S.offlineBlobUrls.delete(id);
     }
+  }
+
+  function prepareOfflineTrack(id) {
+    if (!id || !isDownloaded(id) || !('caches' in window)) return Promise.resolve(null);
+    if (S.offlineBlobUrls.has(id)) return Promise.resolve(S.offlineBlobUrls.get(id));
+    if (offlineLoads.has(id)) return offlineLoads.get(id);
+    const task = (async () => {
+      try {
+        const cache = await caches.open('freesong-offline-audio-v1');
+        const match = await cache.match('/offline-audio/' + id);
+        const blob = match ? await match.blob() : null;
+        if (!isDownloaded(id)) return null;
+        if (blob && blob.size > 1000) {
+          const url = URL.createObjectURL(blob);
+          S.offlineBlobUrls.set(id, url);
+          trimOfflineBlobs(id);
+          return url;
+        }
+        S.downloads = S.downloads.filter((t) => t.id !== id);
+        Store.write('fs_downloads', S.downloads);
+      } catch (e) {
+        console.warn('Audio offline:', e);
+      }
+      return null;
+    })().finally(() => offlineLoads.delete(id));
+    offlineLoads.set(id, task);
+    return task;
+  }
+
+  function initOfflineBlobs() {
+    const next = S.queue[getNextIndex()];
+    return Promise.all([S.currentTrack?.id, next?.id].filter(Boolean).map(prepareOfflineTrack));
   }
 
   // Descarga por fragmentos de 512 KB. Evita el límite de tamaño de respuesta de
@@ -2941,6 +2976,7 @@
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
     // aunque la pista también tenga una URL de streaming precargada.
     const streamUrl = getTrackStreamUrl(track);
+    initOfflineBlobs();
 
     if (shouldCrossfade) {
       // El audio de la siguiente entra ya, pero la tarjeta, la letra y los
@@ -6300,97 +6336,110 @@
   // --- Carga de Inicio (Home con Chips) ---
   // Si se tocan varios chips seguidos, la respuesta lenta de un chip anterior
   // no debe sobrescribir la categoría que la persona acaba de elegir.
+  const HOME_CACHE_KEY = 'fs_home_v1';
+  const compactHome = (shelves) => Array.isArray(shelves) ? shelves.slice(0, 6)
+    .filter((s) => s && Array.isArray(s.items))
+    .map((s) => ({ title: String(s.title || ''), items: validTracks(s.items).slice(0, 12) })) : [];
   let homeLoadToken = 0;
   async function loadHomeContent(category = 'todo') {
     const token = ++homeLoadToken;
     const container = $('homeShelves');
-    container.innerHTML = '<div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">Cargando música...</div>';
+    const cached = category === 'todo' ? compactHome(Store.readObject(HOME_CACHE_KEY).shelves) : [];
+    if (cached.length) renderHomeShelves(cached, category);
+    else container.innerHTML = '<div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">Cargando música...</div>';
 
     try {
       const url = category === 'todo' ? '/api/home' : `/api/home?category=${encodeURIComponent(category)}`;
+      if (cached.length) await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (token !== homeLoadToken || navigator.onLine === false) return;
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (token !== homeLoadToken) return;
 
       if (!data.shelves || data.shelves.length === 0) {
+        if (cached.length) return;
         container.innerHTML = '<p class="text-center py-10 text-zinc-500 text-sm">No se encontraron canciones</p>';
         return;
       }
 
-      // Buscar reutiliza estas recomendaciones con portadas reales. No se
-      // vuelve a pedir nada al servidor.
-      if (category === 'todo' || !homeShelvesCache.length) {
-        homeShelvesCache = data.shelves;
-      }
-      if (S.activeTab === 'search') {
-        renderSearchDiscover();
-        applyGenreArt();
-      }
-
-      if (data.shelves[0]?.items?.length > 0) {
-        prewarmTracks(data.shelves[0].items.slice(0, 4));
-      }
-
-      renderQuickAccess();
-
-      if (category === 'todo' && data.shelves[0]?.items?.length > 0) {
-        renderTrendingList(data.shelves[0].items);
-      } else {
-        $('trendingSection')?.classList.add('hidden');
-      }
-
-      const shelvesToRender = category === 'todo' ? data.shelves.slice(1) : data.shelves;
-      // Si Inicio devuelve una sola lista, las canciones después del Top 5 no
-      // aparecían en ninguna parte. Se muestran como una parrilla más.
-      if (category === 'todo') {
-        const rest = (data.shelves[0]?.items || []).slice(5);
-        if (rest.length) shelvesToRender.push({ title: 'Más para ti', items: rest });
-      }
-      if (shelvesToRender.length === 0) {
-        container.innerHTML = '';
-        return;
-      }
-
-      container.innerHTML = shelvesToRender.map((shelf, sIdx) => `
-        <div class="space-y-3">
-          <div class="flex items-center justify-between px-0.5">
-            <h2 class="text-base font-bold text-white tracking-tight">${esc(shelf.title)}</h2>
-          </div>
-          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            ${shelf.items.map((t, itemIdx) => `
-              <div class="group relative rounded-2xl bg-zinc-900/60 p-2.5 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-shelf-idx="${sIdx}" data-item-idx="${itemIdx}">
-                <div class="w-full aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
-                  <img src="${esc(thumbAt(t.thumbnail, 480))}" data-vid="${esc(t.id)}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
-                  <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                    <div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-lg">
-                      <svg class="w-5 h-5"><use href="#i-play"/></svg>
-                    </div>
-                  </div>
-                  ${t.durationText ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[9px] font-mono font-bold text-white">${esc(t.durationText)}</span>` : ''}
-                </div>
-                <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
-                <p class="text-[11px] text-zinc-400 truncate mt-0.5">${esc(t.artist)}</p>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `).join('');
-
-      $$('[data-shelf-idx]').forEach((card) => {
-        card.addEventListener('click', () => {
-          const sIdx = parseInt(card.getAttribute('data-shelf-idx'), 10);
-          const itemIdx = parseInt(card.getAttribute('data-item-idx'), 10);
-          const shelf = shelvesToRender[sIdx];
-          if (shelf && shelf.items && shelf.items.length > 0) {
-            S.queue = [...shelf.items];
-            playTrack(itemIdx, true);
-          }
-        });
-      });
+      if (category === 'todo') Store.write(HOME_CACHE_KEY, { shelves: compactHome(data.shelves), savedAt: Date.now() });
+      renderHomeShelves(data.shelves, category);
     } catch {
-      if (token !== homeLoadToken) return;
+      if (token !== homeLoadToken || cached.length) return;
       container.innerHTML = '<p class="text-center py-10 text-zinc-500 text-sm">Error al cargar recomendaciones</p>';
     }
+  }
+
+  function renderHomeShelves(shelves, category = 'todo') {
+    const container = $('homeShelves');
+    // Buscar reutiliza estas recomendaciones con portadas reales. No se
+    // vuelve a pedir nada al servidor.
+    if (category === 'todo' || !homeShelvesCache.length) {
+      homeShelvesCache = shelves;
+    }
+    if (S.activeTab === 'search') {
+      renderSearchDiscover();
+      applyGenreArt();
+    }
+
+
+    renderQuickAccess();
+
+    if (category === 'todo' && shelves[0]?.items?.length > 0) {
+      renderTrendingList(shelves[0].items);
+    } else {
+      $('trendingSection')?.classList.add('hidden');
+    }
+
+    const shelvesToRender = category === 'todo' ? shelves.slice(1) : shelves.slice();
+    // Si Inicio devuelve una sola lista, las canciones después del Top 5 no
+    // aparecían en ninguna parte. Se muestran como una parrilla más.
+    if (category === 'todo') {
+      const rest = (shelves[0]?.items || []).slice(5);
+      if (rest.length) shelvesToRender.push({ title: 'Más para ti', items: rest });
+    }
+    if (shelvesToRender.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    container.innerHTML = shelvesToRender.map((shelf, sIdx) => `
+      <div class="space-y-3">
+        <div class="flex items-center justify-between px-0.5">
+          <h2 class="text-base font-bold text-white tracking-tight">${esc(shelf.title)}</h2>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          ${shelf.items.map((t, itemIdx) => `
+            <div class="group relative rounded-2xl bg-zinc-900/60 p-2.5 border border-zinc-800/60 hover:bg-zinc-800/80 transition cursor-pointer press" data-shelf-idx="${sIdx}" data-item-idx="${itemIdx}">
+              <div class="w-full aspect-square rounded-xl overflow-hidden bg-zinc-800 mb-2 relative shadow-md">
+                <img src="${esc(thumbAt(t.thumbnail, 480))}" data-vid="${esc(t.id)}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy" />
+                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                  <div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-black shadow-lg">
+                    <svg class="w-5 h-5"><use href="#i-play"/></svg>
+                  </div>
+                </div>
+                ${t.durationText ? `<span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[9px] font-mono font-bold text-white">${esc(t.durationText)}</span>` : ''}
+              </div>
+              <p class="text-xs font-bold text-white truncate">${esc(t.title)}</p>
+              <p class="text-[11px] text-zinc-400 truncate mt-0.5">${esc(t.artist)}</p>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+
+    $$('[data-shelf-idx]').forEach((card) => {
+      card.addEventListener('click', () => {
+        const sIdx = parseInt(card.getAttribute('data-shelf-idx'), 10);
+        const itemIdx = parseInt(card.getAttribute('data-item-idx'), 10);
+        const shelf = shelvesToRender[sIdx];
+        if (shelf && shelf.items && shelf.items.length > 0) {
+          S.queue = [...shelf.items];
+          playTrack(itemIdx, true);
+        }
+      });
+    });
   }
 
   function renderQuickAccess() {
@@ -8381,16 +8430,14 @@
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
-    initYouTubeEngine();
     setupAudioSession();
     updateGreeting();
     bindEvents();
     syncRepeatButton();
     syncShuffleButton();
     setupSearch();
-    renderLibrary();
+    renderQuickAccess();
     loadHomeContent('todo');
-    initOfflineBlobs();
 
     // Estado de la copia de seguridad y recordatorio si hace tiempo no se exporta.
     renderBackupStatus();
@@ -8416,6 +8463,8 @@
       }
     }
 
+    initOfflineBlobs();
+
     // Deja resuelta la URL directa de la pista en pantalla (y la siguiente) para
     // que el primer toque en Reproducir arranque por relay sin esperar a Vercel.
     if (S.currentTrack && S.currentTrack.id) {
@@ -8424,9 +8473,9 @@
       if (nextIdx >= 0 && nextIdx !== S.currentIndex && S.queue[nextIdx]) {
         upcoming.push(S.queue[nextIdx]);
       }
-      prewarmTracks(upcoming);
-      // Deja también la letra de la pista restaurada lista antes de abrir Letras.
-      prefetchLyrics(S.currentTrack);
+      setTimeout(() => {
+        if (!S.isPlaying && !isBackground()) prewarmTracks(upcoming.slice(0, 1));
+      }, 800);
     }
 
     // Reproducción directa por URL (?track=VIDEO_ID)
