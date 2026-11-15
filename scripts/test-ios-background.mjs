@@ -110,6 +110,16 @@ async function run() {
   const relayGate = new Promise((resolve) => { releaseRelay = resolve; });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', userAgent: IOS_UA });
+    await context.addInitScript(() => {
+      window.testMediaActions = {};
+      const original = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+      navigator.mediaSession.setActionHandler = (action, handler) => {
+        // Un navegador puede no implementar una de las acciones.
+        if (action === 'previoustrack') throw new DOMException('Not supported', 'NotSupportedError');
+        window.testMediaActions[action] = handler;
+        original(action, handler);
+      };
+    });
     const page = await context.newPage();
     page.on('pageerror', (e) => pageErrors.push(String(e && e.message ? e.message : e)));
 
@@ -181,6 +191,22 @@ async function run() {
       document.dispatchEvent(new Event('visibilitychange'));
     });
 
+    // Un pause atrasado de la fuente anterior no puede cambiar a pausado
+    // los controles de una canción que sigue sonando.
+    const afterStalePause = await page.evaluate(() => {
+      const deck = Array.from(document.querySelectorAll('audio')).find((a) => a.dataset.trackId === 'bg-1');
+      deck.dispatchEvent(new Event('pause'));
+      return { paused: deck.paused, state: navigator.mediaSession.playbackState };
+    });
+    assert.equal(afterStalePause.paused, false, 'La canción de prueba sigue sonando');
+    assert.equal(afterStalePause.state, 'playing', 'Una pausa atrasada no debe cambiar los controles');
+
+    // Emula el estado desincronizado que muestra el iPhone: audio real activo,
+    // pero la pantalla de bloqueo cree que está en pausa. El siguiente avance
+    // debe repararlo sin detener/reabrir el stream ni depender de un timer.
+    await page.evaluate(() => { navigator.mediaSession.playbackState = 'paused'; });
+    await page.waitForFunction(() => navigator.mediaSession.playbackState === 'playing', null, { timeout: 2000 });
+
     const beforeError = await page.evaluate(() => {
       const deck = Array.from(document.querySelectorAll('audio')).find((a) => !a.paused || a.currentTime > 1);
       return { id: deck?.id || '', src: deck?.src || '', time: deck?.currentTime || 0, token: deck?.dataset.sourceToken || '' };
@@ -239,13 +265,32 @@ async function run() {
     assert.equal(resumed.trackId, 'bg-1', 'Debe reanudar la misma canción');
     assert.ok(resumed.time > 1.5, `Debe reanudar donde iba, no en 0:00 (reanudó en ${resumed.time.toFixed(2)} s)`);
 
+    assert.equal(await page.evaluate(() => typeof window.testMediaActions.nexttrack), 'function', 'Una acción no soportada no debe bloquear las siguientes');
+    const remoteSeek = await page.evaluate(() => {
+      window.testMediaActions.seekto({ seekTime: 3 });
+      return document.querySelector('[data-track-id="bg-1"]').currentTime;
+    });
+    assert.ok(Math.abs(remoteSeek - 3) < 0.2, 'El seek remoto debe llegar al audio');
+
     // Pausar desde la pantalla bloqueada debe ser síncrono, sin esperar timers.
     const pausedImmediately = await page.evaluate(() => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-      document.getElementById('playerPlayBtn').click();
+      window.testMediaActions.pause();
       return Array.from(document.querySelectorAll('audio')).every((a) => a.paused);
     });
     assert.equal(pausedImmediately, true, 'La pausa con la pantalla bloqueada no debe depender de un fundido con timer');
+
+    const afterLatePlaying = await page.evaluate(() => {
+      const decks = Array.from(document.querySelectorAll('#audioA, #audioB'));
+      decks.forEach((deck) => deck.dispatchEvent(new Event('playing')));
+      return { state: navigator.mediaSession.playbackState, playing: window.FreeSongDiag.report().playback.isPlaying };
+    });
+    assert.equal(afterLatePlaying.state, 'paused', 'Un playing atrasado no debe anular la pausa del usuario');
+    assert.equal(afterLatePlaying.playing, false, 'Los decks pausados no deben cambiar la interfaz a reproduciendo');
+
+    await page.evaluate(() => window.testMediaActions.play());
+    await page.waitForFunction(() => navigator.mediaSession.playbackState === 'playing');
+    await page.evaluate(() => window.testMediaActions.pause());
 
     assert.deepEqual(pageErrors, [], `Errores JS: ${pageErrors.join(' | ')}`);
     console.log('IOS BACKGROUND OK');

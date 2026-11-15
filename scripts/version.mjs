@@ -1,7 +1,7 @@
 // Sincroniza o verifica la versión de FreeSong.
 //
-// La versión aparece en cuatro sitios (app.js, index.html, sw.js y
-// api/health.js). Olvidar uno provoca avisos de actualización raros o un
+// La versión aparece en app.js, index.html, sw.js, api/health.js y el
+// proyecto iOS. Olvidar uno provoca avisos de actualización raros o un
 // service worker con caché vieja. Este script evita esa deriva.
 //
 // Uso:
@@ -16,14 +16,16 @@ const FILES = {
   app: filePath('www/app.js'),
   index: filePath('www/index.html'),
   sw: filePath('www/sw.js'),
-  health: filePath('api/health.js')
+  health: filePath('api/health.js'),
+  ios: filePath('ios/App/App.xcodeproj/project.pbxproj')
 };
 
 const PATTERNS = {
   app: /const APP_VERSION = '(\d+\.\d+\.\d+)';/,
   index: /app(?:\.min)?\.js\?v=(\d+\.\d+\.\d+)/,
   sw: /const VERSION = 'freesong-v(\d+\.\d+\.\d+)';/,
-  health: /version: '(\d+\.\d+\.\d+)',/
+  health: /version: '(\d+\.\d+\.\d+)',/,
+  ios: /MARKETING_VERSION = (\d+\.\d+\.\d+);/
 };
 
 function readVersions() {
@@ -46,6 +48,11 @@ function check() {
   if (unique.size !== 1) {
     console.error('VERSION FAIL: los archivos no comparten la misma versión');
     for (const [key, value] of Object.entries(versions)) console.error(`  ${key}: ${value}`);
+    process.exit(1);
+  }
+  const nativeVersions = [...readFileSync(FILES.ios, 'utf8').matchAll(/MARKETING_VERSION = ([\d.]+);/g)];
+  if (nativeVersions.length !== 2 || nativeVersions.some((m) => m[1] !== versions.app)) {
+    console.error('VERSION FAIL: las configuraciones Debug/Release de iOS no coinciden con la web');
     process.exit(1);
   }
   console.log(`VERSION OK: ${[...unique][0]}`);
@@ -81,6 +88,9 @@ function setVersion(next) {
 
   write(FILES.health, (text) => text
     .replace(/version: '\d+\.\d+\.\d+',/, `version: '${next}',`));
+
+  write(FILES.ios, (text) => text
+    .replace(/MARKETING_VERSION = [\d.]+;/g, `MARKETING_VERSION = ${next};`));
 
   check();
 }

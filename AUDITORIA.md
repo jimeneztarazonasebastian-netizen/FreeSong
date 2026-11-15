@@ -1,5 +1,7 @@
 # Auditoría de FreeSong — 14 de noviembre de 2026
 
+Revisión más reciente: **15 de noviembre de 2026, v3.9.29**, documentada al final.
+
 Versión revisada: 3.9.27. Prioridad: PWA instalada desde Safari con «Agregar a inicio».
 
 ## Alcance y conclusión
@@ -138,3 +140,57 @@ pruebas no permiten demostrar ausencia absoluta de errores.
 La continuidad real de iOS y la disponibilidad de proveedores siguen teniendo
 los límites descritos en esta auditoría. Estas mejoras no convierten la PWA en
 un reproductor nativo ni eliminan la firma necesaria para instalar un IPA.
+
+## Revisión del IPA y controles — 15 de noviembre de 2026, v3.9.29
+
+### Evidencia y alcance
+
+El usuario instaló el IPA 3.9.28 mediante AltStore y confirmó que abre, reproduce
+con el iPhone bloqueado y pasa de canción. Su captura muestra el botón de play
+mientras informa que el audio sigue sonando. Es evidencia de una desincronización
+visual; no demuestra que se hayan probado todas las interrupciones o canciones.
+
+Se revisaron los eventos de ambos decks, MediaSession, transición de cola,
+pausa/reanudación, selección de fuentes, rangos del proxy, descargas, caché y
+persistencia, endpoints de catálogo/importación/letras/diagnóstico, dependencias,
+assets, versiones y compilación iOS. Las pruebas cubren el flujo interfaz → API
+simulada → audio → avance/controles → persistencia. La verificación del proveedor
+real se distingue de las pruebas aisladas; no se considera fiable una fuente
+solo por tener una URL configurada.
+
+### Hallazgos corregidos
+
+| Hallazgo | Corrección y evidencia |
+| --- | --- |
+| El estado de bloqueo podía quedar en pausa aunque el audio continuara. | Se sincroniza MediaSession con paused/ended del deck activo en timeupdate, cambios de visibilidad, seek y velocidad. La prueba que fuerza el estado incorrecto fallaba antes del cambio y ahora pasa sin reiniciar la fuente. |
+| Eventos play/playing/pause encolados podían llegar después de pausar o cambiar de deck. | Se comprueba el deck y su estado real antes de modificar la sesión; la prueba verifica que un playing tardío no anula una pausa del usuario. |
+| Una portada inválida o una acción remota no soportada podía impedir registrar los controles restantes. | Se filtran URLs de portada y se registra cada acción por separado; prueba de pausa, reanudación y seek remotos con una acción no soportada. |
+| Los rangos de sufijo del proxy no se respetaban; el respaldo AAC volvía al byte cero ante un rango fuera de archivo. | Parser estricto y acotado, sufijos, HEAD, rango explícito en full=1 y 416 sin cambiar de fuente. La ruta completa se comprueba con upstream simulado. |
+| El icono nativo era el genérico de Capacitor y no participaba en la generación de iconos web. | Fuente nueva generada con IA, morado–azul, derivada para PWA/iOS en cada build. Se validan dimensiones, opacidad e igualdad del AppIcon con el original derivado de 1024 px. |
+| iOS seguía anunciando versión 1.0 aunque la web avanzara. | version.mjs verifica y actualiza también Debug/Release; el número de compilación del IPA usa el número de ejecución de Actions. |
+| README anunciaba Audius, archivos personales y ecualizador sin una implementación disponible. | Se describen únicamente las funciones existentes y se aclara que el crossfade se desactiva en iPhone para conservar el deck autorizado. |
+
+### Validación y límites
+
+- `npm run build`: iconos, fuentes, CSS y JavaScript minificado.
+- `npm test`: versiones e iconos; formatos y rangos; utilidades, almacenamiento y
+  letras; búsqueda/reproducción/cola, crossfade, respaldo YouTube, errores ocultos,
+  recuperación y controles remotos, descargas, diagnóstico y PWA offline/red lenta.
+- `npm audit --json`: cero vulnerabilidades detectadas en dependencias de esta
+  instalación al revisar. No equivale a ausencia de fallos de aplicación.
+- `git diff --check` y sintaxis JavaScript antes de publicar.
+- No se reescribió el motor de audio como AVPlayer. El IPA sigue siendo híbrido.
+  Véase [IOS.md](IOS.md) para arquitectura, renovación gratuita y migración nativa.
+- Una única instancia de relay continúa siendo un punto de dependencia externo.
+  No se añadieron instancias públicas desconocidas ni servicios de pago.
+- La corrección visual debe volver a comprobarse en la pantalla bloqueada del
+  iPhone del usuario. Las pruebas automatizadas son Chrome, no un dispositivo iOS.
+
+### Prueba después de actualizar
+
+Aplicar la actualización web 3.9.29 con la música detenida. El icono nuevo del
+escritorio requiere instalar el IPA 3.9.29 sobre la app existente. Confirmar que
+el botón de bloqueo muestra pausa mientras suena, play al pausarlo y que funcionan
+reanudar, seek y siguiente. Dejar sonar varias canciones completas bloqueado y
+repetir sin red con descargas. Si falla, conservar/exportar el diagnóstico local;
+no borrar la aplicación como primer paso.

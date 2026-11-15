@@ -42,6 +42,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \

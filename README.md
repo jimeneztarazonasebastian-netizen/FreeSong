@@ -5,11 +5,11 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 ## ✨ Características
 
 - **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`), reproduce en segundo plano al cambiar de app o bloquear el teléfono (`AudioSession` tipo `playback`) y conserva la cola, la canción y el segundo exacto al volver a abrir la app.
-- **Crossfade tipo Spotify Premium**: Doble deck de audio con fundido cruzado regulable (0 a 12 segundos) y curvas de volumen en S sin silencios entre canciones.
-- **Música y Streaming**: Búsqueda, reproducción completa de YouTube, Audius y tus propios archivos (MP3, M4A, FLAC).
+- **Crossfade en escritorio**: Doble deck con fundido regulable. En iPhone se desactiva para conservar el reproductor ya autorizado al avanzar con la pantalla bloqueada.
+- **Música y Streaming**: Búsqueda en YouTube Music, streaming y descargas para escuchar sin conexión; disponibilidad sujeta a las fuentes externas.
 - **Buscar con contenido real**: cuadrícula de géneros con portadas inclinadas al estilo Spotify, mezclas listas para reproducir e historial, sin pantallas vacías.
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real. Puedes compartir el verso que suena como historia 9:16 y cambiar de verso dentro de la vista previa.
-- **Herramientas de audio**: Ecualizador, velocidad (Slowed & Reverb / Nightcore), temporizador de apagado.
+- **Herramientas de audio**: Velocidad de reproducción, normalización de volumen y temporizador de apagado.
 - **Playlists propias**: crea, renombra y elimina playlists; abre una para ver, quitar o reproducir sus canciones (guardadas solo en tu dispositivo).
 - **Atajos de teclado (escritorio)**: `Espacio` reproducir/pausar, `←`/`→` retroceder/adelantar 5 s, `Shift+←`/`Shift+→` canción anterior/siguiente.
 - **Datos locales**: Tus favoritos y playlists se guardan en tu dispositivo. FreeSong no incorpora analíticas propias; YouTube, las instancias de audio y los proveedores de letras y portadas reciben las peticiones necesarias para prestar sus servicios.
@@ -31,18 +31,22 @@ Si cambia el dominio, actualiza `server.url` en `capacitor.config.json` y vuelve
 ejecutar `npx cap sync ios` antes de compilar el IPA. La PWA se instala directamente
 desde ese mismo dominio.
 
+El IPA es híbrido (Capacitor + audio HTML), no un motor AVPlayer. Consulta
+[IOS.md](IOS.md) para instalar actualizaciones, renovar la firma gratuita y
+entender la migración a un reproductor iOS nativo.
+
 ```bash
 npm install
-npm run build   # compila Tailwind -> www/app.css
+npm run build   # prepara iconos, fuentes, CSS y JavaScript
 npm start       # http://localhost:5173 (sirve www/ y emula las funciones de /api)
-npm run icons   # regenera los íconos PNG desde assets/icon.svg
-npm run version:check       # verifica que app, sw y health compartan versión
-npm run version:set -- 3.9.6  # actualiza la versión en los cuatro archivos
+npm run icons   # genera iconos PWA/iOS desde assets/icon-source.png
+npm run version:check       # verifica app, HTML, worker, health e iOS
+npm run version:set -- 3.9.30  # cambia la versión web y las dos configuraciones iOS
 ```
 
 ## ✅ Pruebas automáticas
 
-`npm test` ejecuta cinco capas:
+`npm test` ejecuta pruebas de iconos, versiones, rangos HTTP y las capas de navegador:
 
 - **Unitarias** (`npm run test:unit`): helpers puros de `www/util.js`, lectura segura de `www/storage.js` y parseo de letras de `www/lyrics.js` en Node, sin navegador.
 - **Humo** (`npm run test:smoke`): abre Chrome real en modo headless y comprueba buscar, reproducir, avanzar 4 canciones, pausar/reanudar y ver el diagnóstico en Ajustes. No usa internet ni toca tus datos: intercepta `/api/*` y sirve un WAV local.

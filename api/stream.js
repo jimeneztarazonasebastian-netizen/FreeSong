@@ -262,6 +262,12 @@ async function openUpstream(target, range) {
       },
       signal: controller.signal
     });
+    // Un rango fuera del archivo no es un fallo del proveedor. Buscar otra
+    // fuente o volver al byte cero rompería el seek y las descargas.
+    if (resp.status === 416 && /^bytes \*\/\d+$/.test(resp.headers.get('content-range') || '')) {
+      clearTimeout(timeout);
+      return resp;
+    }
     if ((resp.status === 200 || resp.status === 206) && isMediaType(resp.headers.get('content-type'))) {
       clearTimeout(timeout);
       return resp;
@@ -657,13 +663,29 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   return { upstream: null, errors };
 }
 
-function serveBuffer(buffer, req, res, node, startByte, endByte, full) {
+const STREAM_CHUNK_SIZE = 2 * 1024 * 1024;
+
+export function parseStreamRange(raw, full = false) {
+  if (!raw) return { start: 0, end: full ? null : STREAM_CHUNK_SIZE - 1, header: full ? 'bytes=0-' : `bytes=0-${STREAM_CHUNK_SIZE - 1}` };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(raw);
+  if (!match || (!match[1] && !match[2])) return null;
+  const first = match[1] ? Number(match[1]) : null;
+  const last = match[2] ? Number(match[2]) : null;
+  if ((first !== null && !Number.isSafeInteger(first)) || (last !== null && !Number.isSafeInteger(last))) return null;
+  if (first === null) {
+    if (last <= 0) return null;
+    const suffix = full ? last : Math.min(last, STREAM_CHUNK_SIZE);
+    return { suffix, header: `bytes=-${suffix}` };
+  }
+  if (last !== null && last < first) return null;
+  const end = full ? last : Math.min(last ?? Number.MAX_SAFE_INTEGER, first + STREAM_CHUNK_SIZE - 1);
+  return { start: first, end, header: `bytes=${first}-${end ?? ''}` };
+}
+
+export function serveBuffer(buffer, req, res, node, range, full) {
   const total = buffer.length;
-  let start = Number.isFinite(startByte) && startByte > 0 ? startByte : 0;
-  if (start >= total) start = 0;
-  let end = full ? total - 1 : Math.min(endByte, total - 1);
-  if (!Number.isFinite(end) || end < start) end = total - 1;
-  const slice = buffer.subarray(start, end + 1);
+  const start = range.suffix ? Math.max(0, total - range.suffix) : range.start;
+  const end = range.suffix || range.end === null ? total - 1 : Math.min(range.end, total - 1);
 
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -671,7 +693,7 @@ function serveBuffer(buffer, req, res, node, startByte, endByte, full) {
     'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
     'Content-Type': 'audio/aac',
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+    'Cache-Control': full ? 'private, no-store' : 'public, max-age=3600, s-maxage=3600',
     Vary: 'Range'
   };
 
@@ -685,15 +707,29 @@ function serveBuffer(buffer, req, res, node, startByte, endByte, full) {
     return new Response(null, { status: 200, headers });
   }
 
+  if (start >= total || start > end) {
+    headers['Content-Range'] = `bytes */${total}`;
+    headers['Content-Length'] = '0';
+    if (node) {
+      res.statusCode = 416;
+      Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+      return res.end();
+    }
+    return new Response(null, { status: 416, headers });
+  }
+
+  const slice = buffer.subarray(start, end + 1);
+  const status = full && !req.headers?.range ? 200 : 206;
+
   headers['Content-Length'] = String(slice.length);
-  headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+  if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
 
   if (node) {
-    res.statusCode = 206;
+    res.statusCode = status;
     Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
     return res.end(slice);
   }
-  return new Response(slice, { status: 206, headers });
+  return new Response(slice, { status, headers });
 }
 
 export default async function handler(req, res) {
@@ -735,26 +771,16 @@ export default async function handler(req, res) {
     return json(400, { error: 'Falta el id de la canción o es inválido' });
   }
 
-  // Limitar el tamaño de fragmento a 512 KB (aprox. 32 segs de audio).
-  // Esto garantiza que cada petición en Vercel responda en <150ms y termine limpiamente
-  // evitando el timeout de 10s de Vercel y evitando el bloqueo de Google en rangos abiertos.
-  // Con full=1 (descargas) se pide la pista completa de una sola vez.
-  const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB (aprox 2.2 min de audio)
-  const rawRange = (req.headers && req.headers.range) || 'bytes=0-';
-  const rangeMatch = rawRange.match(/bytes=(\d+)-(\d+)?/);
-  const startByte = rangeMatch ? parseInt(rangeMatch[1], 10) : 0;
-  let endByte = rangeMatch && rangeMatch[2] ? parseInt(rangeMatch[2], 10) : (startByte + CHUNK_SIZE - 1);
-  if (!full && endByte - startByte + 1 > CHUNK_SIZE) {
-    endByte = startByte + CHUNK_SIZE - 1;
-  }
-  const boundedRange = req.method === 'HEAD'
-    ? 'bytes=0-1'
-    : (full ? ((req.headers && req.headers.range) || 'bytes=0-') : `bytes=${startByte}-${endByte}`);
+  // Limita los fragmentos a 2 MB y conserva los rangos de sufijo de Safari.
+  // Un rango inválido nunca debe convertirse silenciosamente en el byte cero.
+  const range = parseStreamRange(req.method === 'HEAD' ? null : req.headers?.range, full);
+  if (!range) return json(416, { error: 'Rango de audio inválido' });
+  const boundedRange = req.method === 'HEAD' ? 'bytes=0-1' : range.header;
 
   const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm, audioOnly);
 
   if (buffer) {
-    return serveBuffer(buffer, req, res, node, startByte, endByte, full);
+    return serveBuffer(buffer, req, res, node, range, full);
   }
 
   if (!upstream) {
@@ -765,6 +791,17 @@ export default async function handler(req, res) {
       details: errors,
       debug: { visitorData: vd ? vd.length : 0, cookies: ck ? ck.length : 0, cookieConfigured: !!process.env.YOUTUBE_COOKIE }
     });
+  }
+
+  if (upstream.status === 416) {
+    const headers = { 'Content-Range': upstream.headers.get('content-range'), 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Range' };
+    try { await upstream.body?.cancel(); } catch {}
+    if (node) {
+      res.statusCode = 416;
+      Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+      return res.end();
+    }
+    return new Response(null, { status: 416, headers });
   }
 
   const rawType = (upstream.headers.get('content-type') || '').toLowerCase();

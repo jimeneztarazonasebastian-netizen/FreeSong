@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.28 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.29 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -71,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.28';
+  const APP_VERSION = '3.9.29';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1364,6 +1364,7 @@
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
   document.addEventListener('visibilitychange', () => {
     Diag.log('visibility', { state: document.visibilityState });
+    syncMediaSessionPlayback();
     if (document.visibilityState === 'hidden') {
       if (isCrossfading && pendingTrackCommit) {
         // Al ocultarse la app, el fundido se cierra y la sesión guarda la
@@ -1438,7 +1439,7 @@
     });
 
     deck.addEventListener('play', () => {
-      if (idx === activeDeckIdx) {
+      if (idx === activeDeckIdx && !deck.paused && !userIntentionalPause) {
         S.isPlaying = true;
         userIntentionalPause = false;
         updatePlayPauseIcons(true, false);
@@ -1447,6 +1448,9 @@
     });
 
     deck.addEventListener('playing', () => {
+      // Los eventos se encolan: pueden llegar después de cambiar de fuente,
+      // cambiar de deck o de que el usuario haya pulsado pausa.
+      if (idx !== activeDeckIdx || deck.paused || deck.ended || userIntentionalPause) return;
       isTransitioningTrack = false;
       if (trackTransitionTimeout) {
         clearTimeout(trackTransitionTimeout);
@@ -1478,7 +1482,7 @@
       if (idx === activeDeckIdx) pauseAudioKeepAlive();
       S.isPlaying = true;
       updatePlayPauseIcons(true, false);
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      syncMediaSessionPlayback();
 
       // Con la canción ya sonando, deja resuelta la siguiente (relay directo)
       // sin competir con el arranque de la actual.
@@ -1490,7 +1494,7 @@
 
     deck.addEventListener('pause', () => {
       // Ignorar el evento 'pause' interno que el navegador emite automáticamente al cambiar deck.src
-      if (isTransitioningTrack) return;
+      if (isTransitioningTrack || !deck.paused) return;
 
       if (idx === activeDeckIdx && !isCrossfading) {
         // iOS puede emitir `pause` al llegar al final sin `ended` (o en
@@ -1531,6 +1535,7 @@
 
     deck.addEventListener('timeupdate', () => {
       if (idx !== activeDeckIdx || isTransitioningTrack) return;
+      syncMediaSessionPlayback();
       const cur = deck.currentTime || 0;
 
       // Si ya avanzó más de 0.5s, desactivar watchdog
@@ -1621,6 +1626,12 @@
     deck.addEventListener('stalled', () => {
       // Buffering de audio
     });
+
+    ['ratechange', 'seeked'].forEach((event) => {
+      deck.addEventListener(event, () => {
+        if (idx === activeDeckIdx) syncMediaSessionPlayback();
+      });
+    });
   });
 
   function handleTrackFinished(finishedTrack) {
@@ -1708,25 +1719,44 @@
   }
 
   // --- Controles de Pantalla de Bloqueo y Dynamic Island (MediaSession) ---
+  function syncMediaSessionPlayback() {
+    if (!('mediaSession' in navigator) || isYtMode) return;
+    const player = getActivePlayer();
+    if (!player) return;
+    // Publica el estado del audio real. La intención de reproducir (S.isPlaying)
+    // puede seguir activa mientras se carga/recupera un stream pausado.
+    try {
+      navigator.mediaSession.playbackState = !player.paused && !player.ended && !userIntentionalPause
+        ? 'playing' : 'paused';
+    } catch {}
+  }
+
   function updateMediaSession(track) {
     if (!('mediaSession' in navigator) || !track) return;
+    const artwork = [512, 256, 128].flatMap((size) => {
+      const src = thumbAt(track.thumbnail, size);
+      if (!src) return [];
+      try {
+        const url = new URL(src, location.href);
+        if (!['https:', 'http:'].includes(url.protocol) && !/^data:image\//i.test(src)) return [];
+        return [{ src: url.href, sizes: `${size}x${size}` }];
+      } catch { return []; }
+    });
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
         artist: track.artist || 'FreeSong',
         album: 'FreeSong Premium',
-        artwork: [
-          { src: thumbAt(track.thumbnail, 512), sizes: '512x512', type: 'image/jpeg' },
-          { src: thumbAt(track.thumbnail, 256), sizes: '256x256', type: 'image/jpeg' },
-          { src: thumbAt(track.thumbnail, 128), sizes: '128x128', type: 'image/jpeg' }
-        ]
+        artwork
       });
+    } catch {}
 
-      navigator.mediaSession.setActionHandler('play', () => resumePlayback());
-      navigator.mediaSession.setActionHandler('pause', () => pausePlayback());
-      navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
-      navigator.mediaSession.setActionHandler('nexttrack', () => playNext(true, true));
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
+    const handlers = {
+      play: () => resumePlayback(),
+      pause: () => pausePlayback(),
+      previoustrack: () => playPrev(),
+      nexttrack: () => playNext(true, true),
+      seekto: (details) => {
         if (details.seekTime != null) {
           const p = getActivePlayer();
           if (p) {
@@ -1734,8 +1764,13 @@
             rememberPosition(track.id, details.seekTime);
           }
         }
-      });
-    } catch {}
+      }
+    };
+    // Una portada inválida o una acción no disponible en un navegador no
+    // deben impedir registrar los demás controles de la pantalla bloqueada.
+    Object.entries(handlers).forEach(([action, handler]) => {
+      try { navigator.mediaSession.setActionHandler(action, handler); } catch {}
+    });
   }
 
   // --- Siguiente Canción y Precarga ---

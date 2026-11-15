@@ -1,4 +1,4 @@
-// Genera los íconos PNG (PWA, iPhone y fuente para Android) a partir de assets/icon.svg
+// Genera los íconos PNG (PWA e iPhone) a partir del original generado con IA.
 // y copia el runtime de Capacitor a www/ para que los plugins nativos funcionen sin bundler.
 import { readFile, mkdir, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +6,7 @@ import sharp from 'sharp';
 
 const root = (p) => fileURLToPath(new URL(`../${p}`, import.meta.url));
 
-const svg = await readFile(root('assets/icon.svg'));
+const source = await readFile(root('assets/icon-source.png'));
 await mkdir(root('www/icons'), { recursive: true });
 
 const outputs = [
@@ -14,11 +14,13 @@ const outputs = [
   ['www/icons/icon-512.png', 512],
   ['www/icons/apple-touch-icon.png', 180],
   ['www/icons/favicon-32.png', 32],
-  ['assets/icon-1024.png', 1024]
+  ['assets/icon-1024.png', 1024],
+  ['ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png', 1024]
 ];
 
 for (const [path, size] of outputs) {
-  await sharp(svg, { density: 300 }).resize(size, size).png().toFile(root(path));
+  await sharp(source).resize(size, size).flatten({ background: '#030317' }).removeAlpha()
+    .png({ palette: true, quality: 95, effort: 10 }).toFile(root(path));
   console.log(`✔ ${path}`);
 }
 
