@@ -11,6 +11,7 @@ android/app/src/main/assets/public/
 android/
 original/
 ios/App/build/
+ios/.build/
 *.ipa
 Payload/
 .vercel

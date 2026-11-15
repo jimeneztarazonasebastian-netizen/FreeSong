@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.29 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.30 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -71,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.29';
+  const APP_VERSION = '3.9.30';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -284,6 +284,11 @@
   }
 
   // --- Motor de Audio HTML5 Nativo (Doble Deck para Seamless Playback) ---
+  const nativeAudio = window.FreeSongNative?.available ? window.FreeSongNative : null;
+  let nativeStartToken = 0;
+  let nativeErrorShown = '';
+  let nativeQueueFingerprint = '';
+  let nativeStarting = false;
   const audioDecks = [
     $('audioA') || new Audio(),
     $('audioB') || new Audio()
@@ -344,7 +349,7 @@
   }
 
   function getActivePlayer() {
-    return audioDecks[activeDeckIdx];
+    return nativeAudio ? nativeAudio.player : audioDecks[activeDeckIdx];
   }
 
   function getInactivePlayer() {
@@ -579,10 +584,7 @@
     // Si ambas estan disponibles, usar la que sea menor (la oficial puede ser
     // un poco mas corta que el stream real, causando corte prematuro).
     // Pero si difieren mucho (>10s), la oficial suele ser mas confiable.
-    if (official > 0 && rawValid) {
-      if (Math.abs(raw - official) < 10) return Math.max(official, Math.round(raw));
-      return official;
-    }
+    if (rawValid) return raw;
     if (official > 0) return official;
     if (!rawValid) return 0;
     return Math.round(raw);
@@ -675,6 +677,7 @@
     try { document.body.appendChild(silentLoop); } catch {}
   }
   function keepAudioAlive() {
+    if (nativeAudio) return;
     if (!isIOSDevice || !S.isPlaying || userIntentionalPause) return;
     // Si el deck principal ya está sonando, la sesión de audio está activa:
     // arrancar otro elemento (aunque sea mudo) podría robarle el foco.
@@ -693,6 +696,7 @@
   // Safari 16.4+: declara la sesión como reproducción para que iOS no pause el audio
   // al cambiar de app, bloquear la pantalla o abrir el centro de control.
   function setupAudioSession() {
+    if (nativeAudio) return;
     try {
       if (navigator.audioSession) navigator.audioSession.type = 'playback';
     } catch {}
@@ -707,6 +711,7 @@
   // Si iOS pausó el audio por pasar a segundo plano (sin que el usuario pausara),
   // retómalo en cuanto vuelve a haber oportunidad.
   function ensurePlaybackAlive() {
+    if (nativeAudio) return;
     const hasPendingRecovery = !!pendingStreamRecovery || !!pendingYtStart;
     if ((!S.isPlaying && !autoPlayBlocked && !hasPendingRecovery) || userIntentionalPause) return;
     // Un arranque/recuperación pendiente no puede ejecutarse con la pantalla
@@ -1095,6 +1100,7 @@
   // Vigila el arranque de una pista. Se reprograma solo: si un intento se
   // queda colgado, avanza al siguiente en vez de dejar la cola en silencio.
   function armStreamWatchdog(track, delayMs = 6000, secondPhase = false) {
+    if (nativeAudio) return;
     if (streamWatchdogTimer) {
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
@@ -1157,6 +1163,7 @@
   // directo sobrevive al corte del proxy; si no hay relay en ~3 s, el proxy
   // con `backup` responde en 1-2 s.
   async function handleStreamFailure(track, deck) {
+    if (nativeAudio) return;
     // Con YouTube Web controlando el audio, los errores del deck HTML5 ya no
     // son relevantes (se vació a propósito).
     if (isYtMode) return;
@@ -1208,6 +1215,16 @@
         bg: isIOSDevice && isBackground(),
         src: describeAudioSource(player.currentSrc || player.src)
       });
+
+      // No volver a anunciar el mismo enlace roto como "copia alternativa".
+      const failedSource = player.currentSrc || player.src;
+      for (const [key, source] of relaySources) {
+        if (source.url === failedSource) relaySources.delete(key);
+      }
+      if (track.streamUrl === failedSource) {
+        delete track.streamUrl;
+        delete track._relayExpires;
+      }
 
       // Con la pantalla bloqueada iOS no permite abrir una fuente nueva sin
       // gesto. Cambiar `src` en ese momento deja la app en silencio y en 0:00.
@@ -1364,6 +1381,11 @@
   // --- Salvaguarda de Cambio de Visibilidad (Segundo Plano en iOS) ---
   document.addEventListener('visibilitychange', () => {
     Diag.log('visibility', { state: document.visibilityState });
+    if (nativeAudio) {
+      saveSession(true);
+      if (!isBackground()) nativeAudio.restore().catch((e) => Diag.log('native-state-error', { e }));
+      return;
+    }
     syncMediaSessionPlayback();
     if (document.visibilityState === 'hidden') {
       if (isCrossfading && pendingTrackCommit) {
@@ -1456,7 +1478,7 @@
         clearTimeout(trackTransitionTimeout);
         trackTransitionTimeout = null;
       }
-      if (streamWatchdogTimer) {
+      if (streamWatchdogTimer && deck.currentTime > 0.5) {
         clearTimeout(streamWatchdogTimer);
         streamWatchdogTimer = null;
       }
@@ -1720,6 +1742,7 @@
 
   // --- Controles de Pantalla de Bloqueo y Dynamic Island (MediaSession) ---
   function syncMediaSessionPlayback() {
+    if (nativeAudio) return;
     if (!('mediaSession' in navigator) || isYtMode) return;
     const player = getActivePlayer();
     if (!player) return;
@@ -1732,6 +1755,7 @@
   }
 
   function updateMediaSession(track) {
+    if (nativeAudio) return;
     if (!('mediaSession' in navigator) || !track) return;
     const artwork = [512, 256, 128].flatMap((size) => {
       const src = thumbAt(track.thumbnail, size);
@@ -2058,7 +2082,7 @@
     if (!track || !track.id || !track.title) return Promise.resolve(null);
     const cacheKey = `${track.id}:${S.audioQuality || ''}`;
     const existing = relaySources.get(cacheKey);
-    if (existing && existing.expires > Date.now()) return Promise.resolve(existing);
+    if (existing && existing.videoId !== track.id && existing.expires > Date.now()) return Promise.resolve(existing);
     if (relayAltPending.has(cacheKey)) return relayAltPending.get(cacheKey);
 
     const task = (async () => {
@@ -2283,6 +2307,7 @@
   }
 
   function prewarmTracks(tracks) {
+    if (nativeAudio) return;
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) return;
     // Pre-resuelve discretamente las primeras canciones vía Invidious directamente desde el navegador (sin saturar Vercel).
     // 2 pistas: la primera resolución en frío tarda ~3 s y así el toque suele encontrar la URL ya lista.
@@ -2314,6 +2339,7 @@
   }
 
   function prefetchNextTrack() {
+    if (nativeAudio) return;
     const nextIdx = getNextIndex();
     if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
     const nextTrack = S.queue[nextIdx];
@@ -2748,6 +2774,7 @@
         URL.revokeObjectURL(S.offlineBlobUrls.get(track.id));
       }
       S.offlineBlobUrls.set(track.id, URL.createObjectURL(blob));
+      if (nativeAudio) await nativeAudio.importOffline(track.id, blob).catch((e) => Diag.log('native-offline-error', { e }));
 
       const entry = {
         id: track.id,
@@ -2798,6 +2825,7 @@
 
   async function deleteDownload(trackId) {
     if (!trackId) return;
+    if (nativeAudio) await nativeAudio.removeOffline(trackId).catch((e) => Diag.log('native-offline-error', { e }));
     try {
       if ('caches' in window) {
         const cache = await caches.open('freesong-offline-audio-v1');
@@ -2943,7 +2971,110 @@
   }
 
   // --- Reproducción y Cambio de Pista Maestro ---
+  function nativeOptions() {
+    return { quality: S.audioQuality, rate: S.playbackRate, volume: S.audioNormalize ? 0.88 : 1,
+      repeat: S.repeat, shuffle: S.shuffleMode, crossfade: S.crossfade,
+      crossfadeDuration: S.crossfadeDuration, sleepEndTrack: S.sleepTimerEndTrack,
+      sleepUntil: S.sleepTimerDeadline || 0 };
+  }
+
+  function configureNativeAudio(withQueue = false) {
+    if (!nativeAudio || nativeStarting) return;
+    const options = nativeOptions();
+    if (withQueue) {
+      const fingerprint = S.queue.map((t) => t.id).join('|');
+      if (fingerprint !== nativeQueueFingerprint) {
+        nativeQueueFingerprint = fingerprint;
+        options.queue = S.queue.map((t) => ({ id: t.id, title: t.title, artist: t.artist || '', thumbnail: t.thumbnail || '', duration: Number(t.durationSeconds || t.duration) || 0 }));
+      }
+    }
+    nativeAudio.configure(options);
+  }
+
+  async function nativeOfflineBlob(id) {
+    if (!isDownloaded(id) || !('caches' in window)) return null;
+    try {
+      const cache = await caches.open('freesong-offline-audio-v1');
+      const response = await cache.match('/offline-audio/' + id);
+      return response ? response.blob() : null;
+    } catch { return null; }
+  }
+
+  async function startNativeTrack(index) {
+    const token = ++nativeStartToken;
+    nativeStarting = true;
+    const track = S.queue[index];
+    S.currentIndex = index;
+    S.currentTrack = track;
+    userIntentionalPause = false;
+    S.isPlaying = true;
+    nativeErrorShown = '';
+    pendingStartMark = Date.now();
+    pendingStartId = track.id;
+    const position = S.pendingResume?.id === track.id ? S.pendingResume.seconds : 0;
+    S.pendingResume = null;
+    lastKnownPosition = { id: track.id, seconds: position, at: Date.now() };
+    commitTrackUI(track, null, { resetProgress: true });
+    updatePlayPauseIcons(true, true);
+    const blob = await nativeOfflineBlob(track.id);
+    if (token !== nativeStartToken || userIntentionalPause) return;
+    nativeQueueFingerprint = S.queue.map((t) => t.id).join('|');
+    await nativeAudio.play(S.queue, index, { ...nativeOptions(), position }, blob);
+    if (token === nativeStartToken) nativeStarting = false;
+    const next = S.queue[getNextIndex()];
+    if (next && next.id !== track.id) nativeOfflineBlob(next.id).then(async (nextBlob) => {
+      if (nextBlob && token === nativeStartToken) {
+        await nativeAudio.importOffline(next.id, nextBlob);
+        nativeAudio.configure({ refreshNext: true });
+      }
+    }).catch((e) => Diag.log('native-offline-error', { e }));
+  }
+
+  function onNativeState(value) {
+    if (!nativeAudio || !value?.trackId) return;
+    if (nativeStarting && (value.trackId !== S.currentTrack?.id || value.index !== S.currentIndex)) return;
+    let index = Number(value.index);
+    if (S.queue[index]?.id !== value.trackId) index = S.queue.findIndex((t) => t.id === value.trackId);
+    if (index < 0) return;
+    const track = S.queue[index];
+    const changed = S.currentIndex !== index || S.currentTrack?.id !== track.id;
+    S.currentIndex = index;
+    S.currentTrack = track;
+    S.isPlaying = !value.paused && !value.error;
+    userIntentionalPause = !!value.paused;
+    if (changed) {
+      lastKnownPosition = { id: track.id, seconds: value.position || 0, at: Date.now() };
+      commitTrackUI(track, null);
+    }
+    const position = Math.max(0, Number(value.position) || 0);
+    const duration = Number(value.duration) || Number(track.durationSeconds || track.duration) || 0;
+    if (position > 0.1) rememberPosition(track.id, position);
+    if (pendingStartId === track.id && value.playing && position > 0.1) {
+      Diag.recordStart(Date.now() - pendingStartMark);
+      Diag.inc(value.source === 'offline' ? 'offline' : 'native');
+      pendingStartId = '';
+    }
+    if ($('playerCurTime')) $('playerCurTime').textContent = formatTime(position);
+    if (duration > 0) {
+      $('playerDurTime').textContent = formatTime(duration);
+      if (!isScrubbing) $('playerSeek').value = Math.min(100, position / duration * 100);
+      $('miniProgress').style.width = `${Math.min(100, position / duration * 100)}%`;
+    }
+    if (!isBackground() && S.syncedLyrics.length) syncLyricsWithTime(position);
+    updatePlayPauseIcons(S.isPlaying, !!value.buffering);
+    if (value.error && nativeErrorShown !== value.error) {
+      nativeErrorShown = value.error;
+      Diag.log('native-audio-error', { message: value.error, id: track.id, source: value.source });
+      showToast(value.error, 6000);
+    }
+    saveSession();
+  }
+
   function playTrack(index, immediate = false, fromEnded = false) {
+    if (nativeAudio) {
+      if (index >= 0 && index < S.queue.length) startNativeTrack(index);
+      return;
+    }
     plannedShuffle = null;
     isTransitioningTrack = false;
     pendingStreamRecovery = null;
@@ -3284,6 +3415,16 @@
   }
 
   function pausePlayback() {
+    if (nativeAudio) {
+      nativeStartToken++;
+      nativeStarting = false;
+      userIntentionalPause = true;
+      S.isPlaying = false;
+      nativeAudio.pause();
+      updatePlayPauseIcons(false, false);
+      saveSession(true);
+      return;
+    }
     userIntentionalPause = true;
     isTransitioningTrack = false;
     clearEndOfTrackTimer();
@@ -3328,6 +3469,13 @@
   }
 
   function resumePlayback() {
+    if (nativeAudio) {
+      userIntentionalPause = false;
+      configureNativeAudio();
+      if (!nativeAudio.state.source || nativeAudio.state.error) playTrack(Math.max(0, S.currentIndex));
+      else nativeAudio.resume();
+      return;
+    }
     userIntentionalPause = false;
     clearAutoPlayRetry();
     pendingStreamRecovery = null;
@@ -4644,6 +4792,7 @@
 
   function setPlaybackRate(rate) {
     S.playbackRate = rate;
+    configureNativeAudio();
     audioDecks.forEach((a) => {
       a.playbackRate = rate;
       a.preservesPitch = true;
@@ -5292,6 +5441,7 @@
   }
 
   function renderQueue() {
+    configureNativeAudio(true);
     const container = $('queueList');
     const nowPlayingWrap = $('queueNowPlaying');
     const countEl = $('queueTotalCount');
@@ -7449,6 +7599,7 @@
 
     if (minutes === 'end_track') {
       S.sleepTimerEndTrack = true;
+      configureNativeAudio();
       S.sleepTimerMinutes = 'end_track';
       setSleepBadge('1 can');
       closeSleepTimerModal();
@@ -7467,6 +7618,8 @@
     S.sleepTimerMinutes = minNum;
     S.sleepTimerRemainingSec = minNum * 60;
     const deadline = Date.now() + minNum * 60000;
+    S.sleepTimerDeadline = deadline;
+    configureNativeAudio();
     setSleepBadge(`${minNum}m`);
 
     S.sleepTimerInterval = setInterval(() => {
@@ -7492,6 +7645,8 @@
     S.sleepTimerMinutes = null;
     S.sleepTimerEndTrack = false;
     S.sleepTimerRemainingSec = 0;
+    S.sleepTimerDeadline = 0;
+    configureNativeAudio();
     hideSleepBadges();
   }
 
@@ -7644,6 +7799,7 @@
   // El estado inicial de S.repeat es 'all': sincroniza el botón al arrancar para que
   // no muestre "repetición desactivada" mientras la cola sí da la vuelta.
   function syncRepeatButton() {
+    configureNativeAudio();
     const btn = $('playerRepeatBtn');
     if (!btn) return;
     if (S.repeat === 'off') {
@@ -7658,6 +7814,7 @@
   }
 
   function syncShuffleButton() {
+    configureNativeAudio();
     const btn = $('playerShuffleBtn');
     const badge = $('playerShuffleBadge');
     if (!btn) return;
@@ -8137,15 +8294,28 @@
     xfRange.value = S.crossfadeDuration;
     xfLabel.textContent = `${S.crossfadeDuration} segundos`;
     xfWrap.classList.toggle('hidden', !S.crossfade);
+    const xfAvailable = !isIOS || !!nativeAudio;
+    xfToggle.disabled = !xfAvailable;
+    xfRange.disabled = !xfAvailable;
+    if (!xfAvailable) {
+      xfToggle.checked = false;
+      xfWrap.classList.add('hidden');
+    }
+    if ($('crossfadeAvailability')) $('crossfadeAvailability').textContent = nativeAudio
+      ? 'Fundido nativo entre canciones, también con el iPhone bloqueado.'
+      : isIOS ? 'Disponible en el nuevo IPA con motor nativo. Safari/PWA de iPhone conserva el cambio normal de pista.'
+        : 'Fundido entre pistas en escritorio mientras la app permanece visible.';
 
     xfToggle.addEventListener('change', () => {
       S.crossfade = xfToggle.checked;
+      configureNativeAudio();
       Store.writeRaw('fs_crossfade', S.crossfade.toString());
       xfWrap.classList.toggle('hidden', !S.crossfade);
     });
 
     xfRange.addEventListener('input', () => {
       S.crossfadeDuration = parseInt(xfRange.value, 10);
+      configureNativeAudio();
       xfLabel.textContent = `${S.crossfadeDuration} segundos`;
       Store.writeRaw('fs_crossfade_dur', S.crossfadeDuration.toString());
     });
@@ -8206,6 +8376,7 @@
     $('settingNormalizeToggle').checked = S.audioNormalize;
     $('settingNormalizeToggle').addEventListener('change', (e) => {
       S.audioNormalize = e.target.checked;
+      configureNativeAudio();
       Store.writeRaw('fs_normalize', S.audioNormalize.toString());
       const p = getActivePlayer();
       if (p) p.volume = S.audioNormalize ? 0.88 : 1.0;
@@ -8222,6 +8393,7 @@
     $('settingQualitySelect').value = S.audioQuality;
     $('settingQualitySelect').addEventListener('change', (e) => {
       S.audioQuality = e.target.value;
+      configureNativeAudio();
       Store.writeRaw('fs_quality', S.audioQuality);
       showToast(S.audioQuality === '140' ? 'Calidad Alta (AAC 128k)' : 'Ahorro de datos (AAC 48k)');
     });
@@ -8430,6 +8602,8 @@
         : null,
       queueLength: S.queue.length,
       isPlaying: !!S.isPlaying,
+      engine: nativeAudio ? 'avplayer' : 'html',
+      native: nativeAudio ? nativeAudio.state : null,
       userIntentionalPause,
       ytMode: !!isYtMode,
       ytBlocked: !!pendingYtStart,
@@ -8441,9 +8615,10 @@
       lastKnownPosition: lastKnownPosition.id
         ? { id: lastKnownPosition.id, seconds: lastKnownPosition.seconds, ageMs: Date.now() - lastKnownPosition.at }
         : null,
-      crossfading: !!isCrossfading,
+      crossfading: nativeAudio ? !!nativeAudio.state.crossfading : !!isCrossfading,
       consecutiveFailures: consecutiveStreamFailures,
-      decks: audioDecks.map(deckState),
+      decks: nativeAudio ? [{ deck: 'native', time: nativeAudio.player.currentTime, duration: nativeAudio.player.duration,
+        paused: nativeAudio.player.paused, readyState: nativeAudio.player.readyState, src: nativeAudio.player.src }] : audioDecks.map(deckState),
       settings: {
         quality: S.audioQuality,
         normalize: !!S.audioNormalize,
@@ -8465,6 +8640,7 @@
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
+    if (nativeAudio) nativeAudio.setListener(onNativeState);
     setupAudioSession();
     updateGreeting();
     bindEvents();
@@ -8499,6 +8675,14 @@
     }
 
     initOfflineBlobs();
+
+    if (nativeAudio) nativeAudio.restore().then((value) => {
+      if (!value?.trackId || nativeStartToken > 0 || !Array.isArray(value.queue)) return;
+      S.queue = validTracks(value.queue);
+      nativeQueueFingerprint = S.queue.map((t) => t.id).join('|');
+      onNativeState(value);
+      configureNativeAudio();
+    }).catch((e) => Diag.log('native-state-error', { e }));
 
     // Deja resuelta la URL directa de la pista en pantalla (y la siguiente) para
     // que el primer toque en Reproducir arranque por relay sin esperar a Vercel.

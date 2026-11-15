@@ -70,5 +70,10 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>WKAppBoundDomains</key>
+	<array>
+		<string>freesong-pied.vercel.app</string>
+		<string>localhost</string>
+	</array>
 </dict>
 </plist>

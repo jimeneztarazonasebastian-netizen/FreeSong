@@ -17,6 +17,14 @@
   ],
   "headers": [
     {
+      "source": "/:asset(app\\.min\\.js|util\\.js|storage\\.js|lyrics\\.js|diag\\.js|pwa\\.js|native-audio\\.js|app\\.css)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/fonts/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
       "source": "/sw.js",
       "headers": [
         {

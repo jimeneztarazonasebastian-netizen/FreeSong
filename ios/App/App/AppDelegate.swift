@@ -13,7 +13,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // Playback ya admite A2DP y AirPlay. allowBluetooth es una opción
             // de grabación y puede hacer fallar setCategory con esta categoría.
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
+            // El motor activa la sesión al reproducir. Abrir la app no debe
+            // interrumpir otra aplicación de música antes de pulsar play.
         } catch {
             print("Error al activar AVAudioSession: \(error.localizedDescription)")
         }

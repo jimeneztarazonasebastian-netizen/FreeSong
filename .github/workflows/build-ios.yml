@@ -35,6 +35,9 @@ jobs:
       - name: Sincronizar proyecto iOS
         run: npx cap sync ios
 
+      - name: Probar políticas de cola, duración y crossfade nativo
+        run: swift test --package-path ios
+
       - name: Compilar archivo nativo con Xcode
         run: |
           xcodebuild -project ios/App/App.xcodeproj \
