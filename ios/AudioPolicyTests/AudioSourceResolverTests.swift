@@ -15,7 +15,10 @@ private final class SourceProtocol: URLProtocol {
         Self.lock.unlock()
         let url = request.url!, path = url.path
         var status = 200, type = "application/json", body: Data
-        if path == "/api/relay-info" { body = Data(#"{"instances":["https://relay.test"]}"#.utf8) }
+        if path == "/youtubei/v1/player" && mode == "native" {
+            body = Data(#"{"playabilityStatus":{"status":"OK"},"videoDetails":{"lengthSeconds":"191"},"streamingData":{"adaptiveFormats":[{"itag":140,"url":"https://media.test/audio/device"}]}}"#.utf8)
+        }
+        else if path == "/api/relay-info" { body = Data(#"{"instances":["https://relay.test"]}"#.utf8) }
         else if path == "/api/v1/search" {
             body = Data(#"[{"videoId":"alias-2","title":"Artista - Uno [Official Audio]","author":"Sello","lengthSeconds":191},{"videoId":"remix","title":"Uno remix","author":"Artista","lengthSeconds":191}]"#.utf8)
         } else if path.hasPrefix("/api/v1/videos/") {
@@ -23,7 +26,7 @@ private final class SourceProtocol: URLProtocol {
             let seconds = mode == "mismatch" && id == "original-1" ? 381 : 191
             body = Data("{\"lengthSeconds\":\(seconds),\"adaptiveFormats\":[{\"itag\":140,\"url\":\"https://relay.test/audio/\(id)\"}]}".utf8)
         } else if path.hasPrefix("/audio/") {
-            if mode == "html" || mode == "proxy" || (mode == "retry" && url.lastPathComponent == "original-1") {
+            if mode == "html" || mode == "proxy" || (mode == "native" && url.host != "media.test") || (mode == "retry" && url.lastPathComponent == "original-1") {
                 type = "text/html"
                 status = mode == "retry" ? 403 : 200
                 body = Data("<html>not audio</html>".utf8)
@@ -66,7 +69,7 @@ final class AudioSourceResolverTests: XCTestCase {
         let count = requestCount()
         _ = try await resolver.resolve(track, quality: "140")
         XCTAssertEqual(requestCount(), count)
-        XCTAssertEqual(SourceProtocol.requests.last?.value(forHTTPHeaderField: "Range"), "bytes=0-1023")
+        XCTAssertTrue(SourceProtocol.requests.contains { $0.value(forHTTPHeaderField: "Range") == "bytes=0-1023" })
         await resolver.invalidate(track.id, quality: "140")
         _ = try await resolver.resolve(track, quality: "140")
         XCTAssertGreaterThan(requestCount(), count, "Un fallo debe permitir renovar la URL")
@@ -92,5 +95,11 @@ final class AudioSourceResolverTests: XCTestCase {
         let source = try await resolver("proxy").resolve(track, quality: "140")
         XCTAssertEqual(source.origin, "proxy")
         XCTAssertEqual(source.reportedDuration, 0, "La duración enviada por el cliente no verifica el archivo")
+    }
+    func testDeviceResolutionWorksWhenRelayAndProxyFail() async throws {
+        let source = try await resolver("native").resolve(track, quality: "140")
+        XCTAssertEqual(source.origin, "youtube")
+        XCTAssertEqual(source.url.host, "media.test")
+        XCTAssertEqual(source.videoId, track.id)
     }
 }

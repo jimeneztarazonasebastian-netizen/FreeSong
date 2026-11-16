@@ -25,7 +25,7 @@ struct AudioSource {
     let expires: Date
 
     var reportedDuration: Double {
-        guard origin == "relay" else { return 0 }
+        guard origin == "relay" || origin == "youtube" else { return 0 }
         let fields = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
         let field = fields?.first { $0.name == "dur" }?.value ?? ""
         let seconds = Double(field) ?? 0
@@ -59,16 +59,15 @@ actor AudioSourceResolver {
         if let source = cache[key], source.expires > Date() { return source }
         if !loadedRelays {
             loadedRelays = true
-            if let value = try? await json(Self.backend.appendingPathComponent("api/relay-info")),
-               let instances = value["instances"] as? [String] {
-                let allowed = instances.compactMap(URL.init(string:)).filter { $0.scheme == "https" && $0.host != nil }
-                if !allowed.isEmpty { relays = Array(allowed.prefix(3)) }
-            }
+            // El manifiesto no debe retrasar el primer audio. Actualiza las
+            // instancias para las siguientes resoluciones en segundo plano.
+            Task { await self.loadRelays() }
         }
         let source = await withTaskGroup(of: AudioSource?.self, returning: AudioSource?.self) { group in
+            group.addTask { await self.resolveOnDevice(track, quality: quality) }
             group.addTask { await self.resolveDirect(track, quality: quality) }
             group.addTask {
-                do { try await Task.sleep(nanoseconds: 1_500_000_000) }
+                do { try await Task.sleep(nanoseconds: 500_000_000) }
                 catch { return nil }
                 return await self.resolveProxy(track, quality: quality)
             }
@@ -89,12 +88,31 @@ actor AudioSourceResolver {
                       userInfo: [NSLocalizedDescriptionKey: "Las fuentes no entregaron audio reproducible. Prueba otra canción o reintenta."])
     }
 
-    private func resolveDirect(_ track: AudioTrack, quality: String) async -> AudioSource? {
-        for base in relays {
-            if Task.isCancelled { return nil }
-            if let source = await candidate(track.id, base: base, track: track, quality: quality) {
-                return source
+    private func loadRelays() async {
+            if let value = try? await json(Self.backend.appendingPathComponent("api/relay-info")),
+               let instances = value["instances"] as? [String] {
+                let allowed = instances.compactMap(URL.init(string:)).filter { $0.scheme == "https" && $0.host != nil }
+                if !allowed.isEmpty { relays = Array(allowed.prefix(3)) }
             }
+    }
+
+    private func resolveDirect(_ track: AudioTrack, quality: String) async -> AudioSource? {
+        let bases = relays
+        let original = await withTaskGroup(of: AudioSource?.self, returning: AudioSource?.self) { group in
+            for base in bases {
+                group.addTask { await self.candidate(track.id, base: base, track: track, quality: quality) }
+            }
+            for await result in group {
+                if let result = result {
+                    group.cancelAll()
+                    return result
+                }
+            }
+            return nil
+        }
+        if let original = original { return original }
+        for base in bases {
+            if Task.isCancelled { return nil }
             // La copia oficial de la misma grabación; no el primer resultado
             // arbitrario. El vídeo original puede fallar aunque su búsqueda exista.
             var url = URLComponents(url: base.appendingPathComponent("api/v1/search"), resolvingAgainstBaseURL: false)!
@@ -127,6 +145,41 @@ actor AudioSourceResolver {
                             URLQueryItem(name: "dur", value: String(Int(min(86_400, max(0, track.duration)))))]
         guard let url = proxy.url, await playable(url) else { return nil }
         return AudioSource(url: url, videoId: track.id, origin: "proxy", expires: Date().addingTimeInterval(120))
+    }
+
+    // Resolver y consumir desde la misma conexión evita depender de la IP de
+    // Vercel. Solo se admiten URLs públicas que entreguen bytes de audio reales.
+    private func resolveOnDevice(_ track: AudioTrack, quality: String) async -> AudioSource? {
+        do {
+            var request = URLRequest(url: URL(string: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false")!)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)", forHTTPHeaderField: "User-Agent")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "videoId": track.id,
+                "context": ["client": ["clientName": "IOS", "clientVersion": "20.10.4",
+                                        "deviceMake": "Apple", "deviceModel": "iPhone16,2",
+                                        "osName": "iPhone", "osVersion": "18.3.2.22D82", "hl": "es", "gl": "US"]]
+            ])
+            let (data, response) = try await session.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let status = value["playabilityStatus"] as? [String: Any], status["status"] as? String == "OK",
+                  let streaming = value["streamingData"] as? [String: Any] else { return nil }
+            let details = value["videoDetails"] as? [String: Any] ?? [:]
+            let seconds = Double(String(describing: details["lengthSeconds"] ?? "")) ?? 0
+            if seconds > 0 && track.duration > 0 && abs(seconds - track.duration) > max(12, track.duration * 0.07) { return nil }
+            let formats = (streaming["adaptiveFormats"] as? [[String: Any]] ?? []) + (streaming["formats"] as? [[String: Any]] ?? [])
+            var tried = Set<String>()
+            for itag in [quality, "140", "139", "141", "18"] where tried.insert(itag).inserted {
+                guard ["139", "140", "141", "18"].contains(itag),
+                      let format = formats.first(where: { String(describing: $0["itag"] ?? "") == itag }),
+                      let raw = format["url"] as? String, let url = URL(string: raw), url.scheme == "https",
+                      await playable(url) else { continue }
+                return AudioSource(url: url, videoId: track.id, origin: "youtube", expires: Date().addingTimeInterval(10 * 60))
+            }
+        } catch { return nil }
+        return nil
     }
 
     private func candidate(_ id: String, base: URL, track: AudioTrack, quality: String) async -> AudioSource? {

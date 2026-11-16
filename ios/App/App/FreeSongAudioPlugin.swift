@@ -88,6 +88,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var lastProgressAt = ProcessInfo.processInfo.systemUptime
     private var previousTime: Double = 0
     private var transitioning = false
+    private var recoveryAttempts = 0
     private let offlineLock = NSLock()
     private let offlineIdsKey = "FreeSongAudio.offlineIds"
     private let offlineExtensionsKey = "FreeSongAudio.offlineExtensions"
@@ -281,8 +282,9 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         } catch { call.reject("No se pudieron borrar las descargas nativas") }
     }
 
-    private func begin(_ index: Int, position: Double = 0) {
+    private func begin(_ index: Int, position: Double = 0, recovering: Bool = false) {
         guard tracks.indices.contains(index) else { return }
+        if !recovering { recoveryAttempts = 0 }
         operation = UUID()
         let token = operation
         loadingTask?.cancel()
@@ -298,7 +300,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         lastProgressAt = ProcessInfo.processInfo.systemUptime
         deadline?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
-            guard let self = self, self.operation == token, self.wantsPlayback, self.time(self.current) < 0.1 else { return }
+            guard let self = self, self.operation == token, self.wantsPlayback,
+                  self.time(self.current) < position + 0.1 else { return }
             self.loadingTask?.cancel()
             self.fail("La canción no arrancó a tiempo. Reintenta o elige otra pista.")
         }
@@ -310,6 +313,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         loadingTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
+                if recovering { await self.resolver.invalidate(track.id, quality: q) }
+                try Task.checkCancellation()
                 let file = self.offlineURL(track.id)
                 let source: AudioSource
                 if FileManager.default.fileExists(atPath: file.path) {
@@ -328,7 +333,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private func install(_ source: AudioSource, in deck: NativeDeck, index: Int, position: Double, start: Bool) {
         let asset = AVURLAsset(url: source.url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = 12
+        // Búfer temporal de streaming, sin guardar una descarga en la biblioteca.
+        item.preferredForwardBufferDuration = max(30, fadeSeconds * Double(rate) + 8)
         deck.source = source
         deck.sourceDuration = source.reportedDuration
         deck.index = index
@@ -470,7 +476,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             pauseInternal()
             return
         }
-        if wantsPlayback && current.ready && position > 0.1 && now - lastProgressAt > 20 {
+        if wantsPlayback && current.ready && position > 0.1 && now - lastProgressAt > 8 {
             fail("La conexión de audio se detuvo. Reintenta para renovar la fuente.")
             return
         }
@@ -535,6 +541,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         cancelFade()
         current.clear()
         active = 1 - active
+        recoveryAttempts = 0
         current.player.volume = volume
         preloadTask = nil
         preloadPlan = nil
@@ -561,6 +568,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if upcoming.ready {
             current.clear()
             active = 1 - active
+            recoveryAttempts = 0
             current.player.volume = volume
             current.player.playImmediately(atRate: rate)
             preloadTask = nil
@@ -592,6 +600,15 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         emit()
     }
     private func fail(_ message: String) {
+        // Recuperación nativa: sigue funcionando con WKWebView suspendido.
+        if wantsPlayback, tracks.indices.contains(current.index),
+           let source = current.source, source.origin != "offline", recoveryAttempts < 2 {
+            recoveryAttempts += 1
+            let index = current.index
+            let position = max(time(current), current.pendingPosition)
+            begin(index, position: position, recovering: true)
+            return
+        }
         lastError = message
         if tracks.indices.contains(current.index), current.source?.origin != "offline" {
             let id = tracks[current.index].id, q = quality
@@ -610,6 +627,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 "position": max(time(current), current.pendingPosition), "duration": duration(current), "playing": playing,
                 "paused": !wantsPlayback, "buffering": wantsPlayback && !playing,
                 "crossfading": fadeStart != nil, "error": lastError,
+                "recoveryAttempts": recoveryAttempts,
                 "nextTrackId": tracks.indices.contains(upcoming.index) ? tracks[upcoming.index].id : "",
                 "nextReady": upcoming.ready, "nextPrerollReady": upcoming.prerollReady,
                 "nextBufferSeconds": upcoming.player.currentItem?.loadedTimeRanges.first?.timeRangeValue.duration.seconds ?? 0,
