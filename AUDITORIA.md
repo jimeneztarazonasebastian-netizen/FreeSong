@@ -194,3 +194,47 @@ el botón de bloqueo muestra pausa mientras suena, play al pausarlo y que funcio
 reanudar, seek y siguiente. Dejar sonar varias canciones completas bloqueado y
 repetir sin red con descargas. Si falla, conservar/exportar el diagnóstico local;
 no borrar la aplicación como primer paso.
+
+## Motor nativo y diagnóstico recibido — 15 de noviembre de 2026, v3.9.30
+
+El informe del usuario registra seis reproducciones con 4,6 s de arranque medio,
+errores 502 del proxy y una descarga fallida. En una pista los metadatos anuncian
+191 s y el archivo reproduce 380,975 s. La captura muestra play aunque el usuario
+informa audio audible. El registro relay-alt reutilizaba el ID original: no era
+una alternativa efectiva. El crossfade estaba expresamente deshabilitado en iOS.
+
+### Cambios
+
+- Motor Swift con dos AVPlayer, cola, precarga y crossfade de ganancias de potencia
+  constante. El avance y el fundido no dependen de temporizadores JavaScript.
+- Now Playing recibe tiempo, duración y velocidad reales del AVPlayer activo.
+  Los comandos remotos de reproducción, pausa, seek y cambio usan el mismo motor.
+  El diseño concreto de Dynamic Island continúa siendo responsabilidad de iOS.
+- Adaptador Capacitor con identificación de solicitudes, rechazo de respuestas
+  antiguas y reconciliación al volver a primer plano. El motor HTML y MediaSession
+  no compiten con el nativo. Los IPA anteriores conservan su motor HTML.
+- Archivos offline en Application Support; migración por pista de Cache API y
+  eliminación sincronizada. Los datos de biblioteca conservan su origen web.
+- Resolver Swift valida bytes/MIME, formato AAC y duración antes de reproducir;
+  busca una publicación compatible y caduca/invalida URLs. Sigue dependiendo del
+  relay/proxy existente; no se incorporó un extractor Kotlin de SimpMusic.
+- Web: duración real autoritativa, caché rota invalidada, alternativa con ID
+  distinto y vigilancia de audio detenido en 0:00. El ajuste explica la falta de
+  crossfade en PWA/IPA antiguo de iPhone y se habilita con el plugin nativo.
+- Assets con versión usan caché HTTP prolongada. App Bound Domains permite caché
+  de interfaz en WKWebView, manteniendo el dominio y los datos de la instalación.
+
+### Evidencia y límites
+
+La primera compilación Xcode y tres pruebas Swift de políticas pasaron en Actions
+43757397887. La revisión final añade pruebas Swift con URLProtocol: bytes reales,
+caché/invalidation, 403, duración incompatible y HTML que responde 200. Las pruebas
+JS cubren el adaptador, una interfaz con puente simulado, cambios de cola, controles,
+duración y recuperación real del flujo web ante fuentes simuladas rotas.
+
+Estas pruebas y una compilación correcta no demuestran crossfade audible, apertura
+más rápida ni presencia continua en Dynamic Island en el teléfono físico. Hace
+falta instalar el nuevo IPA y medirlo allí. La carga inicial todavía requiere red;
+la disponibilidad de canciones sigue condicionada a proveedores externos. Los
+capítulos anteriores describen las versiones históricas y no son una declaración
+de la arquitectura de 3.9.30. El protocolo de prueba actualizado está en IOS.md.

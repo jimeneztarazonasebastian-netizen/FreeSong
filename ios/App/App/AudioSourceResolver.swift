@@ -34,16 +34,16 @@ actor AudioSourceResolver {
     private var relays = [URL(string: "https://yt.chocolatemoo53.com")!]
     private var loadedRelays = false
 
-    init() {
+    init(session providedSession: URLSession? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 6
         configuration.timeoutIntervalForResource = 12
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpShouldSetCookies = false
-        session = URLSession(configuration: configuration)
+        session = providedSession ?? URLSession(configuration: configuration)
     }
 
-    func invalidate(_ id: String) { cache.removeValue(forKey: id) }
+    func invalidate(_ id: String, quality: String) { cache.removeValue(forKey: "\(id):\(quality)") }
 
     func resolve(_ track: AudioTrack, quality: String) async throws -> AudioSource {
         try Task.checkCancellation()

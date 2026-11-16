@@ -5,7 +5,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 ## ✨ Características
 
 - **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`), reproduce en segundo plano al cambiar de app o bloquear el teléfono (`AudioSession` tipo `playback`) y conserva la cola, la canción y el segundo exacto al volver a abrir la app.
-- **Crossfade en escritorio**: Doble deck con fundido regulable. En iPhone se desactiva para conservar el reproductor ya autorizado al avanzar con la pantalla bloqueada.
+- **Crossfade**: Doble deck HTML en escritorio y dos AVPlayer en el IPA 3.9.30. En Safari/PWA de iPhone y los IPA anteriores permanece deshabilitado. El motor nuevo requiere validación audible en el teléfono.
 - **Música y Streaming**: Búsqueda en YouTube Music, streaming y descargas para escuchar sin conexión; disponibilidad sujeta a las fuentes externas.
 - **Buscar con contenido real**: cuadrícula de géneros con portadas inclinadas al estilo Spotify, mezclas listas para reproducir e historial, sin pantallas vacías.
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real. Puedes compartir el verso que suena como historia 9:16 y cambiar de verso dentro de la vista previa.
@@ -31,9 +31,9 @@ Si cambia el dominio, actualiza `server.url` en `capacitor.config.json` y vuelve
 ejecutar `npx cap sync ios` antes de compilar el IPA. La PWA se instala directamente
 desde ese mismo dominio.
 
-El IPA es híbrido (Capacitor + audio HTML), no un motor AVPlayer. Consulta
-[IOS.md](IOS.md) para instalar actualizaciones, renovar la firma gratuita y
-entender la migración a un reproductor iOS nativo.
+El IPA 3.9.30 combina interfaz Capacitor con audio nativo AVPlayer, cola y controles
+remotos en Swift. Consulta [IOS.md](IOS.md) para instalar la actualización,
+renovar la firma gratuita y conocer los límites de verificación en hardware.
 
 ```bash
 npm install

@@ -575,19 +575,16 @@
     });
   }
 
-  // Corrección heurística del Bug DASH itag=140 en iOS Safari (duración duplicada 2x)
+  // La posición y el fin usan la duración del archivo que realmente suena.
+  // La duración de búsqueda solo sirve mientras el motor no entrega metadatos.
   function getEffectiveDuration(audioEl, track) {
     const official = (track && (track.duration || track.durationSeconds)) ? (track.duration || track.durationSeconds) : 0;
     const raw = audioEl ? (audioEl.duration || 0) : 0;
     const rawValid = raw && !isNaN(raw) && raw > 0 && isFinite(raw);
 
-    // Si ambas estan disponibles, usar la que sea menor (la oficial puede ser
-    // un poco mas corta que el stream real, causando corte prematuro).
-    // Pero si difieren mucho (>10s), la oficial suele ser mas confiable.
     if (rawValid) return raw;
     if (official > 0) return official;
-    if (!rawValid) return 0;
-    return Math.round(raw);
+    return 0;
   }
 
   function enrichTrackDuration(track, signal) {
@@ -2524,6 +2521,7 @@
   }
 
   function initOfflineBlobs() {
+    if (nativeAudio) return;
     const next = S.queue[getNextIndex()];
     return Promise.all([S.currentTrack?.id, next?.id].filter(Boolean).map(prepareOfflineTrack));
   }
@@ -2992,6 +2990,7 @@
   }
 
   async function nativeOfflineBlob(id) {
+    if (nativeAudio?.hasOffline(id)) return null;
     if (!isDownloaded(id) || !('caches' in window)) return null;
     try {
       const cache = await caches.open('freesong-offline-audio-v1');
@@ -3062,8 +3061,8 @@
     }
     if (!isBackground() && S.syncedLyrics.length) syncLyricsWithTime(position);
     updatePlayPauseIcons(S.isPlaying, !!value.buffering);
-    if (value.error && nativeErrorShown !== value.error) {
-      nativeErrorShown = value.error;
+    if (value.error && nativeErrorShown !== `${track.id}:${value.error}`) {
+      nativeErrorShown = `${track.id}:${value.error}`;
       Diag.log('native-audio-error', { message: value.error, id: track.id, source: value.source });
       showToast(value.error, 6000);
     }
@@ -3142,7 +3141,7 @@
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
     // aunque la pista también tenga una URL de streaming precargada.
     const streamUrl = getTrackStreamUrl(track);
-    initOfflineBlobs();
+    if (!nativeAudio) initOfflineBlobs();
 
     if (shouldCrossfade) {
       // El audio de la siguiente entra ya, pero la tarjeta, la letra y los
@@ -8412,6 +8411,11 @@
     // Restablecer datos
     $('btnClearData').addEventListener('click', async () => {
       if (confirm('¿Deseas restablecer todos tus datos locales (favoritos, historial, playlists y descargas)?')) {
+        if (nativeAudio) {
+          pausePlayback();
+          try { await nativeAudio.clearOffline(); }
+          catch { showToast('No se pudieron borrar las descargas del iPhone', 4000); return; }
+        }
         localStorage.clear();
         S.favorites = [];
         S.history = [];
@@ -8604,6 +8608,7 @@
       isPlaying: !!S.isPlaying,
       engine: nativeAudio ? 'avplayer' : 'html',
       native: nativeAudio ? nativeAudio.state : null,
+      nativeInfo: nativeAudio ? nativeAudio.info : null,
       userIntentionalPause,
       ytMode: !!isYtMode,
       ytBlocked: !!pendingYtStart,

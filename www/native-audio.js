@@ -8,6 +8,8 @@
   let listener = null;
   let sequence = 0;
   let generation = 0;
+  let subscription = null;
+  let info = {};
   const imported = new Set();
   const call = (method, options = {}) => cap.nativePromise('FreeSongAudio', method, options);
   const player = {
@@ -43,22 +45,26 @@
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(blob);
     });
-    await call('importOffline', { id, data });
+    await call('importOffline', { id, data, mime: blob.type || 'audio/mp4' });
     imported.add(id);
   }
   window.FreeSongNative = {
     available, player,
     get state() { return current; },
+    get info() { return info; },
     setListener(fn) {
       listener = fn;
       if (!available) return;
-      cap.addListener('FreeSongAudio', 'state', accept);
+      subscription?.remove?.();
+      subscription = cap.addListener('FreeSongAudio', 'state', accept);
     },
     async restore() {
       if (!available) return null;
       const token = generation;
       const value = await call('getState');
       if (token !== generation) return null;
+      info = { appVersion: value.appVersion || '', iOSVersion: value.iOSVersion || '' };
+      for (const id of value.offlineIds || []) imported.add(id);
       if (value.requestId) expected = value.requestId;
       if (value.trackId) accept(value);
       return value;
@@ -85,6 +91,14 @@
     resume() { return call('resume').catch(reportError); },
     configure(options) { if (available) return call('configure', options).catch(reportError); },
     importOffline,
+    hasOffline(id) { return imported.has(id); },
+    clearOffline() { imported.clear(); return call('clearOffline'); },
     removeOffline(id) { imported.delete(id); if (available) return call('removeOffline', { id }); }
   };
+  if (available && window.addEventListener) {
+    window.addEventListener('pagehide', () => { subscription?.remove?.(); subscription = null; });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted && listener && !subscription) subscription = cap.addListener('FreeSongAudio', 'state', accept);
+    });
+  }
 })();

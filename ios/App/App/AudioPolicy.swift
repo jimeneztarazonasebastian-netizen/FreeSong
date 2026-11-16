@@ -10,7 +10,7 @@ enum AudioPolicy {
         guard count > 0, current >= 0, current < count else { return nil }
         if repeatMode == "one" && !manual { return current }
         if current + 1 < count { return current + 1 }
-        return repeatMode == "all" ? 0 : nil
+        return repeatMode != "off" ? 0 : nil
     }
 
     static func fadeGains(progress: Double, volume: Float) -> (outgoing: Float, incoming: Float) {

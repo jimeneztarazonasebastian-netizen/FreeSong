@@ -12,6 +12,7 @@ final class AudioPolicyTests: XCTestCase {
         XCTAssertNil(AudioPolicy.nextIndex(current: 0, count: 0, repeatMode: "all", manual: false))
         XCTAssertEqual(AudioPolicy.nextIndex(current: 0, count: 3, repeatMode: "one", manual: false), 0)
         XCTAssertEqual(AudioPolicy.nextIndex(current: 0, count: 3, repeatMode: "one", manual: true), 1)
+        XCTAssertEqual(AudioPolicy.nextIndex(current: 2, count: 3, repeatMode: "one", manual: true), 0)
         XCTAssertNil(AudioPolicy.nextIndex(current: 2, count: 3, repeatMode: "off", manual: false))
         XCTAssertEqual(AudioPolicy.nextIndex(current: 2, count: 3, repeatMode: "all", manual: false), 0)
         XCTAssertNil(AudioPolicy.nextIndex(current: -1, count: 3, repeatMode: "all", manual: false))
