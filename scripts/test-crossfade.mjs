@@ -173,6 +173,23 @@ async function run() {
 
     // Deben sonar dos decks a la vez (fundido en curso)…
     await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).filter((a) => !a.paused && a.volume > 0.02).length >= 2, null, { timeout: 6000 });
+    // Simular un búfer agotado: no debe bajar más el volumen del saliente.
+    const beforeStall = await page.evaluate(() => {
+      const decks = Array.from(document.querySelectorAll('audio'));
+      const incoming = decks.find(a => a.dataset.trackId === 'xf-2');
+      const outgoing = decks.find(a => a.dataset.trackId === 'xf-1');
+      Object.defineProperty(incoming, 'readyState', { configurable: true, value: 2 });
+      return outgoing.volume;
+    });
+    await delay(450);
+    const duringStall = await page.evaluate(() => {
+      const decks = Array.from(document.querySelectorAll('audio'));
+      const incoming = decks.find(a => a.dataset.trackId === 'xf-2');
+      const volume = decks.find(a => a.dataset.trackId === 'xf-1').volume;
+      delete incoming.readyState;
+      return volume;
+    });
+    assert.equal(duringStall, beforeStall, 'El crossfade consumió el volumen saliente durante una espera de red');
     await delay(900); // …y a mitad del fundido la UI sigue en la pista saliente.
     const mid = await state(page);
     assert.match(mid.title, /Cancion crossfade 1/, `La tarjeta cambió antes de tiempo: ${mid.title}`);

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.34 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.35 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.34';
+  const APP_VERSION = '3.9.35';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1679,8 +1679,8 @@
           } catch {}
         }
 
-        // Precarga inteligente al 70%
-        if (pct >= 70 && !deck.dataset.prefetched) {
+        // Resolver la siguiente pronto, mientras hay tiempo para preparar audio.
+        if (cur >= 2 && !isCrossfading && !deck.dataset.prefetched) {
           deck.dataset.prefetched = 'true';
           prefetchNextTrack();
         }
@@ -3267,6 +3267,8 @@
 
     if (shouldCrossfade) {
       inPlayer = getInactivePlayer();
+      reusingPrefetched = inPlayer.dataset.prefetchedId === track.id &&
+        (inPlayer.currentSrc || inPlayer.src) === new URL(streamUrl, location.href).href && !inPlayer.error;
     } else {
       // Si el otro deck ya tiene esta pista precargada, se reproduce desde ESE
       // deck. Antes se descartaba su buffer y se volvía a pedir la canción en
@@ -3314,7 +3316,8 @@
         inPlayer.muted = false;
         inPlayer.volume = 0;
         inPlayer.playbackRate = S.playbackRate;
-        inPlayer.src = streamUrl;
+        // Reasignar src incluso al mismo URL descarta el búfer ya preparado.
+        if (!reusingPrefetched) inPlayer.src = streamUrl;
         inPlayer.play().catch(() => {});
         performCrossfade(outPlayer, inPlayer, S.crossfadeDuration, flushPendingTrackCommit);
       } else {
@@ -3433,14 +3436,14 @@
     }
     isCrossfading = true;
 
-    const steps = 30;
-    const stepTime = (durationSec * 1000) / steps;
-    let currentStep = 0;
+    const startPosition = Number(inP.currentTime) || 0;
     const maxVol = S.audioNormalize ? 0.88 : 1.0;
 
     window.crossfadeInterval = setInterval(() => {
-      currentStep++;
-      const progress = currentStep / steps;
+      // La espera de red no debe bajar el volumen de la canción saliente.
+      if (inP.paused || inP.readyState < 3) return;
+      const played = Math.max(0, (Number(inP.currentTime) || 0) - startPosition);
+      const progress = Math.min(1, played / Math.max(0.1, durationSec * (inP.playbackRate || 1)));
 
       const outVol = Math.cos((progress * Math.PI) / 2) * maxVol;
       const inVol = Math.sin((progress * Math.PI) / 2) * maxVol;
@@ -3450,7 +3453,7 @@
         if (inP) inP.volume = Math.max(0, Math.min(maxVol, inVol));
       } catch {}
 
-      if (currentStep >= steps) {
+      if (progress >= 1) {
         cancelActiveCrossfade();
         try {
           if (outP) {
@@ -3467,7 +3470,7 @@
         activeDeckIdx = 1 - activeDeckIdx;
         if (typeof onDone === 'function') onDone();
       }
-    }, stepTime);
+    }, 40);
     fadeInterval = window.crossfadeInterval;
   }
 
