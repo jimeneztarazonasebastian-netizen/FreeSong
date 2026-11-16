@@ -4,6 +4,7 @@
   "webDir": "www",
   "bundledWebRuntime": false,
   "ios": {
+    "backgroundColor": "#09090b",
     "limitsNavigationsToAppBoundDomains": true,
     "contentInset": "always",
     "allowsLinkPreview": false,

@@ -23,7 +23,7 @@ private final class SourceProtocol: URLProtocol {
             let seconds = mode == "mismatch" && id == "original-1" ? 381 : 191
             body = Data("{\"lengthSeconds\":\(seconds),\"adaptiveFormats\":[{\"itag\":140,\"url\":\"https://relay.test/audio/\(id)\"}]}".utf8)
         } else if path.hasPrefix("/audio/") {
-            if mode == "html" || (mode == "retry" && url.lastPathComponent == "original-1") {
+            if mode == "html" || mode == "proxy" || (mode == "retry" && url.lastPathComponent == "original-1") {
                 type = "text/html"
                 status = mode == "retry" ? 403 : 200
                 body = Data("<html>not audio</html>".utf8)
@@ -32,6 +32,10 @@ private final class SourceProtocol: URLProtocol {
                 status = 206
                 body = Data([0, 0, 0, 24, 102, 116, 121, 112])
             }
+        } else if path == "/api/stream" && mode == "proxy" {
+            type = "audio/mp4"
+            status = 206
+            body = Data([0, 0, 0, 24, 102, 116, 121, 112])
         } else { status = 502; body = Data("{}".utf8) }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": type])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
@@ -83,5 +87,10 @@ final class AudioSourceResolverTests: XCTestCase {
         } catch {
             XCTAssertEqual((error as NSError).domain, "FreeSong.Source")
         }
+    }
+    func testProxyIsIndependentOfDirectSourceFailure() async throws {
+        let source = try await resolver("proxy").resolve(track, quality: "140")
+        XCTAssertEqual(source.origin, "proxy")
+        XCTAssertEqual(source.reportedDuration, 0, "La duración enviada por el cliente no verifica el archivo")
     }
 }

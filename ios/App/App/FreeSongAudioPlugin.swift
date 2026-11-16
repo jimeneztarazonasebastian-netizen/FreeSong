@@ -12,6 +12,8 @@ private final class NativeDeck {
     var timeObserver: Any?
     var index = -1
     var source: AudioSource?
+    var sourceDuration: Double = 0
+    var durationCorrected = false
     var pendingPosition: Double = 0
     var prerollReady = false
     var ready: Bool { player.currentItem?.status == .readyToPlay }
@@ -24,6 +26,8 @@ private final class NativeDeck {
         player.replaceCurrentItem(with: nil)
         index = -1
         source = nil
+        sourceDuration = 0
+        durationCorrected = false
         pendingPosition = 0
         prerollReady = false
     }
@@ -53,6 +57,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var preloadOperation = UUID()
     private var loadingTask: Task<Void, Never>?
     private var preloadTask: Task<Void, Never>?
+    private var preloadPlan: [Int]?
+    private var preloadTarget: Int?
     private var deadline: DispatchWorkItem?
     private var wantsPlayback = false
     private var quality = "140"
@@ -298,13 +304,13 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         loadingTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
-                try self.activateSession()
                 let file = self.offlineURL(track.id)
                 let source: AudioSource
                 if FileManager.default.fileExists(atPath: file.path) {
                     source = AudioSource(url: file, videoId: track.id, origin: "offline", expires: .distantFuture)
                 } else { source = try await self.resolver.resolve(track, quality: q) }
                 guard self.operation == token, !Task.isCancelled else { return }
+                if self.wantsPlayback { try self.activateSession() }
                 self.install(source, in: self.current, index: index, position: self.current.pendingPosition, start: self.wantsPlayback)
             } catch {
                 guard self.operation == token, !Task.isCancelled else { return }
@@ -318,6 +324,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 12
         deck.source = source
+        deck.sourceDuration = source.reportedDuration
         deck.index = index
         deck.pendingPosition = position
         deck.prerollReady = false
@@ -329,8 +336,12 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 if item.status == .failed {
                     if deck === self.current {
                         self.fail("iOS no pudo abrir la fuente de audio (\(item.error.map { ($0 as NSError).code } ?? 0)).")
-                    } else { deck.clear() }
+                    } else {
+                        deck.clear()
+                        self.prepareNext()
+                    }
                 } else if item.status == .readyToPlay && deck === self.current {
+                    self.correctEndTime(deck)
                     let target = deck.pendingPosition
                     deck.pendingPosition = 0
                     if target > 0 && target < self.duration(deck) - 0.5 {
@@ -339,6 +350,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                     if self.wantsPlayback { deck.player.playImmediately(atRate: self.rate) }
                     self.emit()
                 } else if item.status == .readyToPlay {
+                    self.correctEndTime(deck)
                     deck.player.preroll(atRate: self.rate) { [weak deck] success in
                         DispatchQueue.main.async {
                             guard let deck = deck, deck.player.currentItem === item else { return }
@@ -363,7 +375,17 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func duration(_ deck: NativeDeck) -> Double {
         AudioPolicy.duration(actual: deck.player.currentItem?.duration.seconds ?? 0,
-                             metadata: tracks.indices.contains(deck.index) ? tracks[deck.index].duration : 0)
+                             metadata: tracks.indices.contains(deck.index) ? tracks[deck.index].duration : 0,
+                             source: deck.sourceDuration)
+    }
+    private func correctEndTime(_ deck: NativeDeck) {
+        guard !deck.durationCorrected, let item = deck.player.currentItem,
+              item.duration.seconds.isFinite else { return }
+        let seconds = duration(deck)
+        if seconds > 0 && seconds < item.duration.seconds - 1 {
+            item.forwardPlaybackEndTime = CMTime(seconds: seconds, preferredTimescale: 600)
+            deck.durationCorrected = true
+        }
     }
     private func time(_ deck: NativeDeck) -> Double {
         let value = deck.player.currentTime().seconds
@@ -382,13 +404,22 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         preloadOperation = UUID()
         preloadTask?.cancel()
         preloadTask = nil
+        preloadPlan = nil
+        preloadTarget = nil
         // Terminar un fundido antes de invalidar el deck entrante.
         if fadeStart != nil { finishFade() }
         upcoming.clear()
     }
     private func prepareNext() {
-        guard preloadTask == nil, fadeStart == nil, let index = nextIndex(), index != current.index,
-              tracks.indices.contains(index), !sleepEndTrack else { return }
+        guard wantsPlayback, preloadTask == nil, upcoming.index < 0,
+              fadeStart == nil, !sleepEndTrack else { return }
+        if preloadPlan == nil {
+            preloadPlan = AudioPolicy.preloadIndices(current: current.index, count: tracks.count,
+                                                    repeatMode: repeatMode, shuffled: shuffle > 0)
+        }
+        guard let index = preloadPlan?.first else { return }
+        preloadPlan?.removeFirst()
+        preloadTarget = index
         let token = preloadOperation, track = tracks[index], q = quality
         preloadTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -399,8 +430,15 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                     source = AudioSource(url: file, videoId: track.id, origin: "offline", expires: .distantFuture)
                 } else { source = try await self.resolver.resolve(track, quality: q) }
                 guard token == self.preloadOperation, !Task.isCancelled else { return }
+                self.preloadTask = nil
+                self.preloadTarget = nil
                 self.install(source, in: self.upcoming, index: index, position: 0, start: false)
-            } catch { /* La pista actual continúa; el siguiente intento ocurre al avanzar. */ }
+            } catch {
+                guard token == self.preloadOperation, !Task.isCancelled else { return }
+                self.preloadTask = nil
+                self.preloadTarget = nil
+                self.prepareNext()
+            }
         }
     }
     private func tick() {
@@ -420,6 +458,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         if wantsPlayback && position > 0.3 { prepareNext() }
+        correctEndTime(current)
         let remaining = duration(current) - position
         if fadeSeconds > 0 && wantsPlayback && !sleepEndTrack && repeatMode != "one" && fadeStart == nil,
            remaining > 0.3 && remaining <= fadeSeconds * Double(rate), upcoming.ready && upcoming.prerollReady {
@@ -439,7 +478,11 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let start = fadeStart, wantsPlayback else { return }
         // No bajar el saliente si la entrada aún espera datos.
         guard upcoming.player.timeControlStatus == .playing else {
-            if ProcessInfo.processInfo.systemUptime - start > 2 { cancelFade(); upcoming.player.pause() }
+            if ProcessInfo.processInfo.systemUptime - start > 2 {
+                cancelFade()
+                upcoming.player.pause()
+                upcoming.prerollReady = false
+            }
             return
         }
         let progress = min(1, max(0, (ProcessInfo.processInfo.systemUptime - start) / max(0.1, fadeLength)))
@@ -461,6 +504,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         active = 1 - active
         current.player.volume = volume
         preloadTask = nil
+        preloadPlan = nil
+        preloadTarget = nil
         preloadOperation = UUID()
         previousTime = time(current)
         lastProgressAt = ProcessInfo.processInfo.systemUptime
@@ -485,13 +530,15 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             current.player.volume = volume
             current.player.playImmediately(atRate: rate)
             preloadTask = nil
+            preloadPlan = nil
+            preloadTarget = nil
             preloadOperation = UUID()
             previousTime = 0
             lastProgressAt = ProcessInfo.processInfo.systemUptime
             transitioning = false
             loadArtwork(tracks[current.index])
             emit()
-        } else if let index = nextIndex() { begin(index) }
+        } else if let index = upcoming.index >= 0 ? upcoming.index : (preloadTarget ?? nextIndex()) { begin(index) }
         else { pauseInternal() }
     }
     private func pauseInternal() {
@@ -529,6 +576,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 "position": max(time(current), current.pendingPosition), "duration": duration(current), "playing": playing,
                 "paused": !wantsPlayback, "buffering": wantsPlayback && !playing,
                 "crossfading": fadeStart != nil, "error": lastError,
+                "mediaDuration": AudioPolicy.duration(actual: current.player.currentItem?.duration.seconds ?? 0, metadata: 0),
+                "sourceDuration": current.sourceDuration,
                 "source": current.source?.origin ?? "resolving", "sourceVideoId": current.source?.videoId ?? ""]
     }
     private func emit() {
@@ -537,6 +586,10 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     private func updateNowPlaying() {
         guard tracks.indices.contains(current.index) else { return }
+        if current.player.currentItem == nil && !lastError.isEmpty {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
         let track = tracks[current.index]
         var info: [String: Any] = [MPMediaItemPropertyTitle: track.title, MPMediaItemPropertyArtist: track.artist,
                                   MPMediaItemPropertyAlbumTitle: "FreeSong", MPMediaItemPropertyPlaybackDuration: duration(current),

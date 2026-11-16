@@ -8,6 +8,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
+        window?.backgroundColor = UIColor(red: 9/255, green: 9/255, blue: 11/255, alpha: 1)
         window?.rootViewController = FreeSongBridgeViewController()
         window?.makeKeyAndVisible()
 
@@ -24,6 +25,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 }
 
 class FreeSongBridgeViewController: CAPBridgeViewController {
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(FreeSongAudioPlugin())
     }

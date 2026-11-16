@@ -55,13 +55,15 @@ function makeWav(seconds = SONG_SECONDS, rate = 8000) {
   return buf;
 }
 const WAV = makeWav();
+const DOUBLED_WAV = makeWav(SONG_SECONDS * 2);
 const AUDIO_HEADERS = { 'Content-Type': 'audio/wav', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
 
 function json(route, body, status = 200) {
   return route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
 
-async function streamAudio(route, request) {
+async function streamAudio(route, request, data = WAV) {
+  const WAV = data;
   if (request.method() === 'HEAD') {
     return route.fulfill({ status: 200, headers: { ...AUDIO_HEADERS, 'Content-Length': String(WAV.length) }, body: '' });
   }
@@ -123,6 +125,11 @@ async function run() {
   const pageErrors = [];
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', userAgent: IOS_UA });
+    await context.addInitScript(() => {
+      localStorage.setItem('fs_crossfade', 'true');
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
+      Object.defineProperty(HTMLMediaElement.prototype, 'volume', { ...descriptor, set() {} });
+    });
     const page = await context.newPage();
     page.on('pageerror', (e) => pageErrors.push(String(e && e.message ? e.message : e)));
 
@@ -131,7 +138,10 @@ async function run() {
       const host = url.host.toLowerCase();
       if (url.origin === BASE) {
         if (url.pathname === '/api/search') return json(route, { tracks: TRACKS, items: TRACKS, continuation: null });
-        if (url.pathname === '/api/stream') return streamAudio(route, request);
+        if (url.pathname === '/api/stream') {
+          if (url.searchParams.get('id') === 'ios-1') return json(route, {}, 502);
+          return streamAudio(route, request);
+        }
         if (url.pathname === '/api/relay-info') return json(route, { instances: [RELAY] });
         if (url.pathname === '/api/suggestions') return json(route, { queries: [] });
         if (url.pathname === '/api/lyrics') {
@@ -151,11 +161,13 @@ async function run() {
           return json(route, {
             videoId: decodeURIComponent(match[1]),
             adaptiveFormats: [
-              { itag: '140', mimeType: 'audio/mp4', url: `${RELAY}/audio/${encodeURIComponent(match[1])}.m4a`, clen: WAV.length }
+              { itag: '140', mimeType: 'audio/mp4', url: `${RELAY}/audio/${encodeURIComponent(match[1])}.m4a?dur=${SONG_SECONDS}`, clen: WAV.length }
             ]
           });
         }
-        if (url.pathname.startsWith('/audio/')) return streamAudio(route, request);
+        if (url.pathname.startsWith('/audio/')) {
+          return streamAudio(route, request, url.pathname === '/audio/ios-1.m4a' ? DOUBLED_WAV : WAV);
+        }
         return route.fulfill({ status: 404, body: '{}' });
       }
       if (host === 'i.ytimg.com' || host.endsWith('googleusercontent.com')) {
@@ -170,6 +182,7 @@ async function run() {
 
     await page.goto(`${BASE}/?v=ios-end`, { waitUntil: 'load' });
     await page.waitForSelector('[data-nav="search"]');
+    assert.equal(await page.locator('#settingCrossfadeToggle').isDisabled(), true);
     await page.evaluate(() => document.querySelector('[data-nav="search"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await page.waitForSelector('#searchInput');
     await page.fill('#searchInput', 'iphone');
@@ -179,6 +192,10 @@ async function run() {
     await waitForTrackPlaying(page, 'ios-1');
     const firstDeck = await playingDeck(page);
     assert.equal(firstDeck.trackId, 'ios-1');
+    await page.waitForFunction(() => {
+      const deck = Array.from(document.querySelectorAll('audio')).find((audio) => audio.dataset.trackId === 'ios-1' && !audio.paused);
+      return deck?.duration === 16 && document.getElementById('playerDurTime').textContent === '0:08';
+    }, null, { timeout: 4000 });
 
     // El segundo deck queda precargado (camino que antes rompía iOS).
     await page.waitForFunction(
@@ -187,7 +204,8 @@ async function run() {
       { timeout: 12000 }
     );
 
-    // 1) Fin natural: debe seguir en el mismo deck ya desbloqueado.
+    // 1) Fin corregido: el audio anuncia 16 s, pero la URL y el catálogo
+    // coinciden en 8 s. Debe avanzar usando el deck ya autorizado.
     await page.evaluate(() => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });

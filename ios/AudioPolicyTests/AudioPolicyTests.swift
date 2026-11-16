@@ -8,6 +8,17 @@ final class AudioPolicyTests: XCTestCase {
         XCTAssertEqual(AudioPolicy.duration(actual: .nan, metadata: 191), 191)
         XCTAssertEqual(AudioPolicy.duration(actual: .infinity, metadata: -1), 0)
     }
+    func testDurationDoubledByPlayerRequiresAgreementWithFile() {
+        XCTAssertEqual(AudioPolicy.duration(actual: 483.748, metadata: 242, source: 241.879), 241.879)
+        XCTAssertEqual(AudioPolicy.duration(actual: 483.748, metadata: 242, source: 483.748), 483.748)
+        XCTAssertEqual(AudioPolicy.duration(actual: 483.748, metadata: 182, source: 241.879), 483.748)
+        XCTAssertEqual(AudioPolicy.duration(actual: 255.4, metadata: 242, source: 241.879), 255.4)
+    }
+    func testPreloadMovesPastUnavailablePicksWithoutChangingRepeatBoundaries() {
+        XCTAssertEqual(AudioPolicy.preloadIndices(current: 2, count: 5, repeatMode: "off", shuffled: false), [3, 4])
+        XCTAssertEqual(AudioPolicy.preloadIndices(current: 4, count: 5, repeatMode: "all", shuffled: false), [0, 1, 2])
+        XCTAssertEqual(AudioPolicy.preloadIndices(current: 4, count: 5, repeatMode: "one", shuffled: true), [])
+    }
     func testQueueBoundariesAndManualSkipWhileRepeatingOne() {
         XCTAssertNil(AudioPolicy.nextIndex(current: 0, count: 0, repeatMode: "all", manual: false))
         XCTAssertEqual(AudioPolicy.nextIndex(current: 0, count: 3, repeatMode: "one", manual: false), 0)

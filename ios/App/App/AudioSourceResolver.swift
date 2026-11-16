@@ -23,6 +23,14 @@ struct AudioSource {
     let videoId: String
     let origin: String
     let expires: Date
+
+    var reportedDuration: Double {
+        guard origin == "relay" else { return 0 }
+        let fields = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        let field = fields?.first { $0.name == "dur" }?.value ?? ""
+        let seconds = Double(field) ?? 0
+        return seconds.isFinite && seconds > 0 ? seconds : 0
+    }
 }
 
 // Resolución, formato y caducidad son independientes del reproductor. Las
@@ -57,10 +65,34 @@ actor AudioSourceResolver {
                 if !allowed.isEmpty { relays = Array(allowed.prefix(3)) }
             }
         }
+        let source = await withTaskGroup(of: AudioSource?.self) { group in
+            group.addTask { await self.resolveDirect(track, quality: quality) }
+            group.addTask {
+                do { try await Task.sleep(nanoseconds: 1_500_000_000) }
+                catch { return nil }
+                return await self.resolveProxy(track, quality: quality)
+            }
+            for await result in group {
+                if let result = result {
+                    group.cancelAll()
+                    return result
+                }
+            }
+            return nil
+        }
+        try Task.checkCancellation()
+        if let source = source {
+            cache[key] = source
+            return source
+        }
+        throw NSError(domain: "FreeSong.Source", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Las fuentes no entregaron audio reproducible. Prueba otra canción o reintenta."])
+    }
+
+    private func resolveDirect(_ track: AudioTrack, quality: String) async -> AudioSource? {
         for base in relays {
-            try Task.checkCancellation()
+            if Task.isCancelled { return nil }
             if let source = await candidate(track.id, base: base, track: track, quality: quality) {
-                cache[key] = source
                 return source
             }
             // La copia oficial de la misma grabación; no el primer resultado
@@ -77,26 +109,24 @@ actor AudioSourceResolver {
                     return abs(a - track.duration) < abs(b - track.duration)
                 }
                 for item in candidates.prefix(3) {
-                    try Task.checkCancellation()
+                    if Task.isCancelled { return nil }
                     if let id = item["videoId"] as? String,
                        let source = await candidate(id, base: base, track: track, quality: quality) {
-                        cache[key] = source
                         return source
                     }
                 }
             }
         }
+        return nil
+    }
+
+    private func resolveProxy(_ track: AudioTrack, quality: String) async -> AudioSource? {
         var proxy = URLComponents(url: Self.backend.appendingPathComponent("api/stream"), resolvingAgainstBaseURL: false)!
         proxy.queryItems = [URLQueryItem(name: "id", value: track.id), URLQueryItem(name: "itag", value: quality),
                             URLQueryItem(name: "title", value: track.title), URLQueryItem(name: "artist", value: track.artist),
-                            URLQueryItem(name: "dur", value: String(Int(track.duration)))]
-        if await playable(proxy.url!) {
-            let source = AudioSource(url: proxy.url!, videoId: track.id, origin: "proxy", expires: Date().addingTimeInterval(120))
-            cache[key] = source
-            return source
-        }
-        throw NSError(domain: "FreeSong.Source", code: 1,
-                      userInfo: [NSLocalizedDescriptionKey: "Las fuentes no entregaron audio reproducible. Prueba otra canción o reintenta."])
+                            URLQueryItem(name: "dur", value: String(Int(min(86_400, max(0, track.duration)))))]
+        guard let url = proxy.url, await playable(url) else { return nil }
+        return AudioSource(url: url, videoId: track.id, origin: "proxy", expires: Date().addingTimeInterval(120))
     }
 
     private func candidate(_ id: String, base: URL, track: AudioTrack, quality: String) async -> AudioSource? {

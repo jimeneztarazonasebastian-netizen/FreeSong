@@ -1,9 +1,21 @@
 import Foundation
 
 enum AudioPolicy {
-    static func duration(actual: Double, metadata: Double) -> Double {
-        if actual.isFinite && actual > 0 { return actual }
+    static func duration(actual: Double, metadata: Double, source: Double = 0) -> Double {
+        if actual.isFinite && actual > 0 {
+            // Corregir el duplicado solo si el catálogo y el archivo concuerdan.
+            if metadata > 0 && source > 0 && abs(metadata - source) <= 2 &&
+                abs(actual - source * 2) <= 1 { return source }
+            return actual
+        }
         return metadata.isFinite ? max(0, metadata) : 0
+    }
+
+    static func preloadIndices(current: Int, count: Int, repeatMode: String, shuffled: Bool) -> [Int] {
+        guard count > 1, (0..<count).contains(current), repeatMode != "one" else { return [] }
+        if shuffled { return Array((0..<count).filter { $0 != current }.shuffled().prefix(3)) }
+        let remaining = repeatMode == "all" ? count - 1 : count - current - 1
+        return (1..<(min(3, remaining) + 1)).map { (current + $0) % count }
     }
 
     static func nextIndex(current: Int, count: Int, repeatMode: String, manual: Bool) -> Int? {

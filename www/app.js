@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.30 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.31 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -71,7 +71,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.30';
+  const APP_VERSION = '3.9.31';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -578,14 +578,33 @@
   // La posición y el fin usan la duración del archivo que realmente suena.
   // La duración de búsqueda solo sirve mientras el motor no entrega metadatos.
   function getEffectiveDuration(audioEl, track) {
-    const official = (track && (track.duration || track.durationSeconds)) ? (track.duration || track.durationSeconds) : 0;
+    const official = Number(track?.durationSeconds || track?.duration) || 0;
     const raw = audioEl ? (audioEl.duration || 0) : 0;
     const rawValid = raw && !isNaN(raw) && raw > 0 && isFinite(raw);
 
-    if (rawValid) return raw;
+    if (rawValid) {
+      if (official > 0 && Math.abs(raw - 2 * official) <= 5) {
+        const url = audioEl.currentSrc || audioEl.src;
+        if (isDirectRelayUrl(url)) {
+          const source = Number(new URL(url, location.href).searchParams.get('dur'));
+          if (source > 0 && Math.abs(official - source) <= 2 && Math.abs(raw - 2 * source) <= 1) return source;
+        }
+      }
+      return raw;
+    }
     if (official > 0) return official;
     return 0;
   }
+
+  function supportsWebCrossfade() {
+    if (!isIOS) return true;
+    const probe = document.createElement('audio');
+    try {
+      probe.volume = 0.5;
+      return probe.volume === 0.5;
+    } catch { return false; }
+  }
+  const webCrossfadeAvailable = !nativeAudio && supportsWebCrossfade();
 
   function enrichTrackDuration(track, signal) {
     if (!track || (track.duration && track.duration > 0)) return;
@@ -1610,10 +1629,12 @@
         // Crossfade adaptativo
         if (
           S.crossfade &&
-          !isIOS &&
+          webCrossfadeAvailable &&
           !isBackground() &&
           !isCrossfading &&
           !isTransitioningTrack &&
+          S.repeat !== 'one' &&
+          !S.sleepTimerEndTrack &&
           timeLeft <= S.crossfadeDuration &&
           timeLeft > 0.8 &&
           S.queue.length > 1
@@ -3099,7 +3120,7 @@
     const wasYtMode = isYtMode;
     // Crossfade elegante SOLO de forma automática al final natural (!immediate).
     // Si la pista anterior sonaba por YouTube Web no hay deck que fundir.
-    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && !isIOS && !isBackground() && !wasYtMode && !preferYt;
+    const shouldCrossfade = S.crossfade && S.isPlaying && !immediate && webCrossfadeAvailable && !isBackground() && !wasYtMode && !preferYt;
 
     S.currentIndex = index;
     S.currentTrack = track;
@@ -8293,7 +8314,7 @@
     xfRange.value = S.crossfadeDuration;
     xfLabel.textContent = `${S.crossfadeDuration} segundos`;
     xfWrap.classList.toggle('hidden', !S.crossfade);
-    const xfAvailable = !isIOS || !!nativeAudio;
+    const xfAvailable = webCrossfadeAvailable || !!nativeAudio;
     xfToggle.disabled = !xfAvailable;
     xfRange.disabled = !xfAvailable;
     if (!xfAvailable) {
@@ -8302,8 +8323,8 @@
     }
     if ($('crossfadeAvailability')) $('crossfadeAvailability').textContent = nativeAudio
       ? 'Fundido nativo entre canciones, también con el iPhone bloqueado.'
-      : isIOS ? 'Disponible en el nuevo IPA con motor nativo. Safari/PWA de iPhone conserva el cambio normal de pista.'
-        : 'Fundido entre pistas en escritorio mientras la app permanece visible.';
+      : webCrossfadeAvailable ? 'Fundido entre canciones mientras la app está visible.'
+        : 'Este navegador no permite ajustar el volumen de cada pista. En iPhone, el IPA de FreeSong usa audio nativo para el crossfade.';
 
     xfToggle.addEventListener('change', () => {
       S.crossfade = xfToggle.checked;
