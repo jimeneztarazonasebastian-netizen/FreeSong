@@ -524,12 +524,13 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         fadeStart = nil
         current.player.volume = volume
     }
-    private func finishFade() {
+    @discardableResult
+    private func finishFade() -> Bool {
         guard fadeStart != nil, upcoming.ready,
               upcoming.player.timeControlStatus == .playing || time(upcoming) > 0 else {
             cancelFade()
             upcoming.player.pause()
-            return
+            return false
         }
         cancelFade()
         current.clear()
@@ -543,11 +544,12 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         lastProgressAt = ProcessInfo.processInfo.systemUptime
         if tracks.indices.contains(current.index) { loadArtwork(tracks[current.index]) }
         emit()
+        return true
     }
     private func ended() {
         guard !transitioning else { return }
         if sleepEndTrack { sleepEndTrack = false; pauseInternal(); return }
-        if fadeStart != nil && upcoming.ready { finishFade(); return }
+        if fadeStart != nil && finishFade() { return }
         if repeatMode == "one" {
             current.player.seek(to: .zero)
             previousTime = 0
