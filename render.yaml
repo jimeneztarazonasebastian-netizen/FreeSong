@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: freesong-mixer
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/mixer/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: MIXER_API_KEY
+        generateValue: true
+      - key: AUDIO_BACKEND
+        value: https://freesong-pied.vercel.app

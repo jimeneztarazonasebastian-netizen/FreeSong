@@ -72,6 +72,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var volume: Float = 0.88
     private var repeatMode = "all"
     private var shuffle = 0
+    private var requestedNextId = ""
+    private var requestedAfterId = ""
     private var fadeSeconds: Double = 0
     private var fadeStart: TimeInterval?
     private var fadeLength: Double = 0
@@ -167,6 +169,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             self.tracks = parsed
             self.requestId = call.getString("requestId") ?? UUID().uuidString
             self.applyOptions(call)
+            self.requestedNextId = call.getString("nextTrackId") ?? ""
+            self.requestedAfterId = call.getString("nextAfterId") ?? ""
             self.begin(index, position: max(0, call.getDouble("position") ?? 0))
             call.resolve()
         }
@@ -201,6 +205,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { call.resolve(); return }
             let oldShuffle = self.shuffle, oldRepeat = self.repeatMode
             self.applyOptions(call)
+            self.requestedNextId = call.getString("nextTrackId") ?? ""
+            self.requestedAfterId = call.getString("nextAfterId") ?? ""
             if call.getBool("refreshNext") == true { self.resetPreload() }
             if let values = call.getArray("queue", JSObject.self) {
                 let parsed = values.compactMap { AudioTrack($0) }
@@ -402,11 +408,16 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private func nextIndex(manual: Bool = false) -> Int? {
         guard !tracks.isEmpty else { return nil }
         if repeatMode == "one" && !manual { return current.index }
+        if let requested = requestedNextIndex() { return requested }
         if shuffle > 0 && tracks.count > 1 {
             let choices = tracks.indices.filter { $0 != current.index }
             return choices.randomElement()
         }
         return AudioPolicy.nextIndex(current: current.index, count: tracks.count, repeatMode: repeatMode, manual: manual)
+    }
+    private func requestedNextIndex() -> Int? {
+        guard tracks.indices.contains(current.index), tracks[current.index].id == requestedAfterId else { return nil }
+        return tracks.indices.first { $0 > current.index && tracks[$0].id == requestedNextId }
     }
     private func resetPreload() {
         preloadOperation = UUID()
@@ -424,6 +435,9 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if preloadPlan == nil {
             preloadPlan = AudioPolicy.preloadIndices(current: current.index, count: tracks.count,
                                                     repeatMode: repeatMode, shuffled: shuffle > 0)
+            if repeatMode != "one", let requested = requestedNextIndex() {
+                preloadPlan = [requested] + (preloadPlan ?? []).filter { $0 != requested }
+            }
         }
         guard let index = preloadPlan?.first else { return }
         preloadPlan?.removeFirst()

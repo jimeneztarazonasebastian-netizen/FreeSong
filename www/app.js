@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.35 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.36 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.35';
+  const APP_VERSION = '3.9.36';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1887,11 +1887,16 @@
   let plannedShuffle = null;
   // manualSkip=true lo usa el botón "siguiente": con repetir-una el avance manual
   // debe pasar a la siguiente pista, mientras que el fin de pista la repite.
+  let queuedNext = null;
   function getNextIndex(manualSkip = false) {
     if (S.queue.length === 0) return -1;
     // Con repetir-una la reproducción automática la gestiona handleTrackFinished;
     // aquí solo apuntamos a la misma pista para la precarga.
     if (!manualSkip && S.repeat === 'one') return S.currentIndex;
+    if (queuedNext?.after === S.queue[S.currentIndex]) {
+      const requested = S.queue.indexOf(queuedNext.track, S.currentIndex + 1);
+      if (requested >= 0) return requested;
+    }
     let next = S.currentIndex + 1;
     if (S.shuffleMode > 0) {
       if (plannedShuffle && plannedShuffle.current === S.queue[S.currentIndex] && plannedShuffle.index === S.currentIndex) {
@@ -3062,6 +3067,7 @@
   function nativeOptions() {
     return { quality: S.audioQuality, rate: S.playbackRate, volume: S.audioNormalize ? 0.88 : 1,
       repeat: S.repeat, shuffle: S.shuffleMode, crossfade: S.crossfade,
+      nextTrackId: queuedNext?.track?.id || '', nextAfterId: queuedNext?.after?.id || '',
       crossfadeDuration: S.crossfadeDuration, sleepEndTrack: S.sleepTimerEndTrack,
       sleepUntil: S.sleepTimerDeadline || 0 };
   }
@@ -5095,6 +5101,7 @@
         `).join('');
 
         $$('[data-artist-track-idx]').forEach((el) => {
+          bindSwipeNext(el, () => tracks[Number(el.dataset.artistTrackIdx)]);
           el.addEventListener('click', (e) => {
             if (e.target.closest('[data-artist-more]') || e.target.closest('[data-artist-download]')) return;
             const i = parseInt(el.getAttribute('data-artist-track-idx'), 10);
@@ -5286,6 +5293,7 @@
       `).join('');
 
       $$('[data-coll-idx]').forEach((el) => {
+        bindSwipeNext(el, () => tracks[Number(el.dataset.collIdx)]);
         el.addEventListener('click', (e) => {
           if (e.target.closest('[data-coll-more]') || e.target.closest('[data-coll-down]')) return;
           const i = parseInt(el.getAttribute('data-coll-idx'), 10);
@@ -5517,6 +5525,64 @@
         }
       });
     });
+  }
+
+  function queueTrackNext(track) {
+    if (!track?.id) return;
+    if (isCrossfading) finishCrossfadeNow();
+    const after = S.queue[S.currentIndex];
+    const item = { ...track };
+    S.queue.splice(Math.max(0, S.currentIndex + 1), 0, item);
+    queuedNext = { after, track: item };
+    plannedShuffle = null;
+    configureNativeAudio(true);
+    renderQueue();
+    saveSession(true);
+    if (after) prefetchNextTrack();
+    haptic('light');
+    showToast('Se reproducirá a continuación');
+  }
+
+  function bindSwipeNext(row, getTrack) {
+    if (row.dataset.swipeNextBound) return;
+    row.dataset.swipeNextBound = '1';
+    let gesture = null, suppressUntil = 0;
+    row.addEventListener('click', e => {
+      if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+    const reset = () => {
+      row.style.transform = '';
+      row.style.boxShadow = '';
+      row.style.transition = '';
+      gesture = null;
+    };
+    row.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1 || e.target.closest('button,a,.artist-link')) return;
+      const t = e.touches[0];
+      gesture = { x: t.clientX, y: t.clientY, active: false, dx: 0 };
+    }, { passive: true });
+    row.addEventListener('touchmove', e => {
+      if (!gesture || e.touches.length !== 1) { reset(); return; }
+      const t = e.touches[0], dx = t.clientX - gesture.x, dy = t.clientY - gesture.y;
+      if (!gesture.active) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { reset(); return; }
+        if (dx < -10) { reset(); return; }
+        if (dx < 12 || dx < Math.abs(dy) * 1.4) return;
+        gesture.active = true;
+      }
+      e.preventDefault();
+      gesture.dx = dx;
+      row.style.transition = 'none';
+      row.style.transform = `translateX(${Math.min(100, Math.max(0, dx))}px)`;
+      row.style.boxShadow = dx >= 70 ? 'inset 5px 0 #a855f7' : '';
+    }, { passive: false });
+    row.addEventListener('touchend', () => {
+      const commit = gesture?.active && gesture.dx >= 70;
+      if (gesture?.active) suppressUntil = Date.now() + 500;
+      reset();
+      if (commit) queueTrackNext(getTrack());
+    });
+    row.addEventListener('touchcancel', reset);
   }
 
   // --- Renderizado de la Cola (Siguiente) ---
@@ -5899,6 +5965,7 @@
     `).join('');
 
     container.querySelectorAll('[data-lib-track-idx]').forEach((card) => {
+      bindSwipeNext(card, () => tracks[Number(card.dataset.libTrackIdx)]);
       // Al tocar (dedo abajo) se resuelve ya la URL directa del relay: al soltar
       // la pista arranca sin esperar al proxy de Vercel.
       card.addEventListener('pointerdown', () => {
@@ -7610,6 +7677,7 @@
         });
       } else {
         $$('[data-search-idx]').forEach((el) => {
+          bindSwipeNext(el, () => currentSearchResults[Number(el.dataset.searchIdx)]);
           if (el.dataset.searchBound) return;
           el.dataset.searchBound = '1';
           el.addEventListener('pointerdown', () => {
@@ -8074,9 +8142,7 @@
 
     $('menuPlayNextBtn').addEventListener('click', () => {
       if (S.menuTargetTrack) {
-        S.queue.splice(S.currentIndex + 1, 0, S.menuTargetTrack);
-        renderQueue();
-        showToast('Se reproducirá a continuación');
+        queueTrackNext(S.menuTargetTrack);
       }
       closeSongMenu();
     });
