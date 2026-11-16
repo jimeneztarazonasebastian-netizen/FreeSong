@@ -16,6 +16,9 @@ private final class NativeDeck {
     var durationCorrected = false
     var pendingPosition: Double = 0
     var prerollReady = false
+    var prerollPending = false
+    var preparedAt: TimeInterval = 0
+    var lastPrerollAt: TimeInterval = 0
     var ready: Bool { player.currentItem?.status == .readyToPlay }
     func clear() {
         itemObservation = nil
@@ -30,6 +33,9 @@ private final class NativeDeck {
         durationCorrected = false
         pendingPosition = 0
         prerollReady = false
+        prerollPending = false
+        preparedAt = 0
+        lastPrerollAt = 0
     }
 }
 
@@ -328,6 +334,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         deck.index = index
         deck.pendingPosition = position
         deck.prerollReady = false
+        deck.preparedAt = ProcessInfo.processInfo.systemUptime
         deck.player.volume = deck === current ? volume : 0
         deck.player.replaceCurrentItem(with: item)
         deck.itemObservation = item.observe(\.status, options: [.new, .initial]) { [weak self, weak deck] item, _ in
@@ -351,12 +358,7 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                     self.emit()
                 } else if item.status == .readyToPlay {
                     self.correctEndTime(deck)
-                    deck.player.preroll(atRate: self.rate) { [weak deck] success in
-                        DispatchQueue.main.async {
-                            guard let deck = deck, deck.player.currentItem === item else { return }
-                            deck.prerollReady = success
-                        }
-                    }
+                    self.preroll(deck)
                 }
             }
         }
@@ -441,6 +443,21 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
     }
+    private func preroll(_ deck: NativeDeck) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard deck !== current, deck.ready, !deck.prerollReady, !deck.prerollPending,
+              now - deck.lastPrerollAt >= 2, let item = deck.player.currentItem else { return }
+        deck.lastPrerollAt = now
+        deck.prerollPending = true
+        deck.player.preroll(atRate: rate) { [weak deck] success in
+            DispatchQueue.main.async {
+                guard let deck = deck, deck.player.currentItem === item else { return }
+                deck.prerollPending = false
+                deck.prerollReady = success
+            }
+        }
+    }
+
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime, position = time(current)
         if abs(position - previousTime) > 0.01 {
@@ -457,7 +474,16 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             fail("La conexión de audio se detuvo. Reintenta para renovar la fuente.")
             return
         }
-        if wantsPlayback && position > 0.3 { prepareNext() }
+        if wantsPlayback && position > 0.3 {
+            if upcoming.index >= 0 && !upcoming.prerollReady && fadeStart == nil {
+                if upcoming.preparedAt > 0 && now - upcoming.preparedAt > 25 {
+                    upcoming.clear()
+                } else if upcoming.ready {
+                    preroll(upcoming)
+                }
+            }
+            prepareNext()
+        }
         correctEndTime(current)
         let remaining = duration(current) - position
         if fadeSeconds > 0 && wantsPlayback && !sleepEndTrack && repeatMode != "one" && fadeStart == nil,
@@ -485,7 +511,8 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             return
         }
-        let progress = min(1, max(0, (ProcessInfo.processInfo.systemUptime - start) / max(0.1, fadeLength)))
+        // La curva sigue audio reproducido, no tiempo gastado esperando la red.
+        let progress = min(1, max(0, time(upcoming) / Double(rate) / max(0.1, fadeLength)))
         let gains = AudioPolicy.fadeGains(progress: progress, volume: volume)
         current.player.volume = gains.outgoing
         upcoming.player.volume = gains.incoming
@@ -498,7 +525,12 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         current.player.volume = volume
     }
     private func finishFade() {
-        guard fadeStart != nil, upcoming.ready else { cancelFade(); return }
+        guard fadeStart != nil, upcoming.ready,
+              upcoming.player.timeControlStatus == .playing || time(upcoming) > 0 else {
+            cancelFade()
+            upcoming.player.pause()
+            return
+        }
         cancelFade()
         current.clear()
         active = 1 - active
@@ -576,6 +608,9 @@ public final class FreeSongAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 "position": max(time(current), current.pendingPosition), "duration": duration(current), "playing": playing,
                 "paused": !wantsPlayback, "buffering": wantsPlayback && !playing,
                 "crossfading": fadeStart != nil, "error": lastError,
+                "nextTrackId": tracks.indices.contains(upcoming.index) ? tracks[upcoming.index].id : "",
+                "nextReady": upcoming.ready, "nextPrerollReady": upcoming.prerollReady,
+                "nextBufferSeconds": upcoming.player.currentItem?.loadedTimeRanges.first?.timeRangeValue.duration.seconds ?? 0,
                 "mediaDuration": AudioPolicy.duration(actual: current.player.currentItem?.duration.seconds ?? 0, metadata: 0),
                 "sourceDuration": current.sourceDuration,
                 "source": current.source?.origin ?? "resolving", "sourceVideoId": current.source?.videoId ?? ""]
