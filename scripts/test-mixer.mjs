@@ -14,7 +14,7 @@ const upstream = http.createServer((req, res) => {
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const base = 'http://127.0.0.1:5249';
 const child = spawn(process.execPath, ['services/mixer/server.mjs'], {
-  env: { ...process.env, PORT: '5249', MIXER_API_KEY: key, AUDIO_BACKEND: `http://127.0.0.1:${upstream.address().port}` }, stdio: 'inherit'
+  env: { ...process.env, PORT: '5249', MIXER_API_KEY: key, RESOLVE_ON_HOST: '0', AUDIO_BACKEND: `http://127.0.0.1:${upstream.address().port}` }, stdio: 'inherit'
 });
 try {
   for (let i = 0; i < 50; i++) {

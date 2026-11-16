@@ -18,7 +18,8 @@ const authorized = req => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 const json = (res, code, body) => {
-  res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': 'https://freesong-pied.vercel.app' });
   res.end(JSON.stringify(body));
 };
 async function dispose(id) {
@@ -33,6 +34,44 @@ const sweep = setInterval(() => {
   for (const [id, session] of sessions) if (Date.now() - session.created > ttl) dispose(id).catch(() => {});
 }, 30_000);
 sweep.unref();
+
+async function audioSource(track) {
+  // Resolver desde el mismo host que consume el audio. La ruta de Vercel
+  // permanece como respaldo, pero no debe ser la única fuente del mezclador.
+  if (process.env.RESOLVE_ON_HOST !== '0') {
+    try {
+      const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST', headers: { 'Content-Type': 'application/json',
+          'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)' },
+        body: JSON.stringify({ videoId: track.id, context: { client: {
+          clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2',
+          osName: 'iPhone', osVersion: '18.3.2.22D82', hl: 'es', gl: 'US'
+        } } }), signal: AbortSignal.timeout(6000)
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const formats = data.streamingData?.adaptiveFormats || [];
+        const format = formats.find(f => f.itag === 140 && f.url) || formats.find(f => f.itag === 139 && f.url);
+        if (data.playabilityStatus?.status === 'OK' && format) {
+          const url = new URL(format.url);
+          if (url.protocol === 'https:' && url.hostname.endsWith('.googlevideo.com')) {
+            const probe = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(4000) });
+            try {
+              if ([200,206].includes(probe.status) && /^audio\//i.test(probe.headers.get('content-type') || '')) {
+                const reader = probe.body.getReader();
+                try { if (!(await reader.read()).done) return url.href; }
+                finally { await reader.cancel().catch(() => {}); }
+              }
+            } finally { if (!probe.body?.locked) await probe.body?.cancel().catch(() => {}); }
+          }
+        }
+      }
+    } catch { /* El respaldo se valida posteriormente por el decodificador. */ }
+  }
+  const source = new URL('/api/stream', backend);
+  source.search = new URLSearchParams({ id: track.id, title: track.title, artist: track.artist || '', itag: '140' });
+  return source.href;
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -63,11 +102,8 @@ const server = http.createServer(async (req, res) => {
       try { session.directory = await mkdtemp(join(tmpdir(), 'freesong-mix-')); }
       catch (error) { sessions.delete(id); throw error; }
       const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
-      for (const track of tracks) {
-        const source = new URL('/api/stream', backend);
-        source.search = new URLSearchParams({ id: track.id, title: track.title, artist: track.artist || '', itag: '140' });
-        args.push('-rw_timeout', '15000000', '-i', source.href);
-      }
+      const sources = await Promise.all(tracks.map(audioSource));
+      for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
       const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
       let previous = 'a0';
       for (let i = 1; i < tracks.length; i++) {

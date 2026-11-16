@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Prueba de mezcla · FreeSong</title>
+<style>
+body{margin:0;background:#100e19;color:#f4f1ff;font:17px system-ui;padding:max(28px,env(safe-area-inset-top)) 24px max(28px,env(safe-area-inset-bottom))}main{max-width:540px;margin:auto}a{color:#c4b5fd}h1{font-size:28px}label{display:block;margin:20px 0}input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;border:1px solid #6d5a91;font:inherit}input{margin-top:8px;background:#211c30;color:white}button{background:#7844c4;color:white;font-weight:700;margin:8px 0}button:disabled{opacity:.5}audio{width:100%;margin:22px 0}p{line-height:1.5}#status{padding:16px;background:#211c30;border-radius:12px}
+</style></head><body><main>
+<a href="/">← Volver a FreeSong</a><h1>Prueba de crossfade por streaming</h1>
+<p>Prueba experimental de dos canciones en un único flujo. No cambia tu cola ni guarda canciones en tu biblioteca. La mezcla puede fallar si las fuentes no entregan audio.</p>
+<form id="form"><label>Primera canción (ID de YouTube)<input id="first" value="Gl9F1Cs0nRU" pattern="[A-Za-z0-9_-]{1,64}" required></label>
+<label>Segunda canción (ID de YouTube)<input id="second" value="6_AkYGDpt0Q" pattern="[A-Za-z0-9_-]{1,64}" required></label>
+<label>Fundido en segundos<input id="seconds" type="number" min="1" max="10" value="6" required></label>
+<button id="prepare">Preparar mezcla</button></form>
+<p id="status" role="status">Comprobando conexión…</p>
+<audio id="audio" controls playsinline preload="none"></audio>
+<button id="stop" disabled>Detener prueba</button>
+<p>Cuando el audio esté listo, pulsa ▶ y bloquea el iPhone. Esta prueba usa una cola fija: todavía no admite insertar canciones ni actualizar sus títulos durante la mezcla.</p>
+</main><script src="/mixer-test.js"></script></body></html>

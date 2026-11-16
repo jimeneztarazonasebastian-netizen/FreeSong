@@ -4,9 +4,11 @@
 // También atiende /api/relay-info mediante rewrite para no exceder el límite de 12 funciones de Vercel Hobby.
 import { fetchYt, SEARCH_FILTERS, sendJson } from './_yt.js';
 import { relayInstances } from './_relay.js';
+import { mixerControl } from './_mixer.js';
 
 export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
+  if (urlObj.searchParams.get('mixer') === '1') return mixerControl(req, res, urlObj);
   const relays = relayInstances();
 
   // Si se solicita información de relays (/api/relay-info o ?relay=1)
@@ -45,7 +47,7 @@ export default async function handler(req, res) {
   return sendJson(res, {
     ok,
     checkedAt: new Date().toISOString(),
-    version: '3.9.36',
+    version: '3.9.37',
     engine: {
       name: 'YouTube Music (InnerTube)',
       reachable,
