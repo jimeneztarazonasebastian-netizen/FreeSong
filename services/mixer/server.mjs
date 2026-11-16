@@ -76,7 +76,8 @@ async function audioSource(track) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size });
+    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 1 });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
       if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
@@ -103,6 +104,7 @@ const server = http.createServer(async (req, res) => {
       catch (error) { sessions.delete(id); throw error; }
       const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
       const sources = await Promise.all(tracks.map(audioSource));
+      session.sources = sources.map(source => new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy');
       for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
       const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
       let previous = 'a0';
@@ -113,9 +115,22 @@ const server = http.createServer(async (req, res) => {
       args.push('-filter_complex', filters.join(';'), '-map', `[${previous}]`, '-vn', '-c:a', 'aac', '-b:a', '128k',
         '-threads', '1', '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event', '-hls_flags', 'temp_file',
         '-hls_segment_filename', join(session.directory, 'segment-%05d.ts'), join(session.directory, 'index.m3u8'));
-      session.process = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'ignore', 'ignore'] });
-      session.process.once('error', () => { session.status = 'failed'; });
-      session.process.once('exit', code => { session.status = code === 0 ? 'complete' : 'failed'; });
+      session.process = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      session.process.stderr.on('data', chunk => {
+        // Solo categorías: nunca registrar URLs firmadas, cookies ni contenido bruto.
+        const message = String(chunk);
+        const http = message.match(/(?:HTTP error|Server returned|HTTP\/\S+)[ :]*(\d{3})/i);
+        if (http) session.upstreamStatus = Number(http[1]);
+        if (/timed? ?out/i.test(message)) session.failure = 'source_timeout';
+        else if (/403|401|502|503|404/.test(message)) session.failure = 'source_unavailable';
+        else if (/Invalid data|Error opening input/i.test(message) && !session.failure) session.failure = 'invalid_audio';
+        else if (/No such filter|Error.*filter/i.test(message) && !session.failure) session.failure = 'mixing_error';
+      });
+      session.process.once('error', () => { session.status = 'failed'; session.failure = 'encoder_unavailable'; });
+      session.process.once('exit', code => {
+        session.status = code === 0 ? 'complete' : 'failed';
+        if (code !== 0 && !session.failure) session.failure = 'encoder_failed';
+      });
       return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: ttl / 1000 });
     }
     const match = /^\/sessions\/([a-f0-9]{48})(?:\/(index\.m3u8|segment-\d{5}\.ts))?$/.exec(url.pathname);
@@ -129,7 +144,8 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       if (req.method !== 'GET') return json(res, 405, { error: 'Método no admitido' });
-      if (!match[2]) return json(res, 200, { status: session.status });
+      if (!match[2]) return json(res, 200, { status: session.status, sources: session.sources,
+        failure: session.failure, upstreamStatus: session.upstreamStatus });
       let bytes;
       try { bytes = await readFile(join(session.directory, match[2])); }
       catch { return json(res, session.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }

@@ -46,6 +46,7 @@ export async function mixerControl(req, res, url) {
       if (!/^[a-f0-9]{48}$/.test(data.id)) throw new Error('Respuesta inválida');
       return reply(res, 202, { id: data.id, playlist: `${origin}/sessions/${data.id}/index.m3u8`, expiresIn: data.expiresIn });
     }
-    return reply(res, 200, { status: data.status, ok: data.ok });
+    return reply(res, 200, { status: data.status, ok: data.ok,
+      sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus });
   } catch { return reply(res, 502, { error: 'Render no respondió a tiempo; puede estar arrancando. Reintenta en un minuto.' }); }
 }
