@@ -13,8 +13,13 @@ try {
     await delay(100);
   }
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
-  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' });
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    viewport: { width: 393, height: 852 },
+    screen: { width: 393, height: 852 }
+  });
   await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', { value: true });
     const match = Cache.prototype.match;
     window.offlineReads = 0;
     Cache.prototype.match = function (request, ...args) {
@@ -101,6 +106,52 @@ try {
   assert.ok(Date.now() - slowOpenedAt < 4000, 'La interfaz local debe abrir antes de que responda la red lenta');
   console.log(`  apertura con 8 s de latencia de red: ${Date.now() - slowOpenedAt} ms`);
   await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+
+  const orphan = { id: 'testTrack01', title: 'Descarga sin archivo', artist: 'Prueba', duration: 8 };
+  const blockedTrack = { id: 'testTrack02', title: 'Fuente caída', artist: 'Prueba', duration: 8 };
+  const wav = Buffer.from(await page.evaluate(async () =>
+    Array.from(new Uint8Array(await (await fetch('/offline-audio/local-2')).arrayBuffer()))));
+  await page.route('https://yt.chocolatemoo53.com/**', route => route.fulfill({ status: 403, body: 'blocked' }));
+  await page.route('https://www.youtube.com/embed/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Vídeo de prueba</p>' }));
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/stream') {
+      if (url.searchParams.get('id') === orphan.id) return route.fulfill({ contentType: 'audio/wav', body: wav });
+      return route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    }
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      tracks: url.pathname === '/api/search' ? [orphan, blockedTrack] : [], shelves: [], queries: []
+    }) });
+  });
+  await page.evaluate(track => {
+    const downloads = JSON.parse(localStorage.getItem('fs_downloads'));
+    localStorage.setItem('fs_downloads', JSON.stringify([...downloads, track]));
+    localStorage.removeItem('fs_session_v2');
+  }, orphan);
+  await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  const insets = await page.evaluate(() => ({
+    header: document.querySelector('#appShell > header').firstElementChild.getBoundingClientRect().top,
+    toast: parseFloat(getComputedStyle(document.getElementById('toastNotification')).top),
+    update: parseFloat(getComputedStyle(document.getElementById('updateBanner')).top),
+    player: parseFloat(getComputedStyle(document.getElementById('fullPlayerSheet')).paddingTop)
+  }));
+  assert.ok(Object.values(insets).every(value => value > 62), 'Encabezado, reproductor y avisos deben respetar la Isla Dinámica');
+  await page.locator('[data-nav="search"]').first().click();
+  await page.locator('#searchInput').fill('audio de prueba');
+  await page.locator('#searchResultsList [data-search-idx]').first().click();
+  await page.waitForFunction(id => Array.from(document.querySelectorAll('audio')).some(a =>
+    a.dataset.trackId === id && a.currentTime > 0.2 && !a.paused && a.src.includes('/api/stream')), orphan.id);
+  assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem('fs_downloads')).some(t => t.id === id), orphan.id), false);
+  await page.locator('#searchResultsList [data-search-idx]').nth(1).click();
+  await page.locator('#streamFallbackLink').waitFor({ state: 'visible', timeout: 22000 });
+  assert.match(await page.locator('#playerTitle').textContent(), /Fuente caída/);
+  await page.locator('#streamFallbackLink').click();
+  assert.equal(await page.locator('#streamVideoDialog').isVisible(), true);
+  assert.match(await page.locator('#streamVideoFrame iframe').getAttribute('src'), /\/embed\/testTrack02\?/);
+  await page.getByRole('button', { name: 'Cerrar vídeo' }).click();
+  await page.waitForFunction(() => !document.querySelector('#streamVideoFrame iframe'));
+  assert.deepEqual(errors, []);
+  console.log('  isla dinámica protegida, descarga ausente recuperada por red y vídeo alternativo a petición');
   await context.close();
 
   const blocked = await browser.newContext({ serviceWorkers: 'block' });

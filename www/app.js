@@ -1,10 +1,22 @@
-// FreeSong Web Music Player v3.9.31 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.32 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
 
   // Detección precisa de iOS (iPhone, iPad, iPod, y Safari en iOS modernos)
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (/iPhone/.test(navigator.userAgent) && !window.Capacitor?.isNativePlatform?.() &&
+      (navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches)) {
+    const syncTopInset = () => {
+      // Algunas PWA ya reciben el viewport recortado. Solo reservar espacio
+      // adicional cuando el viewport ocupa físicamente toda la pantalla.
+      const tallPortrait = screen.height > 2 * screen.width && innerHeight > innerWidth;
+      const extendsUnderStatusBar = Math.abs(screen.height - innerHeight) < 24;
+      document.documentElement.style.setProperty('--ios-overlay-top', tallPortrait && extendsUnderStatusBar ? '62px' : '0px');
+    };
+    syncTopInset();
+    window.addEventListener('resize', syncTopInset);
+  }
 
   // --- Bloqueo global de Zoom en iOS Safari (Pinch-to-zoom y Doble Tap) ---
   document.addEventListener('touchmove', (e) => {
@@ -71,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.31';
+  const APP_VERSION = '3.9.32';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -159,7 +171,7 @@
     const textEl = $('toastText');
     if (!toast || !textEl) return;
     textEl.textContent = message;
-    toast.classList.remove('opacity-0', 'pointer-events-none', 'translate-y-[-10px]');
+    toast.classList.remove('opacity-0', 'translate-y-[-10px]');
     toast.classList.add('opacity-100', 'translate-y-0');
 
     if (toastTimer) clearTimeout(toastTimer);
@@ -1053,6 +1065,37 @@
   }
 
   // --- Manejo de Fallback Automático en Fallas de Audio ---
+  let manuallySelectedTrack = null;
+  let unavailableTrack = null;
+
+  function setStreamFallback(track) {
+    unavailableTrack = track || null;
+    const link = $('streamFallbackLink');
+    const available = /^[A-Za-z0-9_-]{11}$/.test(track?.id || '') && navigator.onLine !== false;
+    if (available) link.href = 'https://www.youtube.com/watch?v=' + track.id;
+    else link.removeAttribute('href');
+    $('streamFallback').classList.toggle('hidden', !available);
+  }
+
+  $('streamFallbackLink').addEventListener('click', (event) => {
+    const dialog = $('streamVideoDialog');
+    const track = unavailableTrack;
+    if (!track || !event.currentTarget.hasAttribute('href') ||
+        window.Capacitor?.isNativePlatform?.() || typeof dialog.showModal !== 'function') return;
+    event.preventDefault();
+    const frame = document.createElement('iframe');
+    frame.title = track.title;
+    frame.src = `https://www.youtube.com/embed/${track.id}?playsinline=1`;
+    frame.allow = 'encrypted-media; picture-in-picture';
+    frame.allowFullscreen = true;
+    frame.referrerPolicy = 'strict-origin-when-cross-origin';
+    $('streamVideoTitle').textContent = track.title;
+    $('streamVideoExternal').href = event.currentTarget.href;
+    $('streamVideoFrame').replaceChildren(frame);
+    dialog.showModal();
+  });
+  $('streamVideoDialog').addEventListener('close', () => $('streamVideoFrame').replaceChildren());
+
   function stopAfterStreamFailures() {
     Diag.inc('stops');
     consecutiveStreamFailures = 0;
@@ -1079,7 +1122,10 @@
     isTransitioningTrack = false;
     updatePlayPauseIcons(false, false);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-    showToast('El motor de audio no responde (posible bloqueo de YouTube). Compruébalo en Ajustes → Estado del servicio.', 4400);
+    const track = S.queue[S.currentIndex] || S.currentTrack;
+    setStreamFallback(track);
+    if (track && isIOSDevice && !isBackground()) openFullPlayer();
+    showToast('La fuente de audio no está disponible.', 3600);
   }
 
   // Devuelve false si ya se superó el máximo de fallos seguidos.
@@ -1232,6 +1278,24 @@
         src: describeAudioSource(player.currentSrc || player.src)
       });
 
+      const currentSource = player.currentSrc || player.src;
+      if (isIOSDevice && !isBackground() && /\/offline-audio\//.test(currentSource)) {
+        const local = await prepareOfflineTrack(track.id);
+        if (!canRecover() || currentSource !== (player.currentSrc || player.src)) return;
+        if (local && switchPlayerSource(player, local, resumeAt)) {
+          armStreamWatchdog(track, 7000);
+        } else if (navigator.onLine !== false) {
+          const direct = await resolveRelaySource(track.id, S.audioQuality).catch(() => null);
+          if (!canRecover() || currentSource !== (player.currentSrc || player.src)) return;
+          if (direct) rememberRelaySource(track, direct);
+          if (switchPlayerSource(player, direct?.url || buildStreamUrl(track), resumeAt)) armStreamWatchdog(track);
+        } else {
+          stopAfterStreamFailures();
+          showToast('Esta copia de audio no está guardada en este dispositivo.', 4000);
+        }
+        return;
+      }
+
       // No volver a anunciar el mismo enlace roto como "copia alternativa".
       const failedSource = player.currentSrc || player.src;
       for (const [key, source] of relaySources) {
@@ -1299,7 +1363,7 @@
         // Antes de caer en él, guarda la canción como audio local (blob): la
         // reproducción desde memoria sigue funcionando al bloquear el teléfono
         // y queda disponible offline para las próximas veces.
-        if (isIOSDevice && !track._blobTried && !isDownloaded(track.id) && navigator.onLine !== false) {
+        if (isIOSDevice && resumeAt > 1 && !track._blobTried && !isDownloaded(track.id) && navigator.onLine !== false) {
           track._blobTried = true;
           Diag.log('blob-prepare', { id: track.id });
           const blobStarted = Date.now();
@@ -1327,6 +1391,10 @@
         // reporta el usuario). Si el audio local tampoco se pudo preparar,
         // pasa a la siguiente en vez de dejar una sesión que se cortará.
         if (isIOSDevice) {
+          if (manuallySelectedTrack === track) {
+            stopAfterStreamFailures();
+            return;
+          }
           Diag.log('yt-skip-ios', { id: track.id });
           showToast('Esta canción no se pudo preparar; pasando a la siguiente…', 3200);
           noteStreamFailure();
@@ -2254,6 +2322,7 @@
       if (S.queue[S.currentIndex] !== track || isYtMode || !S.isPlaying || userIntentionalPause) return;
       if (player !== getActivePlayer()) return;
       if ((player.src || '').startsWith('blob:')) return;
+      if (player.currentTime > 0.35 && !player.paused) return;
 
       rememberRelaySource(track, source);
       // La resolución pudo comenzar antes del bloqueo. Guarda el enlace para
@@ -3063,6 +3132,7 @@
     S.isPlaying = !value.paused && !value.error;
     userIntentionalPause = !!value.paused;
     if (changed) {
+      setStreamFallback(null);
       lastKnownPosition = { id: track.id, seconds: value.position || 0, at: Date.now() };
       commitTrackUI(track, null);
     }
@@ -3085,14 +3155,17 @@
     if (value.error && nativeErrorShown !== `${track.id}:${value.error}`) {
       nativeErrorShown = `${track.id}:${value.error}`;
       Diag.log('native-audio-error', { message: value.error, id: track.id, source: value.source });
+      setStreamFallback(track);
       showToast(value.error, 6000);
     }
     saveSession();
   }
 
   function playTrack(index, immediate = false, fromEnded = false) {
+    if (index < 0 || index >= S.queue.length) return;
+    setStreamFallback(null);
     if (nativeAudio) {
-      if (index >= 0 && index < S.queue.length) startNativeTrack(index);
+      startNativeTrack(index);
       return;
     }
     plannedShuffle = null;
@@ -3105,11 +3178,8 @@
       clearTimeout(trackTransitionTimeout);
       trackTransitionTimeout = null;
     }
-    if (index < 0 || index >= S.queue.length) {
-      isTransitioningTrack = false;
-      return;
-    }
     const track = S.queue[index];
+    manuallySelectedTrack = !fromEnded && (immediate || !S.isPlaying) ? track : null;
     // Pistas que ya agotaron relay y proxy: YouTube Web las entrega sin pasar
     // por Invidious. Solo se recuerda unos minutos: al reintentar más tarde se
     // vuelve a probar HTML5 (YouTube Web no funciona en segundo plano en iOS).
@@ -3301,18 +3371,25 @@
           // Asignación directa y 100% síncrona en iOS Safari
           inPlayer.src = streamUrl;
           applyPendingResume(inPlayer, track);
+          const assignedSource = inPlayer.src;
           const playPromise = inPlayer.play();
           if (playPromise && playPromise.catch) {
             playPromise.catch((err) => {
-              if (S.queue[S.currentIndex] !== track || userIntentionalPause || inPlayer.dataset.trackId !== track.id) return;
+              if (S.queue[S.currentIndex] !== track || userIntentionalPause ||
+                  inPlayer.dataset.trackId !== track.id || inPlayer.src !== assignedSource) return;
               if (err.name !== 'AbortError') {
                 console.warn('inPlayer play error:', err);
-                if (fromEnded) {
+                if (err.name === 'NotAllowedError' && fromEnded) {
                   armAutoPlayRetry(track, inPlayer);
+                  return;
+                }
+                if (err.name !== 'NotAllowedError') {
+                  handleStreamFailure(track, inPlayer);
                   return;
                 }
                 S.isPlaying = false;
                 updatePlayPauseIcons(false, false);
+                if (!isBackground()) showToast('Toca Reproducir para continuar.', 3000);
               }
             });
           }
@@ -3501,6 +3578,10 @@
     pendingStreamRecovery = null;
     pendingYtStart = null;
     keepAudioAlive();
+    if (unavailableTrack && unavailableTrack === S.queue[S.currentIndex]) {
+      playTrack(S.currentIndex, true);
+      return;
+    }
     if (S.currentIndex === -1 && S.queue.length > 0) {
       playTrack(0);
       return;
@@ -6374,7 +6455,7 @@
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
         if (parsed.favorites || parsed.playlists || parsed.downloads) {
@@ -6385,7 +6466,20 @@
           if (Array.isArray(parsed.downloads)) {
             // El JSON contiene metadatos, no los bytes de audio. Conserva solo
             // descargas cuya copia local existe realmente en este dispositivo.
-            S.downloads = validTracks(parsed.downloads).filter((t) => S.offlineBlobUrls.has(t.id));
+            const known = new Set(S.downloads.map((t) => t.id));
+            const missing = validTracks(parsed.downloads).filter((t) => !known.has(t.id));
+            if (nativeAudio) await nativeAudio.restore().catch(() => {});
+            const cache = 'caches' in window
+              ? await caches.open('freesong-offline-audio-v1').catch(() => null)
+              : null;
+            for (const track of missing) {
+              const local = nativeAudio?.hasOffline(track.id) ||
+                await cache?.match('/offline-audio/' + encodeURIComponent(track.id)).catch(() => null);
+              if (local && !known.has(track.id)) {
+                S.downloads.push(track);
+                known.add(track.id);
+              }
+            }
             Store.write('fs_downloads', S.downloads);
           }
           if (Array.isArray(parsed.playlists)) {
@@ -6401,7 +6495,7 @@
             Store.write('fs_stats', S.stats);
           }
           renderLibrary();
-          showToast('¡Biblioteca restaurada con éxito!');
+          showToast('Biblioteca restaurada. La copia JSON no incluye los archivos de audio.', 4200);
         } else {
           alert('El archivo no tiene el formato de copia de seguridad de FreeSong.');
         }
