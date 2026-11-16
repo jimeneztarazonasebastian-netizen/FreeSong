@@ -65,7 +65,7 @@ actor AudioSourceResolver {
                 if !allowed.isEmpty { relays = Array(allowed.prefix(3)) }
             }
         }
-        let source = await withTaskGroup(of: AudioSource?.self) { group in
+        let source = await withTaskGroup(of: AudioSource?.self, returning: AudioSource?.self) { group in
             group.addTask { await self.resolveDirect(track, quality: quality) }
             group.addTask {
                 do { try await Task.sleep(nanoseconds: 1_500_000_000) }
