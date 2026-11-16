@@ -47,6 +47,7 @@ export async function mixerControl(req, res, url) {
       return reply(res, 202, { id: data.id, playlist: `${origin}/sessions/${data.id}/index.m3u8`, expiresIn: data.expiresIn });
     }
     return reply(res, 200, { status: data.status, ok: data.ok,
-      sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus });
+      sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus,
+      exitCode: data.exitCode, exitSignal: data.exitSignal });
   } catch { return reply(res, 502, { error: 'Render no respondió a tiempo; puede estar arrancando. Reintenta en un minuto.' }); }
 }

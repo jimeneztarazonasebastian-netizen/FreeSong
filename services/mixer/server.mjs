@@ -77,7 +77,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
-      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 1 });
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 2 });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
       if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
@@ -122,13 +122,16 @@ const server = http.createServer(async (req, res) => {
         const http = message.match(/(?:HTTP error|Server returned|HTTP\/\S+)[ :]*(\d{3})/i);
         if (http) session.upstreamStatus = Number(http[1]);
         if (/timed? ?out/i.test(message)) session.failure = 'source_timeout';
-        else if (/403|401|502|503|404/.test(message)) session.failure = 'source_unavailable';
+        else if (http || /Server returned [45]XX|HTTP error|Connection refused|Connection reset|Failed to resolve/i.test(message)) session.failure = 'source_unavailable';
         else if (/Invalid data|Error opening input/i.test(message) && !session.failure) session.failure = 'invalid_audio';
         else if (/No such filter|Error.*filter/i.test(message) && !session.failure) session.failure = 'mixing_error';
       });
       session.process.once('error', () => { session.status = 'failed'; session.failure = 'encoder_unavailable'; });
-      session.process.once('exit', code => {
+      session.process.once('exit', (code, signal) => {
+        session.exitCode = code;
+        session.exitSignal = signal;
         session.status = code === 0 ? 'complete' : 'failed';
+        if (signal) session.failure = 'encoder_terminated';
         if (code !== 0 && !session.failure) session.failure = 'encoder_failed';
       });
       return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: ttl / 1000 });
@@ -145,7 +148,8 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method !== 'GET') return json(res, 405, { error: 'Método no admitido' });
       if (!match[2]) return json(res, 200, { status: session.status, sources: session.sources,
-        failure: session.failure, upstreamStatus: session.upstreamStatus });
+        failure: session.failure, upstreamStatus: session.upstreamStatus,
+        exitCode: session.exitCode, exitSignal: session.exitSignal });
       let bytes;
       try { bytes = await readFile(join(session.directory, match[2])); }
       catch { return json(res, session.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }
