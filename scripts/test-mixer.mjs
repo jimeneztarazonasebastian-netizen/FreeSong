@@ -4,12 +4,14 @@ import { spawn, execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 const key = 'test-only-secret-for-local-mixer-123456';
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-const tone = frequency => execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=5`, '-f', 'wav', 'pipe:1']);
-const waves = [tone(440), tone(880)];
+const tone = (frequency, duration = 5) => execFileSync(ffmpeg,
+  ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', 'wav', 'pipe:1'],
+  { maxBuffer: 4 * 1024 * 1024 });
+const waves = { one: tone(440), two: tone(880), long: tone(440, 30), three: tone(660) };
 const upstream = http.createServer((req, res) => {
-  const index = new URL(req.url, 'http://localhost').searchParams.get('id') === 'one' ? 0 : 1;
+  const id = new URL(req.url, 'http://localhost').searchParams.get('id');
   res.writeHead(200, { 'Content-Type': 'audio/wav' });
-  res.end(waves[index]);
+  res.end(waves[id]);
 });
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const base = 'http://127.0.0.1:5249';
@@ -60,6 +62,67 @@ try {
   assert.equal((await fetch(base + session.status, { method: 'DELETE', headers })).status, 200);
   assert.equal((await fetch(base + session.status)).status, 404);
   console.log('MIXER OK: autorización, validación, HLS AAC, duración y mezcla real de dos tonos');
+
+  const tracks = ids => ids.map(id => ({ id, title: id }));
+  const editableResponse = await fetch(base + '/sessions', { method: 'POST', headers,
+    body: JSON.stringify({ tracks: tracks(['long', 'two']), crossfade: 2, editable: true }) });
+  assert.equal(editableResponse.status, 202);
+  const editable = await editableResponse.json();
+  assert.equal(editable.editable, true);
+  async function waitFor(read, predicate, ms = 10_000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const value = await read();
+      if (predicate(value)) return value;
+      await delay(100);
+    }
+    assert.fail('El flujo de prueba no llegó al estado esperado');
+  }
+  const list = async () => (await fetch(base + editable.playlist)).text();
+  const status = async () => (await fetch(base + editable.status)).json();
+  const patch = ids => fetch(base + editable.status, { method: 'PATCH', headers,
+    body: JSON.stringify({ part: 0, tracks: tracks(ids) }) });
+  const segmentUrl = name => new URL(name, base + editable.playlist);
+  const original = await waitFor(list, text => text.includes('segment-00004.ts'));
+  assert.doesNotMatch(original, /segment-00007|#EXT-X-ENDLIST/);
+  assert.equal((await fetch(segmentUrl('segment-00007.ts'))).status, 404);
+  const segment = async name => Buffer.from(await (await fetch(segmentUrl(name))).arrayBuffer());
+  const before = await segment('segment-00000.ts');
+  assert.equal((await patch(['two', 'three'])).status, 400);
+  const replacement = await patch(['long', 'three']);
+  assert.equal(replacement.status, 202);
+  const applied = await waitFor(status, value => value.edit?.status !== 'pending');
+  assert.equal(applied.edit?.status, 'applied', JSON.stringify(applied));
+  assert.equal(applied.revision, 1);
+  assert.deepEqual(await segment('segment-00000.ts'), before);
+
+  await waitFor(list, text => text.includes('segment-00007.ts'), 18_000);
+  const newDecode = spawn(ffmpeg, ['-v', 'error', '-i', segmentUrl('segment-00007.ts').href,
+    '-ss', '0.8', '-t', '0.2', '-ac', '1', '-ar', '8000', '-f', 'f32le', 'pipe:1']);
+  const replacementChunks = [];
+  newDecode.stdout.on('data', chunk => replacementChunks.push(chunk));
+  assert.equal(await new Promise(resolve => newDecode.on('close', resolve)), 0);
+  const replacementPcm = Buffer.concat(replacementChunks);
+  const replacementAmplitude = hz => {
+    let real = 0, imaginary = 0;
+    const samples = replacementPcm.length / 4;
+    assert.ok(samples > 1000);
+    for (let i = 0; i < samples; i++) {
+      const value = replacementPcm.readFloatLE(i * 4), angle = 2 * Math.PI * hz * i / 8000;
+      real += value * Math.cos(angle);
+      imaginary += value * Math.sin(angle);
+    }
+    return 2 * Math.hypot(real, imaginary) / samples;
+  };
+  assert.ok(replacementAmplitude(440) > 0.02 && replacementAmplitude(660) > 0.02 && replacementAmplitude(880) < 0.01);
+  const advertisedOverlap = await segment('segment-00007.ts');
+  assert.equal((await patch(['long', 'two'])).status, 202);
+  const rejected = await waitFor(status, value => value.edit?.status === 'rejected');
+  assert.equal(rejected.edit.reason, 'published');
+  assert.equal(rejected.revision, 1);
+  assert.deepEqual(await segment('segment-00007.ts'), advertisedOverlap);
+  assert.equal((await fetch(base + editable.status, { method: 'DELETE', headers })).status, 200);
+  console.log('MIXER EDIT OK: reemplazo real bajo la misma URL, segmentos previos intactos y transición publicada protegida');
 } finally {
   child.kill('SIGTERM');
   upstream.close();

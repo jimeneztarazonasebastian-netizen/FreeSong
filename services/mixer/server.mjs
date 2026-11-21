@@ -4,6 +4,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { identicalSegments, publishManifest, readManifest, segmentIndex } from './hls.mjs';
 
 // Servicio experimental: una sesión fija de 2–3 pistas, segmentos temporales.
 // No se conecta a la PWA hasta validar fuentes, controles y reproducción en iOS.
@@ -12,6 +14,7 @@ if (!key || key.length < 24) throw new Error('MIXER_API_KEY debe tener al menos 
 const backend = process.env.AUDIO_BACKEND || 'https://freesong-pied.vercel.app';
 const sessions = new Map();
 const ttl = 20 * 60_000;
+let replacementInFlight = false;
 const authorized = req => {
   const a = Buffer.from(req.headers.authorization || '');
   const b = Buffer.from(`Bearer ${key}`);
@@ -26,9 +29,8 @@ async function dispose(id) {
   const session = sessions.get(id);
   if (!session) return;
   sessions.delete(id);
-  session.process?.kill('SIGKILL');
-  // Ruta creada exclusivamente por mkdtemp; nunca se acepta una ruta del cliente.
-  await rm(session.directory, { recursive: true, force: true });
+  session.closed = true;
+  await Promise.all([discardRender(session.render), discardRender(session.candidate)]);
 }
 const sweep = setInterval(() => {
   for (const [id, session] of sessions) if (Date.now() - session.created > ttl) dispose(id).catch(() => {});
@@ -97,77 +99,151 @@ async function audioSource(track) {
   return source.href;
 }
 
+async function requestBody(req) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (Buffer.byteLength(body) > 8192) return null;
+  }
+  try { return JSON.parse(body); } catch { return null; }
+}
+
+function validTracks(tracks, max = 3) {
+  return Array.isArray(tracks) && tracks.length >= 2 && tracks.length <= max && tracks.every(t =>
+    t && typeof t.id === 'string' && (/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || audiusId.test(t.id)) &&
+    typeof t.title === 'string' && t.title.length <= 200 &&
+    (t.artist == null || (typeof t.artist === 'string' && t.artist.length <= 200)));
+}
+
+async function startRender(tracks, seconds, retained) {
+  const sources = await Promise.all(tracks.map((track, i) =>
+    retained?.tracks[i]?.id === track.id && retained.urls[i] ? retained.urls[i] : audioSource(track)));
+  const directory = await mkdtemp(join(tmpdir(), 'freesong-mix-'));
+  const render = { directory, tracks, urls: sources, status: 'preparing' };
+  render.sources = sources.map((source, i) => {
+    if (audiusId.test(tracks[i].id)) return 'audius';
+    return new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy';
+  });
+  const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-filter_complex_threads', '1'];
+  for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
+  const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
+  let previous = 'a0';
+  for (let i = 1; i < tracks.length; i++) {
+    filters.push(`[${previous}][a${i}]acrossfade=d=${seconds}:c1=qsin:c2=qsin[m${i}]`);
+    previous = `m${i}`;
+  }
+  args.push('-filter_complex', filters.join(';'), '-map', `[${previous}]`, '-vn', '-c:a', 'aac', '-b:a', '128k',
+    '-threads', '1', '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event', '-hls_flags', 'temp_file',
+    '-hls_segment_filename', join(directory, 'segment-%05d.ts'), join(directory, 'index.m3u8'));
+  render.process = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  render.exited = new Promise(resolve => render.process.once('close', resolve));
+  render.process.stderr.on('data', chunk => {
+    // Solo categorías: no registrar URLs firmadas ni respuestas crudas.
+    const message = String(chunk);
+    const http = message.match(/(?:HTTP error|Server returned|HTTP\/\S+)[ :]*(\d{3})/i);
+    if (http) render.upstreamStatus = Number(http[1]);
+    if (/timed? ?out/i.test(message)) render.failure = 'source_timeout';
+    else if (http || /Server returned [45]XX|HTTP error|Connection refused|Connection reset|Failed to resolve/i.test(message)) render.failure = 'source_unavailable';
+    else if (/Invalid data|Error opening input/i.test(message) && !render.failure) render.failure = 'invalid_audio';
+    else if (/No such filter|Error.*filter/i.test(message) && !render.failure) render.failure = 'mixing_error';
+  });
+  render.process.once('error', () => { render.status = 'failed'; render.failure = 'encoder_unavailable'; });
+  render.process.once('exit', (code, signal) => {
+    render.exitCode = code;
+    render.exitSignal = signal;
+    render.status = code === 0 ? 'complete' : 'failed';
+    if (signal) render.failure = 'encoder_terminated';
+    if (code !== 0 && !render.failure) render.failure = 'encoder_failed';
+  });
+  return render;
+}
+
+async function discardRender(render) {
+  if (!render) return;
+  render.process.kill('SIGKILL');
+  await render.exited;
+  await rm(render.directory, { recursive: true, force: true, maxRetries: 2 });
+}
+
+async function replaceRender(session, tracks) {
+  const old = session.render;
+  const edit = session.edit;
+  let candidate;
+  let checked = 0;
+  try {
+    candidate = await startRender(tracks, session.seconds, old);
+    session.candidate = candidate;
+    const deadline = Date.now() + 35_000;
+    while (!session.closed && !session.endPublished && Date.now() < deadline) {
+      if (candidate.status === 'failed') break;
+      const [current, next] = await Promise.all([
+        readManifest(old).catch(() => null), readManifest(candidate).catch(() => null)
+      ]);
+      const published = session.published;
+      // Keep startup headroom in the replacement before retiring the old encoder.
+      const hasHeadroom = next && (next.entries.length >= published + 3 ||
+        (next.ended && next.entries.length > published));
+      if (current && hasHeadroom) {
+        if (!await identicalSegments(old, candidate, current.entries, next.entries, checked, published)) {
+          edit.reason = 'published';
+          break;
+        }
+        checked = published;
+        // A GET may have added segments while we were comparing the files.
+        if (!session.closed && !session.endPublished && session.published === checked) {
+          session.render = candidate;
+          session.tracks = tracks;
+          session.revision++;
+          edit.status = 'applied';
+          candidate = null;
+          await discardRender(old).catch(() => {});
+          return;
+        }
+      }
+      await delay(250);
+    }
+  } catch {
+    edit.reason ||= 'source';
+  } finally {
+    session.candidate = null;
+    await discardRender(candidate).catch(() => {});
+    if (edit.status === 'pending') {
+      edit.status = 'rejected';
+      edit.reason ||= session.endPublished ? 'published' : 'not_ready';
+    }
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
-      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 2, audius: true });
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 3, audius: true, editableMix: true });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
       if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk;
-        if (Buffer.byteLength(body) > 8192) return json(res, 413, { error: 'Solicitud demasiado grande' });
-      }
-      let data;
-      try { data = JSON.parse(body); } catch { return json(res, 400, { error: 'JSON inválido' }); }
-      const tracks = data.tracks;
-      if (!Array.isArray(tracks) || tracks.length < 2 || tracks.length > 3 || tracks.some(t =>
-        !t || typeof t.id !== 'string' || !(/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || audiusId.test(t.id)) ||
-        typeof t.title !== 'string' || t.title.length > 200 ||
-        (t.artist != null && (typeof t.artist !== 'string' || t.artist.length > 200)))) {
-        return json(res, 400, { error: 'Se requieren 2–3 pistas válidas' });
-      }
+      const data = await requestBody(req);
+      const tracks = data?.tracks;
+      if (!validTracks(tracks)) return json(res, 400, { error: 'Se requieren 2–3 pistas válidas' });
+      if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
       const seconds = Number(data.crossfade ?? 6);
       if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10) return json(res, 400, { error: 'Crossfade entre 1 y 10 segundos' });
       const id = randomBytes(24).toString('hex');
       // Reservar antes de esperar I/O para respetar el límite bajo concurrencia.
-      const session = { created: Date.now(), status: 'preparing', directory: '', process: null };
+      const session = { created: Date.now(), editable: data.editable === true, seconds, tracks,
+        published: 0, startedAt: null, endPublished: false, render: null, revision: 0, edit: null };
       sessions.set(id, session);
-      try { session.directory = await mkdtemp(join(tmpdir(), 'freesong-mix-')); }
-      catch (error) { sessions.delete(id); throw error; }
-      const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
-      let sources;
-      try { sources = await Promise.all(tracks.map(audioSource)); }
-      catch {
-        await dispose(id);
-        return json(res, 502, { error: 'Audius no entregó audio reproducible para una de las pistas.' });
+      try {
+        session.render = await startRender(tracks, seconds);
+        if (sessions.get(id) !== session) {
+          await discardRender(session.render);
+          return json(res, 404, { error: 'Sesión caducada' });
+        }
+      } catch {
+        sessions.delete(id);
+        return json(res, 502, { error: 'El proveedor no entregó audio reproducible para una de las pistas.' });
       }
-      session.sources = sources.map((source, i) => {
-        if (audiusId.test(tracks[i].id)) return 'audius';
-        return new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy';
-      });
-      for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
-      const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
-      let previous = 'a0';
-      for (let i = 1; i < tracks.length; i++) {
-        filters.push(`[${previous}][a${i}]acrossfade=d=${seconds}:c1=qsin:c2=qsin[m${i}]`);
-        previous = `m${i}`;
-      }
-      args.push('-filter_complex', filters.join(';'), '-map', `[${previous}]`, '-vn', '-c:a', 'aac', '-b:a', '128k',
-        '-threads', '1', '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event', '-hls_flags', 'temp_file',
-        '-hls_segment_filename', join(session.directory, 'segment-%05d.ts'), join(session.directory, 'index.m3u8'));
-      session.process = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-      session.process.stderr.on('data', chunk => {
-        // Solo categorías: nunca registrar URLs firmadas, cookies ni contenido bruto.
-        const message = String(chunk);
-        const http = message.match(/(?:HTTP error|Server returned|HTTP\/\S+)[ :]*(\d{3})/i);
-        if (http) session.upstreamStatus = Number(http[1]);
-        if (/timed? ?out/i.test(message)) session.failure = 'source_timeout';
-        else if (http || /Server returned [45]XX|HTTP error|Connection refused|Connection reset|Failed to resolve/i.test(message)) session.failure = 'source_unavailable';
-        else if (/Invalid data|Error opening input/i.test(message) && !session.failure) session.failure = 'invalid_audio';
-        else if (/No such filter|Error.*filter/i.test(message) && !session.failure) session.failure = 'mixing_error';
-      });
-      session.process.once('error', () => { session.status = 'failed'; session.failure = 'encoder_unavailable'; });
-      session.process.once('exit', (code, signal) => {
-        session.exitCode = code;
-        session.exitSignal = signal;
-        session.status = code === 0 ? 'complete' : 'failed';
-        if (signal) session.failure = 'encoder_terminated';
-        if (code !== 0 && !session.failure) session.failure = 'encoder_failed';
-      });
-      return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: ttl / 1000 });
+      return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: ttl / 1000, editable: session.editable });
     }
     const match = /^\/sessions\/([a-f0-9]{48})(?:\/(index\.m3u8|segment-\d{5}\.ts))?$/.exec(url.pathname);
     if (match) {
@@ -179,13 +255,51 @@ const server = http.createServer(async (req, res) => {
         await dispose(match[1]);
         return json(res, 200, { ok: true });
       }
+      if (req.method === 'PATCH' && !match[2]) {
+        if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
+        const data = await requestBody(req);
+        if (!session.editable || session.endPublished) return json(res, 409, { error: 'La transición ya se envió al reproductor.' });
+        if (replacementInFlight) return json(res, 429, { error: 'Hay otro cambio de mezcla en preparación.' });
+        if (!Number.isInteger(data?.part) || data.part < 0 || data.part >= session.tracks.length ||
+            !validTracks(data.tracks, 4) || data.tracks.length <= data.part + 1 ||
+            session.tracks.slice(0, data.part + 1).some((t, i) => t.id !== data.tracks[i]?.id)) {
+          return json(res, 400, { error: 'El cambio debe conservar las pistas anteriores y la que está sonando.' });
+        }
+        const editId = typeof data.editId === 'string' && /^[a-f0-9]{32}$/.test(data.editId)
+          ? data.editId : randomBytes(16).toString('hex');
+        session.edit = { id: editId, status: 'pending' };
+        replacementInFlight = true;
+        void replaceRender(session, data.tracks).finally(() => { replacementInFlight = false; });
+        return json(res, 202, { edit: session.edit });
+      }
       if (req.method !== 'GET') return json(res, 405, { error: 'Método no admitido' });
-      if (!match[2]) return json(res, 200, { status: session.status, sources: session.sources,
-        failure: session.failure, upstreamStatus: session.upstreamStatus,
-        exitCode: session.exitCode, exitSignal: session.exitSignal });
+      if (!match[2]) {
+        const { status, sources, failure, upstreamStatus, exitCode, exitSignal } = session.render || { status: 'preparing' };
+        return json(res, 200, { status, sources, failure, upstreamStatus, exitCode, exitSignal,
+          revision: session.revision, edit: session.edit });
+      }
       let bytes;
-      try { bytes = await readFile(join(session.directory, match[2])); }
-      catch { return json(res, session.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }
+      try {
+        let render = session.render;
+        if (match[2] === 'index.m3u8') {
+          let manifest;
+          do {
+            render = session.render;
+            manifest = await readManifest(render);
+          } while (render !== session.render);
+          bytes = session.editable ? publishManifest(session, manifest) : manifest.text;
+        } else {
+          if (session.editable && segmentIndex(match[2]) >= session.published) {
+            return json(res, 404, { error: 'Segmento aún no publicado' });
+          }
+          try { bytes = await readFile(join(render.directory, match[2])); }
+          catch (error) {
+            if (render === session.render) throw error;
+            bytes = await readFile(join(session.render.directory, match[2]));
+          }
+          if (session.editable && session.startedAt == null) session.startedAt = Date.now();
+        }
+      } catch { return json(res, session.render?.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }
       res.writeHead(200, { 'Content-Type': match[2].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',
         'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': 'https://freesong-pied.vercel.app' });
       return res.end(bytes);

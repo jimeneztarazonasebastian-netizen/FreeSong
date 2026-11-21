@@ -5,7 +5,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 ## ✨ Características
 
 - **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`), reproduce en segundo plano al cambiar de app o bloquear el teléfono (`AudioSession` tipo `playback`) y conserva la cola, la canción y el segundo exacto al volver a abrir la app.
-- **Crossfade**: Doble deck HTML en escritorio y dos AVPlayer en el IPA 3.9.30. En Safari/PWA de iPhone y los IPA anteriores permanece deshabilitado. El motor nuevo requiere validación audible en el teléfono.
+- **Crossfade**: Dos reproductores HTML en escritorio y dos AVPlayer en el IPA. La PWA de iPhone puede preparar un bloque HLS en **Siguiente** para escucharlo con la pantalla bloqueada. Las fuentes y la validación en hardware se registran en [PENDIENTES.md](PENDIENTES.md).
 - **Música y Streaming**: Búsqueda en YouTube Music, streaming y descargas para escuchar sin conexión; disponibilidad sujeta a las fuentes externas.
 - **Buscar con contenido real**: cuadrícula de géneros con portadas inclinadas al estilo Spotify, mezclas listas para reproducir e historial, sin pantallas vacías.
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real. Puedes compartir el verso que suena como historia 9:16 y cambiar de verso dentro de la vista previa.
@@ -31,7 +31,7 @@ Si cambia el dominio, actualiza `server.url` en `capacitor.config.json` y vuelve
 ejecutar `npx cap sync ios` antes de compilar el IPA. La PWA se instala directamente
 desde ese mismo dominio.
 
-El IPA 3.9.30 combina interfaz Capacitor con audio nativo AVPlayer, cola y controles
+El IPA combina interfaz Capacitor con audio nativo AVPlayer, cola y controles
 remotos en Swift. Consulta [IOS.md](IOS.md) para instalar la actualización,
 renovar la firma gratuita y conocer los límites de verificación en hardware.
 
@@ -41,7 +41,7 @@ npm run build   # prepara iconos, fuentes, CSS y JavaScript
 npm start       # http://localhost:5173 (sirve www/ y emula las funciones de /api)
 npm run icons   # genera iconos PWA/iOS desde assets/icon-source.png
 npm run version:check       # verifica app, HTML, worker, health e iOS
-npm run version:set -- 3.9.30  # cambia la versión web y las dos configuraciones iOS
+npm run version:set -- 3.9.42  # cambia la versión web y las dos configuraciones iOS
 ```
 
 ## ✅ Pruebas automáticas
@@ -53,6 +53,7 @@ npm run version:set -- 3.9.30  # cambia la versión web y las dos configuracione
 - **Crossfade** (`npm run test:crossfade`): verifica que durante el fundido la tarjeta y la letra siguen en la canción que suena, y que solo cambian al terminar.
 - **Respaldo YouTube** (`npm run test:ytfallback`): simula un vídeo que la instancia solo ofrece como SABR y un proxy caído; comprueba que la app cambia al reproductor de YouTube Web en vez de quedarse cargando.
 - **Fin de pista en iPhone** (`npm run test:ios-ended`): emula Safari de iPhone con relay disponible y comprueba que al acabar una canción suena la siguiente en el mismo deck ya desbloqueado, que avanza aunque iOS pierda el evento `ended` y que no salta dos pistas.
+- **PWA y mezclador**: `npm run test:pwa` verifica la cola, el gesto y la edición del bloque con un perfil móvil de Chrome. `node scripts/test-mixer.mjs` usa FFmpeg para comprobar el fundido y que una edición preserve los segmentos HLS publicados.
 
 Requiere Google Chrome instalado. Usa `playwright-core` con el canal `chrome`, así que no descarga navegadores adicionales.
 

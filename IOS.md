@@ -1,4 +1,4 @@
-# FreeSong en iPhone — 3.9.31
+# FreeSong en iPhone
 
 El IPA usa una interfaz web Capacitor y un motor de audio Swift con dos AVPlayer.
 La cola, la precarga, el avance y el crossfade se ejecutan en código nativo. El
@@ -9,7 +9,7 @@ visual que Spotify en todos los dispositivos y estados.
 
 ## Actualizar el IPA
 
-Instalar FreeSong.ipa 3.9.31 desde AltStore → My Apps → +, sobre la aplicación
+Instalar el FreeSong.ipa vigente desde AltStore → My Apps → +, sobre la aplicación
 existente, con la misma cuenta de Apple. No borrar FreeSong como paso previo.
 Las bibliotecas de la PWA y del IPA son independientes.
 
@@ -37,10 +37,10 @@ Las descargas nuevas siguen usando el flujo de rangos existente y después se
 copian al almacenamiento nativo; no hay aún un gestor de descargas iOS en segundo plano.
 
 El crossfade nativo solo comienza con la siguiente pista preparada. Si falta
-audio preparado, continúa la transición normal. La web comprueba que el navegador
-permita controlar el volumen por pista antes de habilitar su fundido, que se
-ejecuta con la app visible. Safari de iPhone puede reservar ese control para el
-sistema. Para el fundido con pantalla bloqueada se usa el IPA con motor Swift.
+audio preparado, continúa la transición normal. La PWA para iPhone también
+ofrece una mezcla en el servidor desde **Siguiente**. Render entrega un flujo HLS
+con el fundido incorporado; consulta [la documentación del mezclador](services/mixer/README.md)
+para conocer la ventana de edición y los límites.
 
 ## Firma gratuita
 

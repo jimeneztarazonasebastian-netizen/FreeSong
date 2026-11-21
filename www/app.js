@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.41 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.42 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.41';
+  const APP_VERSION = '3.9.42';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -3093,6 +3093,10 @@
   const isAudiusTrack = track => /^audius:[A-Za-z0-9]{1,32}$/.test(track?.id || '');
   const audiusStream = track => `https://api.audius.co/v1/tracks/${track.id.slice(7)}/stream?app_name=FreeSong`;
   const queueMixStatus = message => { $('queueMixStatus').textContent = message; };
+  const mixerTrack = ({ id, title, artist }) => ({ id, title, artist });
+  const mixDuration = track => Number(track.durationSeconds || track.duration);
+  const mixOffsets = (durations, fade) => durations.map((_, i) =>
+    durations.slice(0, i).reduce((sum, duration) => sum + duration - fade, 0));
 
   async function queueMixRequest(method, id, body) {
     const query = id ? '&session=' + encodeURIComponent(id) : '';
@@ -3137,7 +3141,11 @@
   function seekQueueMix(seconds) {
     if (!queueMix?.active) return false;
     const { part, offsets, durations } = queueMix;
-    queueMixAudio.currentTime = offsets[part] + Math.max(0, Math.min(seconds, durations[part] - 0.1));
+    let target = offsets[part] + Math.max(0, Math.min(seconds, durations[part] - 0.1));
+    if (queueMix.editable && queueMixAudio.seekable.length) {
+      target = Math.min(target, queueMixAudio.seekable.end(queueMixAudio.seekable.length - 1) - 0.1);
+    }
+    queueMixAudio.currentTime = Math.max(0, target);
     return true;
   }
 
@@ -3156,7 +3164,7 @@
       mix.active = true;
       userIntentionalPause = false;
       queueMixAudio.src = mix.playlist;
-      queueMixAudio.playbackRate = S.playbackRate;
+      queueMixAudio.playbackRate = mix.editable ? 1 : S.playbackRate;
       queueMixAudio.play().catch(() => {
         if (queueMix !== mix) return;
         stopQueueMix('No se pudo iniciar el flujo. Vuelve a preparar la mezcla.');
@@ -3176,12 +3184,12 @@
   async function buildQueueMix(previousRelease) {
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
     const fade = Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
-    const durations = tracks.map(track => Number(track.durationSeconds || track.duration));
+    const durations = tracks.map(mixDuration);
     if (S.currentIndex < 0 || tracks.length < 2 || durations.some(d => !Number.isFinite(d) || d <= fade || d > 600)) {
       queueMixStatus('Selecciona al menos dos pistas seguidas con duración conocida, entre el fundido y 10 minutos.');
       return;
     }
-    const offsets = durations.map((_, i) => durations.slice(0, i).reduce((sum, d) => sum + d - fade, 0));
+    const offsets = mixOffsets(durations, fade);
     const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease };
     queueMix = mix;
     $('queueMixBtn').textContent = 'Cancelar preparación';
@@ -3190,7 +3198,7 @@
       await previousRelease;
       if (queueMix !== mix) return;
       const request = {
-        tracks: tracks.map(({ id, title, artist }) => ({ id, title, artist })), crossfade: fade
+        tracks: tracks.map(mixerTrack), crossfade: fade, editable: S.playbackRate === 1
       };
       let result;
       try { result = await queueMixRequest('POST', null, request); }
@@ -3203,6 +3211,7 @@
       }
       if (queueMix !== mix) { releaseQueueMix(result.id); return; }
       mix.id = result.id;
+      mix.editable = result.editable === true;
       const deadline = Date.now() + 110_000;
       while (queueMix === mix && Date.now() < deadline) {
         const state = await queueMixRequest('GET', mix.id);
@@ -3224,6 +3233,73 @@
     }
   }
 
+  async function replaceQueueMixNext(mix, track) {
+    if (mix.editing) {
+      showToast('Espera a que termine el cambio de la siguiente pista');
+      return;
+    }
+    const part = mix.part;
+    if (mix.tracks[part + 1]?.id === track.id) {
+      showToast('Esta canción ya es la siguiente');
+      return;
+    }
+    const tail = S.queue.slice(S.currentIndex + 1);
+    const selected = tail.find(t => t === track) || tail.find(t => t.id === track.id) || { ...track };
+    const tracks = [...mix.tracks.slice(0, part + 1), selected,
+      ...tail.filter(t => t.id !== selected.id)].slice(0, Math.max(3, part + 2));
+    const durations = tracks.map(mixDuration);
+    if (durations.some(d => !Number.isFinite(d) || d <= mix.fade || d > 600)) {
+      queueTrackNext(track, true);
+      return;
+    }
+    mix.editing = true;
+    queueMixStatus('Preparando la nueva siguiente sin interrumpir el audio…');
+    try {
+      const editId = crypto.randomUUID().replaceAll('-', '');
+      let accepted = false;
+      try {
+        const { edit } = await queueMixRequest('PATCH', mix.id, { editId, part, tracks: tracks.map(mixerTrack) });
+        accepted = edit?.id === editId;
+      } catch (error) {
+        if (error.status && error.status < 500) throw error;
+        // Si se perdió la respuesta, Render puede haber aceptado el cambio.
+      }
+      const deadline = Date.now() + 70_000;
+      while (queueMix === mix) {
+        let state;
+        try { state = await queueMixRequest('GET', mix.id); }
+        catch (error) {
+          if (error.status === 404 || Date.now() >= deadline) throw error;
+        }
+        if (queueMix !== mix) return;
+        const edit = state?.edit?.id === editId ? state.edit : null;
+        if (edit?.status === 'rejected' || (!edit && state && (!accepted || Date.now() >= deadline))) {
+          throw new Error('La transición anterior ya está lista');
+        }
+        if (edit?.status === 'applied') {
+          const start = S.queue.indexOf(mix.tracks[0]);
+          if (start < 0) return;
+          const rest = S.queue.slice(start).filter(t => !tracks.includes(t));
+          S.queue.splice(start, S.queue.length - start, ...tracks, ...rest);
+          mix.tracks = tracks;
+          mix.durations = durations;
+          mix.offsets = mixOffsets(durations, mix.fade);
+          mix.part = -1;
+          updateQueueMixPosition();
+          renderQueue();
+          queueMixStatus('Siguiente actualizada con crossfade.');
+          showToast('La siguiente canción cambió sin interrumpir el audio');
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch {
+      if (queueMix === mix) queueTrackNext(track, true);
+    } finally {
+      mix.editing = false;
+    }
+  }
+
   queueMixAudio.addEventListener('play', () => {
     if (!queueMix?.active) return;
     S.isPlaying = true;
@@ -3236,7 +3312,7 @@
     updatePlayPauseIcons(false, false);
     syncMediaSessionPlayback();
   });
-  queueMixAudio.addEventListener('timeupdate', () => {
+  function updateQueueMixPosition() {
     const mix = queueMix;
     if (!mix?.active) return;
     // La transición ya está codificada en HLS. Este evento solo sincroniza la interfaz.
@@ -3262,7 +3338,8 @@
     $('miniProgress').style.width = `${percent}%`;
     try { navigator.mediaSession?.setPositionState({ duration, position, playbackRate: queueMixAudio.playbackRate }); } catch {}
     saveSession(false, position);
-  });
+  }
+  queueMixAudio.addEventListener('timeupdate', updateQueueMixPosition);
   queueMixAudio.addEventListener('ended', () => {
     if (!queueMix?.active) return;
     const index = S.queue.indexOf(queueMix.tracks.at(-1));
@@ -5136,6 +5213,10 @@
   }
 
   function setPlaybackRate(rate) {
+    if (queueMix?.active && queueMix.editable && rate !== 1) {
+      showToast('La mezcla editable se reproduce a velocidad normal');
+      return;
+    }
     S.playbackRate = rate;
     configureNativeAudio();
     audioDecks.forEach((a) => {
@@ -5762,7 +5843,7 @@
     });
   }
 
-  function queueTrackNext(track) {
+  function queueTrackNext(track, afterBlockOnly = false) {
     if (!track?.id) return;
     if (isCrossfading) finishCrossfadeNow();
     const nowPlaying = S.queue[S.currentIndex];
@@ -5774,6 +5855,10 @@
     const lastMixedTrack = activeMix?.tracks.at(-1);
     const lastMixedIndex = lastMixedTrack ? S.queue.indexOf(lastMixedTrack) : -1;
     const afterBlock = lastMixedIndex > S.currentIndex;
+    if (!afterBlockOnly && activeMix?.editable && activeMix.part < 3 && lastMixedIndex >= 0) {
+      replaceQueueMixNext(activeMix, track);
+      return;
+    }
     if (afterBlock && activeMix.tracks.slice(activeMix.part + 1).some(t => t.id === track.id)) {
       showToast('Esta canción ya forma parte del bloque que está sonando');
       return;

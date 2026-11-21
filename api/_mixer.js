@@ -12,8 +12,8 @@ export async function mixerControl(req, res, url) {
   if (req.method === 'GET' && !id) return reply(res, 200, { configured: !!key, experimental: true });
   if (!key) return reply(res, 503, { error: 'Falta configurar MIXER_API_KEY en Vercel.' });
   if (id && !/^[a-f0-9]{48}$/.test(id)) return reply(res, 400, { error: 'Sesión inválida' });
-  if (!['GET', 'POST', 'DELETE'].includes(req.method) || (req.method !== 'POST' && !id)) return reply(res, 405, { error: 'Método no admitido' });
-  if (req.method === 'POST' || req.method === 'DELETE') {
+  if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method) || (req.method !== 'POST' && !id)) return reply(res, 405, { error: 'Método no admitido' });
+  if (req.method !== 'GET') {
     if (!allowed.has(req.headers.origin)) return reply(res, 403, { error: 'Origen no permitido' });
   }
   let body;
@@ -22,6 +22,8 @@ export async function mixerControl(req, res, url) {
     if (Date.now() - (recent.get(ip) || 0) < 15_000) return reply(res, 429, { error: 'Espera unos segundos antes de crear otra mezcla.' });
     if (recent.size > 500) recent.clear();
     recent.set(ip, Date.now());
+  }
+  if (req.method === 'POST' || req.method === 'PATCH') {
     let raw = req.body;
     if (raw == null) {
       raw = '';
@@ -44,10 +46,12 @@ export async function mixerControl(req, res, url) {
       { error: upstream.status === 401 ? 'La clave de Vercel no coincide con Render.' : (data.error || 'El mezclador no está disponible.') });
     if (req.method === 'POST') {
       if (!/^[a-f0-9]{48}$/.test(data.id)) throw new Error('Respuesta inválida');
-      return reply(res, 202, { id: data.id, playlist: `${origin}/sessions/${data.id}/index.m3u8`, expiresIn: data.expiresIn });
+      return reply(res, 202, { id: data.id, playlist: `${origin}/sessions/${data.id}/index.m3u8`,
+        expiresIn: data.expiresIn, editable: data.editable === true });
     }
+    if (req.method === 'PATCH') return reply(res, 202, { edit: data.edit });
     return reply(res, 200, { status: data.status, ok: data.ok,
       sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus,
-      exitCode: data.exitCode, exitSignal: data.exitSignal });
+      exitCode: data.exitCode, exitSignal: data.exitSignal, revision: data.revision, edit: data.edit });
   } catch { return reply(res, 502, { error: 'Render no respondió a tiempo; puede estar arrancando. Reintenta en un minuto.' }); }
 }

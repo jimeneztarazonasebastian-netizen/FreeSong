@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.41: App Shell local con actualizaciones de fondo
+// Service worker de FreeSong v3.9.42: App Shell local con actualizaciones de fondo
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.41';
+const VERSION = 'freesong-v3.9.42';
 const SHELL = [
   './',
   'index.html',

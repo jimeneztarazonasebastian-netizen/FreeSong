@@ -160,6 +160,8 @@ try {
   const mixId = 'a'.repeat(48);
   let mixReleased = false;
   const mixesRequested = [];
+  const mixEdits = [];
+  let mixEdit = null;
   await page.route('https://api.audius.co/v1/tracks/search?**', route => route.fulfill({ json: {
     data: ['First', 'Second', 'Third', 'Fourth', 'Fifth'].map((title, i) => ({ id: 'Track' + i, title, duration: 8, is_streamable: true, user: { name: 'Artist' } }))
   }, headers: { 'Access-Control-Allow-Origin': '*' } }));
@@ -169,9 +171,15 @@ try {
     if (route.request().method() === 'DELETE') { mixReleased = true; return route.fulfill({ json: { ok: true } }); }
     if (route.request().method() === 'POST') {
       mixesRequested.push(route.request().postDataJSON().tracks.map(t => t.id));
-      return route.fulfill({ json: { id: mixId, playlist: base + '/mixer-demo/test.wav' } });
+      return route.fulfill({ json: { id: mixId, playlist: base + '/mixer-demo/test.wav', editable: true } });
     }
-    return route.fulfill({ json: { status: 'complete' } });
+    if (route.request().method() === 'PATCH') {
+      const { editId, tracks } = route.request().postDataJSON();
+      mixEdits.push(tracks.map(t => t.id));
+      mixEdit = { id: editId, status: mixEdits.length === 1 ? 'applied' : 'rejected' };
+      return route.fulfill({ json: { edit: { id: editId, status: 'pending' } } });
+    }
+    return route.fulfill({ json: { status: 'complete', edit: mixEdit } });
   });
   await page.route('**/mixer-demo/test.wav', route => route.request().resourceType() === 'media' ||
     route.request().headers()['sec-fetch-dest'] === 'audio'
@@ -221,11 +229,17 @@ try {
     throw error;
   });
   await swipeQueue('Fifth');
+  await page.waitForFunction(() => document.querySelector('#queueMixStatus').textContent.includes('Siguiente actualizada'));
+  assert.deepEqual(mixEdits[0], ['audius:Track0', 'audius:Track4', 'audius:Track3']);
+  assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
+  assert.equal(await page.locator('#playerTitle').textContent(), 'First');
+  await swipeQueue('Third');
+  await page.waitForFunction(() => document.querySelector('#queueMixStatus').textContent.includes('después del bloque'));
   assert.match(await page.locator('#queueMixStatus').textContent(), /después del bloque/);
   assert.deepEqual((await page.locator('[data-queue-idx] p.text-white').allTextContents()).slice(0, 4),
-    ['Fourth', 'Second', 'Fifth', 'Third']);
+    ['Fifth', 'Fourth', 'Third', 'Second']);
   await page.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 3; });
-  await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Fourth');
+  await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Fifth');
   assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
   const released = page.waitForResponse(response => response.request().method() === 'DELETE' && response.url().includes(mixId));
   await page.getByRole('button', { name: 'Salir de la mezcla' }).click();

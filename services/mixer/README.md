@@ -1,6 +1,8 @@
 # Mezclador HLS experimental
 
-No está conectado a la PWA ni desplegado. No habilita todavía crossfade en iPhone.
+La PWA usa este servicio desde **Siguiente**. La prueba de dos pistas de Audius
+funcionó con el iPhone bloqueado. El comportamiento de la edición durante la
+reproducción se prueba con FFmpeg y requiere confirmación en el iPhone.
 
 Render Blueprint: `render.yaml` en la raíz, servicio Docker con plan `free` explícito.
 Crear una cuenta de Render, conectar este repositorio y crear un Blueprint.
@@ -27,8 +29,19 @@ Los identificadores aleatorios de sesión son credenciales de reproducción: no 
 - Integrar la línea de tiempo de canciones, metadatos, pausa, seek y cambios de cola en la PWA.
 - Verificar varios cambios de canción con un iPhone físico bloqueado, sin actualizar iOS.
 
-El servicio prepara una cola fija; todavía no admite insertar una canción en una mezcla en curso.
-El gesto de cola de la app normal es independiente de este prototipo.
+Las sesiones creadas con `editable: true` publican el manifiesto de forma progresiva.
+Un `PATCH /sessions/:id` autenticado conserva los IDs hasta el índice `part`,
+incluido, y prepara una variante con las pistas siguientes. El manifiesto y las
+URLs de audio permanecen iguales. Solo se cambia el render cuando los segmentos
+anunciados coinciden byte a byte y ya hay segmentos nuevos disponibles.
+
+Si Safari ya recibió la transición o la variante no se prepara a tiempo, la
+reproducción continúa con el bloque anterior y la PWA encola la solicitud al
+final de ese bloque. La anticipación de segmentos suele rondar 20 segundos y
+puede crecer mientras la sesión está pausada. Las sesiones editables reproducen
+a velocidad normal. Se admite una variante en preparación a la vez para acotar
+el uso de CPU en el plan gratuito. El código requiere desplegar la revisión
+vigente en Render además de Vercel.
 
 Render Free se suspende tras 15 minutos sin tráfico y el arranque puede tardar cerca de un minuto.
 Sin método de pago, al agotar el tráfico incluido suspende los servicios gratuitos.

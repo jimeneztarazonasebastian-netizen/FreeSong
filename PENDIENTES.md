@@ -2,7 +2,7 @@
 
 Fecha: 21 de noviembre de 2026.
 Base de la auditoría original: `35db606`. Estado de los avances actualizado
-para la versión web **3.9.41**.
+para la versión web **3.9.42**.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
 [OpenTune](https://github.com/justshivv/Opentune) y los límites que no conviene
@@ -175,10 +175,11 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
 - Si deslizas una pista antes de reproducir un bloque, la PWA reconstruye
   la mezcla con el orden nuevo. Durante la reproducción conserva el
   bloque HLS y permite insertar una pista después de él.
-- Falta permitir el reemplazo dentro del bloque activo mediante publicación
-  progresiva de segmentos y un límite explícito para cambios después de
-  que Safari haya cargado la transición. También falta encadenar bloques
-  con fundido y validar la cola habitual con el iPhone bloqueado.
+- El reemplazo en una sesión activa está implementado y probado localmente con
+  FFmpeg y Audius. Se aplica cuando la transición aún no se publicó y la
+  variante está lista; se conservan los segmentos ya publicados. Queda
+  validarlo desde Render y en la cola habitual del iPhone bloqueado. También
+  falta encadenar bloques con fundido.
 - Render intenta obtener una URL directa de audio y recurre a `/api/stream`
   cuando la primera vía no devuelve audio reproducible.
 
@@ -198,9 +199,9 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
 
 ### 4.6 Documentación desactualizada
 
-`README.md` e `IOS.md` mezclan versiones 3.9.28, 3.9.30 y 3.9.31, y la lista de
-tests no incluye varias suites actuales (`ios-background`, `download`, `diag`,
-`pwa`, `native-adapter`, `mixer-bridge`, etc.). Hay que unificarlos con 3.9.37.
+Se actualizó la descripción del crossfade en `README.md` e `IOS.md`, y se
+documentaron la verificación de la PWA y el mezclador. La sección de arranque
+rápido de la versión 3.9.28 sigue como referencia histórica.
 
 ---
 
@@ -256,6 +257,6 @@ tests no incluye varias suites actuales (`ios-background`, `download`, `diag`,
 1. Completar la validación física del IPA vigente (2.1).
 2. Añadir el fallback HLS (3.1) y confirmar la política de sesión de audio (3.2).
 3. Verificar el troceado de descargas y adoptar `loudnessDb` (3.3 y 3.4).
-4. Validar la cola HLS en el iPhone y permitir reemplazar transiciones que
-   todavía no se hayan entregado al reproductor (4.3).
+4. Desplegar y verificar el reemplazo HLS desde Render. Validarlo también en
+   el iPhone y encadenar bloques con fundido (4.3).
 5. Abordar letras multifuente como feature independiente (4.1).
