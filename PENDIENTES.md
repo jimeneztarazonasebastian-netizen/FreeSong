@@ -154,15 +154,22 @@ Unison + subtítulos del vídeo, con offset por canción y palabra por palabra.
 
 ### 4.3 Mezclador HLS experimental (Render)
 
-Decidir si se continúa o se archiva. Si se continúa, faltan los pendientes de
-`services/mixer/README.md`:
+Render Free y el puente de Vercel están operativos. La prueba en producción
+aceptó la sesión, pero ambas canciones cayeron al proxy. Por separado,
+`/api/stream` devolvió `502 STREAM_UNAVAILABLE` para ambas, con rechazos
+`403` de origen. La mezcla no produjo segmentos. El endpoint público de Render
+reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
 
-- Cuenta y despliegue real en Render, coste cero y suspensión por inactividad.
+- Validar en un iPhone bloqueado la demostración HLS de dos tonos en
+  `/mixer-test.html`. Esta prueba separa la reproducción en Safari de los
+  problemas de las fuentes de canciones.
+- Conseguir una fuente estable de audio y medirla desde Render.
 - Medir tiempo al primer segmento y CPU real.
-- API autenticada desde Vercel, sesiones por usuario y renovación de cola.
+- Control de sesiones por usuario y renovación de cola.
 - Integrar línea de tiempo, metadatos, pausa, seek y cambios de cola en la PWA.
 - Probar varios cambios con un iPhone bloqueado.
-- Hoy depende de `/api/stream`: si la fuente falla, la mezcla falla igual.
+- Render intenta obtener una URL directa de audio y recurre a `/api/stream`
+  cuando la primera vía no devuelve audio reproducible.
 
 ### 4.4 Audio avanzado (solo después de P0/P1)
 
