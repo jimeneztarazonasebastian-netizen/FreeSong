@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from 'playwright-core';
+import { chromium, devices } from 'playwright-core';
 
 const PORT = 5238;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -113,7 +113,7 @@ async function run() {
   });
   const errors = [];
   try {
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    const context = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' });
     await context.addInitScript((xf) => {
       localStorage.setItem('fs_crossfade', 'false');
       localStorage.setItem('fs_crossfade_dur', String(xf));
@@ -194,8 +194,30 @@ async function run() {
     await swipe(90, 0);
     await page.waitForFunction(() => document.querySelector('[data-queue-idx]')?.textContent.includes('Cancion crossfade 3'));
     assert.match((await state(page)).title, /Cancion crossfade 1/, 'Deslizar no debe interrumpir la canción');
-    await page.evaluate(() => document.getElementById('playerNextBtn').click());
-    await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a=>a.dataset.trackId==='xf-3' && !a.paused && a.currentTime>0.1));
+    assert.equal(await page.locator('[data-queue-idx]').count(), initial, 'La pista existente se mueve sin duplicarse');
+    // Deslizar otra pista ya en Siguiente con entrada táctil del navegador.
+    await page.evaluate(() => {
+      document.getElementById('miniPlayer').click();
+      document.getElementById('tabQueueBtn').click();
+    });
+    const fourth = page.locator('[data-queue-idx]').filter({ hasText: 'Cancion crossfade 4' });
+    await fourth.scrollIntoViewIfNeeded();
+    const box = await fourth.boundingBox();
+    const input = await context.newCDPSession(page);
+    const x = Math.round(box.x + box.width * 0.34), y = Math.round(box.y + box.height / 2);
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    for (const dx of [20, 40, 60, 90]) {
+      await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx, y }] });
+    }
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForFunction(() => document.querySelector('[data-queue-idx]')?.textContent.includes('Cancion crossfade 4'));
+    assert.equal(await page.locator('[data-queue-idx]').count(), initial);
+    assert.match((await state(page)).title, /Cancion crossfade 1/);
+    await page.evaluate(() => {
+      const audio = Array.from(document.querySelectorAll('audio')).find(a => a.dataset.trackId === 'xf-1' && !a.paused);
+      audio.currentTime = audio.duration - 0.3;
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a=>a.dataset.trackId==='xf-4' && !a.paused && a.currentTime>0.1));
     assert.deepEqual(errors, []);
     console.log('SWIPE NEXT OK: vertical/cancelar conservan cola; deslizar añade siguiente sin reproducirla inmediatamente');
   } finally {

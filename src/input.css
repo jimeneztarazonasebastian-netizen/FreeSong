@@ -647,6 +647,30 @@ body[data-aurora="off"] .aurora-bg { display: none; }
   touch-action: pan-y;
 }
 
+.swipe-next-row {
+  position: relative;
+  touch-action: pan-y;
+}
+
+.swipe-next-active::before {
+  content: 'Siguiente';
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.65rem;
+  background: #3b225c;
+  color: #f3e8ff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.swipe-next-ready::before {
+  background: #7e22ce;
+}
+
 .queue-row-dragging {
   position: relative;
   z-index: 5;

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.39 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.40 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.39';
+  const APP_VERSION = '3.9.40';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -4985,6 +4985,7 @@
       `).join('');
 
       $$('[data-similar-idx]').forEach((el) => {
+        bindSwipeNext(el, () => filtered[Number(el.dataset.similarIdx)]);
         el.addEventListener('click', (e) => {
           if (e.target.closest('[data-add-queue-idx]')) return;
           const idx = parseInt(el.getAttribute('data-similar-idx'), 10);
@@ -5745,14 +5746,22 @@
 
   function queueTrackNext(track) {
     if (!track?.id) return;
-    if (queueMix) {
-      showToast('Sal de la mezcla para cambiar sus pistas');
+    if (queueMix?.active && queueMix.part < queueMix.tracks.length - 1) {
+      showToast('La siguiente pista ya está mezclada. Podrás cambiarla al llegar a la última del bloque.');
       return;
     }
+    if (queueMix && !queueMix.active) stopQueueMix('Cola actualizada. Prepara otra mezcla con el orden nuevo.');
     if (isCrossfading) finishCrossfadeNow();
     const after = S.queue[S.currentIndex];
-    const item = { ...track };
-    S.queue.splice(Math.max(0, S.currentIndex + 1), 0, item);
+    if (after?.id === track.id) {
+      showToast('Esta canción ya está sonando');
+      return;
+    }
+    const next = Math.max(0, S.currentIndex + 1);
+    const existing = S.queue.findIndex((t, i) => i >= next && t === track);
+    const matching = existing >= 0 ? existing : S.queue.findIndex((t, i) => i >= next && t.id === track.id);
+    const item = matching >= 0 ? S.queue.splice(matching, 1)[0] : { ...track };
+    S.queue.splice(next, 0, item);
     queuedNext = { after, track: item };
     plannedShuffle = null;
     configureNativeAudio(true);
@@ -5766,6 +5775,7 @@
   function bindSwipeNext(row, getTrack) {
     if (row.dataset.swipeNextBound) return;
     row.dataset.swipeNextBound = '1';
+    row.classList.add('swipe-next-row');
     let gesture = null, suppressUntil = 0;
     row.addEventListener('click', e => {
       if (Date.now() < suppressUntil) { e.preventDefault(); e.stopImmediatePropagation(); }
@@ -5774,6 +5784,7 @@
       row.style.transform = '';
       row.style.boxShadow = '';
       row.style.transition = '';
+      row.classList.remove('swipe-next-active', 'swipe-next-ready');
       gesture = null;
     };
     row.addEventListener('touchstart', e => {
@@ -5789,12 +5800,13 @@
         if (dx < -10) { reset(); return; }
         if (dx < 12 || dx < Math.abs(dy) * 1.4) return;
         gesture.active = true;
+        row.classList.add('swipe-next-active');
       }
       e.preventDefault();
       gesture.dx = dx;
       row.style.transition = 'none';
       row.style.transform = `translateX(${Math.min(100, Math.max(0, dx))}px)`;
-      row.style.boxShadow = dx >= 70 ? 'inset 5px 0 #a855f7' : '';
+      row.classList.toggle('swipe-next-ready', dx >= 70);
     }, { passive: false });
     row.addEventListener('touchend', () => {
       const commit = gesture?.active && gesture.dx >= 70;
@@ -5905,6 +5917,7 @@
     `).join('');
 
     $$('[data-queue-idx]').forEach((el) => {
+      bindSwipeNext(el, () => S.queue[Number(el.dataset.queueIdx)]);
       el.addEventListener('click', (e) => {
         if (Date.now() < queueClickSuppressUntil) return;
         if (e.target.closest('[data-queue-del]') || e.target.closest('[data-queue-more]') || e.target.closest('[data-queue-drag]')) return;
@@ -6030,6 +6043,7 @@
       const dx = t.clientX - swipe.x;
       const dy = t.clientY - swipe.y;
       if (!swipe.active) {
+        if (dx > 10) { swipe = null; return; }
         if (Math.abs(dx) < 10) return;
         if (Math.abs(dx) < Math.abs(dy) * 1.4) {
           swipe = null;
@@ -7096,6 +7110,7 @@
     `).join('');
 
     $$('[data-trend-idx]').forEach((row) => {
+      bindSwipeNext(row, () => items[Number(row.dataset.trendIdx)]);
       row.addEventListener('click', (e) => {
         if (e.target.closest('[data-trend-like]') || e.target.closest('[data-trend-more]')) return;
         const idx = parseInt(row.getAttribute('data-trend-idx'), 10);
