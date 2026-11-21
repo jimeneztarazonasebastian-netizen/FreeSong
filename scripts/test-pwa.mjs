@@ -43,6 +43,13 @@ try {
     await navigator.serviceWorker.ready;
   });
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  // Una navegación bajo el worker activo debe abrir la página de mezcla.
+  await page.route('**/api/health?mixer=1', route => route.fulfill({ json: { configured: true } }));
+  for (const path of ['/mixer-test', '/mixer-test.html']) {
+    await page.goto(base + path);
+    await page.getByRole('button', { name: 'Usar dos pistas de Audius' }).click();
+    assert.equal(await page.locator('#first').inputValue(), 'audius:V66vyPP');
+  }
   const keys = await page.evaluate(() => caches.keys());
   assert.ok(keys.includes('another-app-cache'), 'No debe borrar cachés ajenas');
   assert.ok(keys.includes('freesong-offline-audio-v1'), 'Debe conservar audio offline');

@@ -17,7 +17,8 @@ const TYPES = {
 };
 createServer(async (req, res) => {
   try {
-    const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    const urlPath = pathname === '/mixer-test' ? '/mixer-test.html' : pathname;
     if (urlPath.startsWith('/api/')) {
       // Imita los helpers que Vercel agrega a req/res en las funciones /api
       const parsed = new URL(req.url, 'http://x');

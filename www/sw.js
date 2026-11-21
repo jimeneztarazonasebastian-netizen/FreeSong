@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.37: App Shell local con actualizaciones de fondo
+// Service worker de FreeSong v3.9.38: App Shell local con actualizaciones de fondo
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.37';
+const VERSION = 'freesong-v3.9.38';
 const SHELL = [
   './',
   'index.html',
@@ -55,6 +55,10 @@ self.addEventListener('fetch', (event) => {
   if (!['GET', 'HEAD'].includes(req.method) || url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith('/api/')) return;
+  // La prueba es una página independiente. Su navegación, redirecciones y
+  // segmentos HLS deben ir a la red, sin recibir el shell ni perder rangos.
+  if (['/mixer-test', '/mixer-test.html', '/mixer-test.js'].includes(url.pathname) ||
+      url.pathname.startsWith('/mixer-demo/')) return;
 
   // El <audio> puede arrancar dentro del gesto sin esperar a leer toda la
   // biblioteca en memoria. Safari solicita rangos del archivo local elegido.
