@@ -1,8 +1,8 @@
 # Pendientes y mejoras de FreeSong
 
 Fecha: 21 de noviembre de 2026.
-Base revisada: `main` en el commit `35db606`, versión web/IPA **3.9.37**.
-Árbol de trabajo limpio y sincronizado con `origin/main`.
+Base de la auditoría original: `35db606`. Estado de los avances actualizado
+para la versión web **3.9.41**.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
 [OpenTune](https://github.com/justshivv/Opentune) y los límites que no conviene
@@ -25,9 +25,10 @@ cómo se comprueba.
   `health`, `explore`, `artist`, `album`, `search`, `queue`, `playlist`,
   `lyrics`, `import`, `home`, `suggestions`, `stream`. `_hls`, `_yt`, `_relay`
   y `_mixer` son módulos compartidos, no rutas.
-- El mezclador HLS de Render es experimental: no está conectado a la PWA y se
-  prueba desde `/mixer-test.html`.
-- Las versiones web, worker e iOS están sincronizadas en 3.9.37.
+- El mezclador HLS de Render entregó una mezcla completa de dos canciones
+  de Audius. La página experimental se probó con el iPhone bloqueado.
+- La PWA incluye búsqueda de Audius, gestos de cola y reproducción HLS en
+  **Siguiente** por bloques de hasta tres pistas.
 
 ---
 
@@ -171,13 +172,13 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
   evita sustituciones automáticas.
 - Medir tiempo al primer segmento y CPU real.
 - Control de sesiones por usuario y renovación de cola.
-- La cola de la PWA permite preparar y reproducir un bloque HLS de hasta
-  tres pistas, incluida la actual. Búsqueda Audius, pausa y posición
-  por pista están conectadas. Los tiempos se estiman con la duración del
-  catálogo. La cola no se puede editar durante el bloque.
-- Falta encadenar bloques con fundido y validar la integración de la cola
-  habitual en un iPhone bloqueado. La página experimental de Audius ya se
-  probó con el teléfono bloqueado.
+- Si deslizas una pista antes de reproducir un bloque, la PWA reconstruye
+  la mezcla con el orden nuevo. Durante la reproducción conserva el
+  bloque HLS y permite insertar una pista después de él.
+- Falta permitir el reemplazo dentro del bloque activo mediante publicación
+  progresiva de segmentos y un límite explícito para cambios después de
+  que Safari haya cargado la transición. También falta encadenar bloques
+  con fundido y validar la cola habitual con el iPhone bloqueado.
 - Render intenta obtener una URL directa de audio y recurre a `/api/stream`
   cuando la primera vía no devuelve audio reproducible.
 
@@ -240,7 +241,7 @@ tests no incluye varias suites actuales (`ios-background`, `download`, `diag`,
 
 ---
 
-## 7. Estado de Git revisado
+## 7. Estado de Git en la auditoría original
 
 - `main` = `origin/main` = `35db606`; sin cambios locales pendientes.
 - Rama local `codex/iphone-native-audio`: un commit por delante de su remoto,
@@ -252,8 +253,9 @@ tests no incluye varias suites actuales (`ios-background`, `download`, `diag`,
 
 ## 8. Siguiente trabajo recomendado
 
-1. Completar la validación física del IPA 3.9.37 (2.1).
+1. Completar la validación física del IPA vigente (2.1).
 2. Añadir el fallback HLS (3.1) y confirmar la política de sesión de audio (3.2).
 3. Verificar el troceado de descargas y adoptar `loudnessDb` (3.3 y 3.4).
-4. Decidir el futuro del mezclador HLS (4.3).
+4. Validar la cola HLS en el iPhone y permitir reemplazar transiciones que
+   todavía no se hayan entregado al reproductor (4.3).
 5. Abordar letras multifuente como feature independiente (4.1).

@@ -29,7 +29,7 @@ try {
   });
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('pageerror', (e) => errors.push(e.stack || e.message));
   const youtubeRequests = [];
   page.on('request', (req) => { if (req.url().includes('youtube.com/iframe_api')) youtubeRequests.push(req.url()); });
   // Recurso del mismo origen sin JS: instala el worker sin arrancar todavía
@@ -159,15 +159,16 @@ try {
   await page.waitForFunction(() => !document.querySelector('#streamVideoFrame iframe'));
   const mixId = 'a'.repeat(48);
   let mixReleased = false;
+  const mixesRequested = [];
   await page.route('https://api.audius.co/v1/tracks/search?**', route => route.fulfill({ json: {
-    data: ['First', 'Second'].map((title, i) => ({ id: 'Track' + i, title, duration: 8, is_streamable: true, user: { name: 'Artist' } }))
+    data: ['First', 'Second', 'Third', 'Fourth', 'Fifth'].map((title, i) => ({ id: 'Track' + i, title, duration: 8, is_streamable: true, user: { name: 'Artist' } }))
   }, headers: { 'Access-Control-Allow-Origin': '*' } }));
   await page.route('https://api.audius.co/v1/tracks/*/stream?**', route =>
     route.fulfill({ contentType: 'audio/wav', body: wav }));
   await page.route('**/api/health?mixer=1**', route => {
     if (route.request().method() === 'DELETE') { mixReleased = true; return route.fulfill({ json: { ok: true } }); }
     if (route.request().method() === 'POST') {
-      assert.deepEqual(route.request().postDataJSON().tracks.map(t => t.id), ['audius:Track0', 'audius:Track1']);
+      mixesRequested.push(route.request().postDataJSON().tracks.map(t => t.id));
       return route.fulfill({ json: { id: mixId, playlist: base + '/mixer-demo/test.wav' } });
     }
     return route.fulfill({ json: { status: 'complete' } });
@@ -188,6 +189,25 @@ try {
     document.getElementById('tabQueueBtn').click();
   });
   await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await page.getByRole('button', { name: 'Reproducir mezcla' }).waitFor();
+  const swipeQueue = title => page.evaluate(title => {
+    const row = [...document.querySelectorAll('[data-queue-idx]')].find(r => r.textContent.includes(title));
+    for (const [type, x] of [['touchstart', 40], ['touchmove', 140], ['touchend', 140]]) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      const touch = { clientX: x, clientY: 100 };
+      Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [touch] });
+      Object.defineProperty(event, 'changedTouches', { value: [touch] });
+      row.dispatchEvent(event);
+    }
+  }, title);
+  await swipeQueue('Fourth');
+  await page.getByRole('button', { name: 'Reproducir mezcla' }).waitFor();
+  assert.deepEqual(mixesRequested, [
+    ['audius:Track0', 'audius:Track1', 'audius:Track2'],
+    ['audius:Track0', 'audius:Track3', 'audius:Track1']
+  ]);
+  assert.equal(mixReleased, true, 'La mezcla anterior se libera antes de reconstruir');
+  mixReleased = false;
   await page.getByRole('button', { name: 'Reproducir mezcla' }).click();
   await page.waitForFunction(() => {
     const audio = document.getElementById('queueMixAudio');
@@ -200,8 +220,12 @@ try {
     })), errors);
     throw error;
   });
+  await swipeQueue('Fifth');
+  assert.match(await page.locator('#queueMixStatus').textContent(), /después del bloque/);
+  assert.deepEqual((await page.locator('[data-queue-idx] p.text-white').allTextContents()).slice(0, 4),
+    ['Fourth', 'Second', 'Fifth', 'Third']);
   await page.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 3; });
-  await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Second');
+  await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Fourth');
   assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
   const released = page.waitForResponse(response => response.request().method() === 'DELETE' && response.url().includes(mixId));
   await page.getByRole('button', { name: 'Salir de la mezcla' }).click();

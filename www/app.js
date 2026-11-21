@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.40 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.41 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.40';
+  const APP_VERSION = '3.9.41';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -3101,12 +3101,14 @@
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'No se pudo preparar el crossfade.');
+    if (!response.ok) {
+      throw Object.assign(new Error(data.error || 'No se pudo preparar el crossfade.'), { status: response.status });
+    }
     return data;
   }
 
   function releaseQueueMix(id) {
-    if (id) queueMixRequest('DELETE', id).catch(() => {});
+    if (id) return queueMixRequest('DELETE', id).catch(() => {});
   }
 
   function stopQueueMix(message = '') {
@@ -3121,10 +3123,11 @@
       updatePlayPauseIcons(false, false);
       unavailableTrack = S.currentTrack;
     }
-    releaseQueueMix(id);
+    const released = releaseQueueMix(id);
     $('queueMixBtn').disabled = false;
     $('queueMixBtn').textContent = 'Preparar crossfade con pantalla bloqueada';
     queueMixStatus(message);
+    return released;
   }
 
   function queueMixPosition() {
@@ -3167,6 +3170,10 @@
       syncMediaSessionPlayback();
       return;
     }
+    return buildQueueMix();
+  }
+
+  async function buildQueueMix(previousRelease) {
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
     const fade = Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
     const durations = tracks.map(track => Number(track.durationSeconds || track.duration));
@@ -3175,14 +3182,25 @@
       return;
     }
     const offsets = durations.map((_, i) => durations.slice(0, i).reduce((sum, d) => sum + d - fade, 0));
-    const mix = { tracks, durations, offsets, fade, part: 0, active: false };
+    const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease };
     queueMix = mix;
     $('queueMixBtn').textContent = 'Cancelar preparación';
-    queueMixStatus('Preparando pistas por streaming…');
+    queueMixStatus(previousRelease ? 'Actualizando el orden de la mezcla…' : 'Preparando pistas por streaming…');
     try {
-      const result = await queueMixRequest('POST', null, {
+      await previousRelease;
+      if (queueMix !== mix) return;
+      const request = {
         tracks: tracks.map(({ id, title, artist }) => ({ id, title, artist })), crossfade: fade
-      });
+      };
+      let result;
+      try { result = await queueMixRequest('POST', null, request); }
+      catch (error) {
+        if (error.status !== 429 || !mix.replacement || queueMix !== mix) throw error;
+        queueMixStatus('Actualizando el orden de la mezcla. Esperando al servidor…');
+        await new Promise(resolve => setTimeout(resolve, 15_000));
+        if (queueMix !== mix) return;
+        result = await queueMixRequest('POST', null, request);
+      }
       if (queueMix !== mix) { releaseQueueMix(result.id); return; }
       mix.id = result.id;
       const deadline = Date.now() + 110_000;
@@ -5746,30 +5764,44 @@
 
   function queueTrackNext(track) {
     if (!track?.id) return;
-    if (queueMix?.active && queueMix.part < queueMix.tracks.length - 1) {
-      showToast('La siguiente pista ya está mezclada. Podrás cambiarla al llegar a la última del bloque.');
-      return;
-    }
-    if (queueMix && !queueMix.active) stopQueueMix('Cola actualizada. Prepara otra mezcla con el orden nuevo.');
     if (isCrossfading) finishCrossfadeNow();
-    const after = S.queue[S.currentIndex];
-    if (after?.id === track.id) {
+    const nowPlaying = S.queue[S.currentIndex];
+    if (nowPlaying?.id === track.id) {
       showToast('Esta canción ya está sonando');
       return;
     }
-    const next = Math.max(0, S.currentIndex + 1);
+    const activeMix = queueMix?.active ? queueMix : null;
+    const lastMixedTrack = activeMix?.tracks.at(-1);
+    const lastMixedIndex = lastMixedTrack ? S.queue.indexOf(lastMixedTrack) : -1;
+    const afterBlock = lastMixedIndex > S.currentIndex;
+    if (afterBlock && activeMix.tracks.slice(activeMix.part + 1).some(t => t.id === track.id)) {
+      showToast('Esta canción ya forma parte del bloque que está sonando');
+      return;
+    }
+    const rebuildMix = !!queueMix && !queueMix.active;
+    const previousRelease = rebuildMix ? stopQueueMix() : null;
+    const next = Math.max(0, (afterBlock ? lastMixedIndex : S.currentIndex) + 1);
     const existing = S.queue.findIndex((t, i) => i >= next && t === track);
     const matching = existing >= 0 ? existing : S.queue.findIndex((t, i) => i >= next && t.id === track.id);
     const item = matching >= 0 ? S.queue.splice(matching, 1)[0] : { ...track };
     S.queue.splice(next, 0, item);
-    queuedNext = { after, track: item };
+    queuedNext = { after: afterBlock ? lastMixedTrack : nowPlaying, track: item };
     plannedShuffle = null;
     configureNativeAudio(true);
     renderQueue();
     saveSession(true);
-    if (after) prefetchNextTrack();
+    if (nowPlaying) prefetchNextTrack();
     haptic('light');
-    showToast('Se reproducirá a continuación');
+    if (rebuildMix) {
+      buildQueueMix(previousRelease || Promise.resolve());
+      showToast('Se reproducirá a continuación en la mezcla actualizada');
+    } else if (afterBlock) {
+      const message = 'Se reproducirá justo después del bloque de crossfade actual';
+      queueMixStatus(message);
+      showToast(message);
+    } else {
+      showToast('Se reproducirá a continuación');
+    }
   }
 
   function bindSwipeNext(row, getTrack) {
