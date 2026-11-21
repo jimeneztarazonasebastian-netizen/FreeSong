@@ -171,8 +171,13 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
   evita sustituciones automáticas.
 - Medir tiempo al primer segmento y CPU real.
 - Control de sesiones por usuario y renovación de cola.
-- Integrar línea de tiempo, metadatos, pausa, seek y cambios de cola en la PWA.
-- Probar varios cambios con un iPhone bloqueado.
+- La cola de la PWA permite preparar y reproducir un bloque HLS de hasta
+  tres pistas, incluida la actual. Búsqueda Audius, pausa y posición
+  por pista están conectadas. Los tiempos se estiman con la duración del
+  catálogo. La cola no se puede editar durante el bloque.
+- Falta encadenar bloques con fundido y validar la integración de la cola
+  habitual en un iPhone bloqueado. La página experimental de Audius ya se
+  probó con el teléfono bloqueado.
 - Render intenta obtener una URL directa de audio y recurre a `/api/stream`
   cuando la primera vía no devuelve audio reproducible.
 

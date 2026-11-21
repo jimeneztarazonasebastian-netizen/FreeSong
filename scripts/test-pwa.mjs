@@ -157,6 +157,57 @@ try {
   assert.match(await page.locator('#streamVideoFrame iframe').getAttribute('src'), /\/embed\/testTrack02\?/);
   await page.getByRole('button', { name: 'Cerrar vídeo' }).click();
   await page.waitForFunction(() => !document.querySelector('#streamVideoFrame iframe'));
+  const mixId = 'a'.repeat(48);
+  let mixReleased = false;
+  await page.route('https://api.audius.co/v1/tracks/search?**', route => route.fulfill({ json: {
+    data: ['First', 'Second'].map((title, i) => ({ id: 'Track' + i, title, duration: 8, is_streamable: true, user: { name: 'Artist' } }))
+  }, headers: { 'Access-Control-Allow-Origin': '*' } }));
+  await page.route('https://api.audius.co/v1/tracks/*/stream?**', route =>
+    route.fulfill({ contentType: 'audio/wav', body: wav }));
+  await page.route('**/api/health?mixer=1**', route => {
+    if (route.request().method() === 'DELETE') { mixReleased = true; return route.fulfill({ json: { ok: true } }); }
+    if (route.request().method() === 'POST') {
+      assert.deepEqual(route.request().postDataJSON().tracks.map(t => t.id), ['audius:Track0', 'audius:Track1']);
+      return route.fulfill({ json: { id: mixId, playlist: base + '/mixer-demo/test.wav' } });
+    }
+    return route.fulfill({ json: { status: 'complete' } });
+  });
+  await page.route('**/mixer-demo/test.wav', route => route.request().resourceType() === 'media' ||
+    route.request().headers()['sec-fetch-dest'] === 'audio'
+    ? route.fulfill({ contentType: 'audio/wav', body: wav })
+    : route.fulfill({ headers: { 'Cache-Control': 'no-store' }, body: '#EXTM3U\n#EXTINF:8,\nsegment.ts\n' }));
+  await page.evaluate(() => {
+    document.querySelector('#playerCloseBtn').click();
+    document.querySelector('[data-nav="search"]').click();
+    document.querySelector('#searchAudiusBtn').click();
+  });
+  await page.locator('#searchInput').fill('Audius prueba');
+  await page.locator('#searchResultsList [data-search-idx]').first().click();
+  await page.evaluate(() => {
+    document.getElementById('miniPlayer').click();
+    document.getElementById('tabQueueBtn').click();
+  });
+  await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await page.getByRole('button', { name: 'Reproducir mezcla' }).click();
+  await page.waitForFunction(() => {
+    const audio = document.getElementById('queueMixAudio');
+    return !audio.paused && audio.currentTime > 0.1;
+  }, null, { timeout: 7000 }).catch(async error => {
+    console.error(await page.evaluate(() => ({
+      status: document.getElementById('queueMixStatus').textContent,
+      src: document.getElementById('queueMixAudio').getAttribute('src'),
+      mediaError: document.getElementById('queueMixAudio').error?.message
+    })), errors);
+    throw error;
+  });
+  await page.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 3; });
+  await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Second');
+  assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
+  const released = page.waitForResponse(response => response.request().method() === 'DELETE' && response.url().includes(mixId));
+  await page.getByRole('button', { name: 'Salir de la mezcla' }).click();
+  await released;
+  await page.waitForFunction(() => document.getElementById('queueMixAudio').paused);
+  assert.equal(mixReleased, true);
   assert.deepEqual(errors, []);
   console.log('  isla dinámica protegida, descarga ausente recuperada por red y vídeo alternativo a petición');
   await context.close();

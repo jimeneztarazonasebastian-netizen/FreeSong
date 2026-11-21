@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="app.css?v=3.9.38" />
+  <link rel="stylesheet" href="app.css?v=3.9.39" />
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
@@ -197,6 +197,7 @@
           <button class="chip-btn chip-sm" data-search-type="albums">Álbumes</button>
           <button class="chip-btn chip-sm" data-search-type="playlists">Playlists</button>
           <button class="chip-btn chip-sm" data-search-type="videos">Videos</button>
+          <button class="chip-btn chip-sm" data-search-type="audius" id="searchAudiusBtn">Audius</button>
         </div>
 
         <!-- Búsquedas Recientes (cuando el input está vacío) -->
@@ -571,7 +572,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor web de música libre con experiencia Spotify Premium para iPhone (iOS) y Web. Soporta reproducción continua en segundo plano, Dynamic Island, Smart Shuffle y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.38 Premium Master</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.39 Premium Master</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -700,6 +701,10 @@
             <span id="queueTotalCount" class="text-[11px] text-zinc-500">0 canciones</span>
             <button id="queueClearBtn" class="text-[10px] font-bold text-red-400 hover:text-red-300 press">Limpiar cola</button>
           </div>
+        </div>
+        <div id="queueMixControls" class="hidden space-y-2 px-1">
+          <button id="queueMixBtn" type="button" class="rounded-xl px-3 py-2 bg-purple-700 text-sm font-bold text-white disabled:opacity-50">Preparar crossfade con pantalla bloqueada</button>
+          <p id="queueMixStatus" role="status" class="text-xs text-zinc-400">Mezcla hasta tres pistas desde el inicio de la actual. Audius ofrece pistas compatibles.</p>
         </div>
         <div id="queueList" class="space-y-1.5"></div>
       </div>
@@ -1132,6 +1137,7 @@
   <!-- Motor de audio HTML5 nativo de doble deck para Crossfade continuo y reproduccion en segundo plano -->
   <audio id="audioA" playsinline preload="auto"></audio>
   <audio id="audioB" playsinline preload="auto"></audio>
+  <audio id="queueMixAudio" playsinline preload="none"></audio>
 
   <!-- Motor de audio YouTube Web integrado en viewport para respaldo automático continuo sin errores 502.
        El reproductor necesita 200x200 reales para que YouTube entregue audio; se mantiene fuera de pantalla. -->
@@ -1139,12 +1145,12 @@
     <div id="ytDeck"></div>
   </div>
 
-  <script src="util.js?v=3.9.38"></script>
-  <script src="storage.js?v=3.9.38"></script>
-  <script src="lyrics.js?v=3.9.38"></script>
-  <script src="diag.js?v=3.9.38"></script>
-  <script src="pwa.js?v=3.9.38"></script>
-  <script src="native-audio.js?v=3.9.38"></script>
-  <script src="app.min.js?v=3.9.38"></script>
+  <script src="util.js?v=3.9.39"></script>
+  <script src="storage.js?v=3.9.39"></script>
+  <script src="lyrics.js?v=3.9.39"></script>
+  <script src="diag.js?v=3.9.39"></script>
+  <script src="pwa.js?v=3.9.39"></script>
+  <script src="native-audio.js?v=3.9.39"></script>
+  <script src="app.min.js?v=3.9.39"></script>
 </body>
 </html>

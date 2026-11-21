@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.38 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.39 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.38';
+  const APP_VERSION = '3.9.39';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -305,6 +305,8 @@
     $('audioA') || new Audio(),
     $('audioB') || new Audio()
   ];
+  const queueMixAudio = $('queueMixAudio') || new Audio();
+  let queueMix = null;
   audioDecks.forEach((a) => {
     a.preload = 'auto';
     a.playsInline = true;
@@ -361,7 +363,7 @@
   }
 
   function getActivePlayer() {
-    return nativeAudio ? nativeAudio.player : audioDecks[activeDeckIdx];
+    return nativeAudio ? nativeAudio.player : queueMix?.active ? queueMixAudio : audioDecks[activeDeckIdx];
   }
 
   function getInactivePlayer() {
@@ -470,7 +472,7 @@
       } catch {}
     } else if (!isYtMode) {
       const p = getActivePlayer();
-      if (p && isFinite(p.currentTime) && p.currentTime > 0) position = p.currentTime;
+      if (p && isFinite(p.currentTime) && p.currentTime > 0) position = queueMix?.active ? queueMixPosition() : p.currentTime;
     }
 
     // iOS puede devolver 0 al suspender la página justo antes de guardar. Si
@@ -590,6 +592,9 @@
   // La posición y el fin usan la duración del archivo que realmente suena.
   // La duración de búsqueda solo sirve mientras el motor no entrega metadatos.
   function getEffectiveDuration(audioEl, track) {
+    if (audioEl === queueMixAudio && queueMix?.active) {
+      return queueMix.durations[queueMix.part];
+    }
     const official = Number(track?.durationSeconds || track?.duration) || 0;
     const raw = audioEl ? (audioEl.duration || 0) : 0;
     const rawValid = raw && !isNaN(raw) && raw > 0 && isFinite(raw);
@@ -705,6 +710,7 @@
     try { document.body.appendChild(silentLoop); } catch {}
   }
   function keepAudioAlive() {
+    if (queueMix?.active) return;
     if (nativeAudio) return;
     if (!isIOSDevice || !S.isPlaying || userIntentionalPause) return;
     // Si el deck principal ya está sonando, la sesión de audio está activa:
@@ -739,7 +745,7 @@
   // Si iOS pausó el audio por pasar a segundo plano (sin que el usuario pausara),
   // retómalo en cuanto vuelve a haber oportunidad.
   function ensurePlaybackAlive() {
-    if (nativeAudio) return;
+    if (nativeAudio || queueMix?.active) return;
     const hasPendingRecovery = !!pendingStreamRecovery || !!pendingYtStart;
     if ((!S.isPlaying && !autoPlayBlocked && !hasPendingRecovery) || userIntentionalPause) return;
     // Un arranque/recuperación pendiente no puede ejecutarse con la pantalla
@@ -1225,7 +1231,16 @@
   // directo sobrevive al corte del proxy; si no hay relay en ~3 s, el proxy
   // con `backup` responde en 1-2 s.
   async function handleStreamFailure(track, deck) {
-    if (nativeAudio) return;
+    if (nativeAudio || queueMix?.active) return;
+    if (isAudiusTrack(track)) {
+      userIntentionalPause = true;
+      S.isPlaying = false;
+      deck?.pause();
+      updatePlayPauseIcons(false, false);
+      showToast('Audius no pudo reproducir esta canción. Toca reproducir para reintentar.');
+      unavailableTrack = track;
+      return;
+    }
     // Con YouTube Web controlando el audio, los errores del deck HTML5 ya no
     // son relevantes (se vació a propósito).
     if (isYtMode) return;
@@ -1486,7 +1501,7 @@
       const ap = getActivePlayer();
       const curTrack = S.queue[S.currentIndex];
       if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
-        rememberPosition(curTrack.id, ap.currentTime);
+        rememberPosition(curTrack.id, queueMix?.active ? queueMixPosition() : ap.currentTime);
       }
       // Si se bloqueó el teléfono mientras la canción aún cargaba (0:00), iOS
       // congela la carga. Al volver hay que abrir una fuente nueva, no llamar
@@ -1519,7 +1534,7 @@
     const ap = getActivePlayer();
     const curTrack = S.queue[S.currentIndex];
     if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
-      rememberPosition(curTrack.id, ap.currentTime);
+      rememberPosition(curTrack.id, queueMix?.active ? queueMixPosition() : ap.currentTime);
     }
     saveSession(true);
   });
@@ -1533,18 +1548,21 @@
 
   audioDecks.forEach((deck, idx) => {
     deck.addEventListener('loadstart', () => {
+      if (queueMix?.active) return;
       if (idx === activeDeckIdx && S.isPlaying) {
         updatePlayPauseIcons(true, true);
       }
     });
 
     deck.addEventListener('waiting', () => {
+      if (queueMix?.active) return;
       if (idx === activeDeckIdx && S.isPlaying) {
         updatePlayPauseIcons(true, true);
       }
     });
 
     deck.addEventListener('play', () => {
+      if (queueMix?.active) return;
       if (idx === activeDeckIdx && !deck.paused && !userIntentionalPause) {
         S.isPlaying = true;
         userIntentionalPause = false;
@@ -1554,6 +1572,7 @@
     });
 
     deck.addEventListener('playing', () => {
+      if (queueMix?.active) return;
       // Los eventos se encolan: pueden llegar después de cambiar de fuente,
       // cambiar de deck o de que el usuario haya pulsado pausa.
       if (idx !== activeDeckIdx || deck.paused || deck.ended || userIntentionalPause) return;
@@ -1599,6 +1618,7 @@
       }    });
 
     deck.addEventListener('pause', () => {
+      if (queueMix?.active) return;
       // Ignorar el evento 'pause' interno que el navegador emite automáticamente al cambiar deck.src
       if (isTransitioningTrack || !deck.paused) return;
 
@@ -1629,6 +1649,7 @@
     });
 
     deck.addEventListener('ended', () => {
+      if (queueMix?.active) return;
       if (idx === activeDeckIdx && !isCrossfading && !isTransitioningTrack) {
         // Un `ended` tardío de una fuente anterior no debe avanzar la pista nueva.
         const d = deck.duration;
@@ -1640,6 +1661,7 @@
     });
 
     deck.addEventListener('timeupdate', () => {
+      if (queueMix?.active) return;
       if (idx !== activeDeckIdx || isTransitioningTrack) return;
       syncMediaSessionPlayback();
       const cur = deck.currentTime || 0;
@@ -1722,7 +1744,7 @@
 
     // Errores o bloqueos en la conexión
     deck.addEventListener('error', (e) => {
-      if (isYtMode) return;
+      if (isYtMode || queueMix?.active) return;
       if (idx === activeDeckIdx && S.currentIndex >= 0 && S.isPlaying && !userIntentionalPause && !isTransitioningTrack) {
         console.warn('Error en deck de audio:', e);
         const maxVol = S.audioNormalize ? 0.88 : 1.0;
@@ -1868,6 +1890,7 @@
       nexttrack: () => playNext(true, true),
       seekto: (details) => {
         if (details.seekTime != null) {
+          if (seekQueueMix(details.seekTime)) return;
           const p = getActivePlayer();
           if (p) {
             p.currentTime = details.seekTime;
@@ -2277,6 +2300,7 @@
   function getTrackStreamUrl(track) {
     const offlineUrl = S.offlineBlobUrls instanceof Map ? S.offlineBlobUrls.get(track.id) : null;
     if (offlineUrl) return offlineUrl;
+    if (isAudiusTrack(track)) return audiusStream(track);
     if (isDownloaded(track.id)) {
       if (navigator.serviceWorker?.controller) return '/offline-audio/' + encodeURIComponent(track.id);
       // Primera visita aún sin worker: prepara la copia elegida en paralelo.
@@ -2431,11 +2455,11 @@
   }
 
   function prefetchNextTrack() {
-    if (nativeAudio) return;
+    if (nativeAudio || queueMix?.active) return;
     const nextIdx = getNextIndex();
     if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
     const nextTrack = S.queue[nextIdx];
-    if (!nextTrack) return;
+    if (!nextTrack || isAudiusTrack(nextTrack)) return;
 
     // La letra de la siguiente pista se pide ya: al cambiar de canción aparece
     // al instante en vez de mostrar el esqueleto de carga.
@@ -2493,6 +2517,7 @@
   // --- Autoplay Continuo: Recomendaciones Infinitas (SimpMusic Engine via /api/queue) ---
   let isFetchingRelated = false;
   async function ensureUpcomingTracks(track, signal) {
+    if (isAudiusTrack(track) || queueMix?.active) return;
     if (!S.autoplayInfinite || !track || isFetchingRelated) return;
     const remaining = S.queue.length - 1 - S.currentIndex;
     if (remaining < 4) {
@@ -2947,6 +2972,7 @@
 
   function toggleDownload(track) {
     if (!track || !track.id) return;
+    if (isAudiusTrack(track)) { showToast('Las pistas de Audius se reproducen por streaming'); return; }
     if (isDownloaded(track.id)) {
       deleteDownload(track.id);
     } else {
@@ -3064,6 +3090,177 @@
   }
 
   // --- Reproducción y Cambio de Pista Maestro ---
+  const isAudiusTrack = track => /^audius:[A-Za-z0-9]{1,32}$/.test(track?.id || '');
+  const audiusStream = track => `https://api.audius.co/v1/tracks/${track.id.slice(7)}/stream?app_name=FreeSong`;
+  const queueMixStatus = message => { $('queueMixStatus').textContent = message; };
+
+  async function queueMixRequest(method, id, body) {
+    const query = id ? '&session=' + encodeURIComponent(id) : '';
+    const response = await fetch('/api/health?mixer=1' + query, {
+      method, cache: 'no-store', signal: AbortSignal.timeout(20_000),
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudo preparar el crossfade.');
+    return data;
+  }
+
+  function releaseQueueMix(id) {
+    if (id) queueMixRequest('DELETE', id).catch(() => {});
+  }
+
+  function stopQueueMix(message = '') {
+    if (!queueMix) return;
+    const { id, active } = queueMix;
+    queueMix = null;
+    if (active) {
+      queueMixAudio.pause();
+      queueMixAudio.removeAttribute('src');
+      queueMixAudio.load();
+      S.isPlaying = false;
+      updatePlayPauseIcons(false, false);
+      unavailableTrack = S.currentTrack;
+    }
+    releaseQueueMix(id);
+    $('queueMixBtn').disabled = false;
+    $('queueMixBtn').textContent = 'Preparar crossfade con pantalla bloqueada';
+    queueMixStatus(message);
+  }
+
+  function queueMixPosition() {
+    return Math.max(0, queueMixAudio.currentTime - queueMix.offsets[queueMix.part]);
+  }
+
+  function seekQueueMix(seconds) {
+    if (!queueMix?.active) return false;
+    const { part, offsets, durations } = queueMix;
+    queueMixAudio.currentTime = offsets[part] + Math.max(0, Math.min(seconds, durations[part] - 0.1));
+    return true;
+  }
+
+  async function prepareQueueMix() {
+    if (queueMix?.playlist && !queueMix.active) {
+      const mix = queueMix;
+      if (!mix.tracks.every((track, i) => S.queue[S.currentIndex + i] === track)) {
+        stopQueueMix('La cola cambió. Prepara otra mezcla.');
+        return;
+      }
+      pausePlayback();
+      window.activeStreamAbort?.abort();
+      if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
+      pauseAudioKeepAlive();
+      isYtMode = false;
+      mix.active = true;
+      userIntentionalPause = false;
+      queueMixAudio.src = mix.playlist;
+      queueMixAudio.playbackRate = S.playbackRate;
+      queueMixAudio.play().catch(() => {
+        if (queueMix !== mix) return;
+        stopQueueMix('No se pudo iniciar el flujo. Vuelve a preparar la mezcla.');
+      });
+      $('queueMixBtn').textContent = 'Salir de la mezcla';
+      queueMixStatus('Mezcla en reproducción. Ya puedes bloquear el iPhone.');
+      return;
+    }
+    if (queueMix) {
+      stopQueueMix('Mezcla cerrada.');
+      syncMediaSessionPlayback();
+      return;
+    }
+    const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
+    const fade = Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
+    const durations = tracks.map(track => Number(track.durationSeconds || track.duration));
+    if (S.currentIndex < 0 || tracks.length < 2 || durations.some(d => !Number.isFinite(d) || d <= fade || d > 600)) {
+      queueMixStatus('Selecciona al menos dos pistas seguidas con duración conocida, entre el fundido y 10 minutos.');
+      return;
+    }
+    const offsets = durations.map((_, i) => durations.slice(0, i).reduce((sum, d) => sum + d - fade, 0));
+    const mix = { tracks, durations, offsets, fade, part: 0, active: false };
+    queueMix = mix;
+    $('queueMixBtn').textContent = 'Cancelar preparación';
+    queueMixStatus('Preparando pistas por streaming…');
+    try {
+      const result = await queueMixRequest('POST', null, {
+        tracks: tracks.map(({ id, title, artist }) => ({ id, title, artist })), crossfade: fade
+      });
+      if (queueMix !== mix) { releaseQueueMix(result.id); return; }
+      mix.id = result.id;
+      const deadline = Date.now() + 110_000;
+      while (queueMix === mix && Date.now() < deadline) {
+        const state = await queueMixRequest('GET', mix.id);
+        if (state.status === 'failed') throw new Error('Render no pudo mezclar estas pistas. Prueba canciones de Audius.');
+        const playlist = await fetch(result.playlist, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+        const body = playlist.ok ? await playlist.text() : '';
+        if (queueMix !== mix) return;
+        if (body.startsWith('#EXTM3U') && body.includes('#EXTINF:')) {
+          mix.playlist = result.playlist;
+          $('queueMixBtn').textContent = 'Reproducir mezcla';
+          queueMixStatus(`Lista para reproducir · ${tracks.length} pistas · fundido de ${fade} s`);
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      if (queueMix === mix) throw new Error('La mezcla tardó demasiado. Inténtalo otra vez.');
+    } catch (error) {
+      if (queueMix === mix) stopQueueMix(error.message);
+    }
+  }
+
+  queueMixAudio.addEventListener('play', () => {
+    if (!queueMix?.active) return;
+    S.isPlaying = true;
+    updatePlayPauseIcons(true, false);
+    syncMediaSessionPlayback();
+  });
+  queueMixAudio.addEventListener('pause', () => {
+    if (!queueMix?.active || !queueMixAudio.paused) return;
+    S.isPlaying = false;
+    updatePlayPauseIcons(false, false);
+    syncMediaSessionPlayback();
+  });
+  queueMixAudio.addEventListener('timeupdate', () => {
+    const mix = queueMix;
+    if (!mix?.active) return;
+    // La transición ya está codificada en HLS. Este evento solo sincroniza la interfaz.
+    const part = mix.offsets.reduce((found, offset, i) => queueMixAudio.currentTime >= offset ? i : found, 0);
+    if (part !== mix.part) {
+      mix.part = part;
+      const track = mix.tracks[part], index = S.queue.indexOf(track);
+      if (index >= 0) {
+        S.currentIndex = index;
+        S.currentTrack = track;
+        showAndSyncMiniPlayer(track, true);
+        updatePlayerUI(track);
+        updateMediaSession(track);
+        renderQueue();
+        saveHistory(track);
+      }
+    }
+    const duration = mix.durations[part], position = Math.min(duration, queueMixPosition());
+    const percent = 100 * position / duration;
+    $('playerCurTime').textContent = formatTime(position);
+    $('playerDurTime').textContent = formatTime(duration);
+    if (!isScrubbing) $('playerSeek').value = percent;
+    $('miniProgress').style.width = `${percent}%`;
+    try { navigator.mediaSession?.setPositionState({ duration, position, playbackRate: queueMixAudio.playbackRate }); } catch {}
+    saveSession(false, position);
+  });
+  queueMixAudio.addEventListener('ended', () => {
+    if (!queueMix?.active) return;
+    const index = S.queue.indexOf(queueMix.tracks.at(-1));
+    stopQueueMix('Terminó el bloque mezclado.');
+    if (index >= 0 && index + 1 < S.queue.length) playTrack(index + 1, true, true);
+    else syncMediaSessionPlayback();
+  });
+  queueMixAudio.addEventListener('error', () => {
+    if (queueMix?.active) {
+      const message = 'Se interrumpió el flujo de la mezcla. Prepara otra para continuar.';
+      stopQueueMix(message);
+      showToast(message);
+      syncMediaSessionPlayback();
+    }
+  });
+
   function nativeOptions() {
     return { quality: S.audioQuality, rate: S.playbackRate, volume: S.audioNormalize ? 0.88 : 1,
       repeat: S.repeat, shuffle: S.shuffleMode, crossfade: S.crossfade,
@@ -3169,6 +3366,15 @@
 
   function playTrack(index, immediate = false, fromEnded = false) {
     if (index < 0 || index >= S.queue.length) return;
+    if (queueMix) {
+      const part = queueMix.tracks.indexOf(S.queue[index]);
+      if (queueMix.active && part >= 0) {
+        queueMixAudio.currentTime = queueMix.offsets[part];
+        resumePlayback();
+        return;
+      }
+      stopQueueMix();
+    }
     setStreamFallback(null);
     if (nativeAudio) {
       startNativeTrack(index);
@@ -3575,6 +3781,11 @@
   }
 
   function resumePlayback() {
+    if (queueMix?.active) {
+      userIntentionalPause = false;
+      queueMixAudio.play().catch(() => showToast('Toca reproducir para continuar la mezcla'));
+      return;
+    }
     if (nativeAudio) {
       userIntentionalPause = false;
       configureNativeAudio();
@@ -3692,9 +3903,13 @@
 
     userIntentionalPause = false;
     if (S.queue.length === 0) return;
+    if (queueMix?.active && queueMixPosition() > 3) {
+      seekQueueMix(0);
+      return;
+    }
     if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
     const p = getActivePlayer();
-    if (p && p.currentTime > 3) {
+    if (!queueMix?.active && p && p.currentTime > 3) {
       p.currentTime = 0;
       if (S.currentTrack) lastKnownPosition = { id: S.currentTrack.id, seconds: 0, at: Date.now() };
       return;
@@ -3743,6 +3958,7 @@
   }
 
   function getCurrentPlaybackTime() {
+    if (queueMix?.active) return queueMixPosition();
     if (isYtMode && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
       try { return ytPlayer.getCurrentTime() || 0; } catch { return null; }
     }
@@ -5529,6 +5745,10 @@
 
   function queueTrackNext(track) {
     if (!track?.id) return;
+    if (queueMix) {
+      showToast('Sal de la mezcla para cambiar sus pistas');
+      return;
+    }
     if (isCrossfading) finishCrossfadeNow();
     const after = S.queue[S.currentIndex];
     const item = { ...track };
@@ -5587,6 +5807,7 @@
 
   // --- Renderizado de la Cola (Siguiente) ---
   function moveQueueItem(from, to) {
+    if (queueMix) return false;
     if (from === to) return false;
     if (from < 0 || from >= S.queue.length || to < 0 || to >= S.queue.length) return false;
     const current = S.queue[S.currentIndex];
@@ -5598,6 +5819,7 @@
   }
 
   function removeQueueAt(index) {
+    if (queueMix) { showToast('Sal de la mezcla para cambiar sus pistas'); return; }
     if (index < 0 || index >= S.queue.length) return;
     if (index === S.currentIndex) {
       showToast('No puedes quitar la canción que está sonando');
@@ -7504,7 +7726,7 @@
         try { searchAbortController.abort(); } catch {}
       }
       searchAbortController = new AbortController();
-      if (resultsList) resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando en YouTube Music...</div>';
+      if (resultsList) resultsList.innerHTML = '<div class="text-center py-12 text-zinc-500 text-sm animate-pulse">Buscando canciones…</div>';
       if (loadMoreWrap) loadMoreWrap.classList.add('hidden');
       S.searchContinuation = null;
       currentSearchResults = [];
@@ -7530,10 +7752,20 @@
         url += `&continuation=${encodeURIComponent(S.searchContinuation)}`;
       }
 
+      if (searchType === 'audius') {
+        url = 'https://api.audius.co/v1/tracks/search?' + new URLSearchParams({ query, app_name: 'FreeSong', limit: '20' });
+      }
       const res = await fetch(url, {
         signal: isContinuation ? undefined : searchAbortController.signal
       });
       const data = await res.json();
+      if (searchType === 'audius') {
+        if (!res.ok || !Array.isArray(data.data)) throw new Error('Audius no respondió a la búsqueda');
+        data.items = data.data.filter(t => t.is_streamable === true && /^[A-Za-z0-9]{1,32}$/.test(t.id || ''))
+          .map(t => ({ id: 'audius:' + t.id, title: t.title, artist: t.user?.name || 'Audius',
+            thumbnail: t.artwork?.['150x150'] || '', duration: Number(t.duration) || 0,
+            durationText: formatTime(Number(t.duration) || 0) }));
+      }
 
       // Una respuesta de una búsqueda anterior (incluida una continuación) no
       // debe mezclarse con los resultados de la consulta actual.
@@ -7683,7 +7915,7 @@
           el.addEventListener('pointerdown', () => {
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
             const t = currentSearchResults[idx];
-            if (t && t.id && !t.streamUrl) {
+            if (t && t.id && !t.streamUrl && !isAudiusTrack(t)) {
               resolveRelaySource(t.id, S.audioQuality).then((src) => {
                 if (src) {
                   rememberRelaySource(t, src);
@@ -7700,7 +7932,7 @@
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
             const chosen = currentSearchResults[idx];
             if (!chosen) return;
-            if (S.autoplayInfinite) {
+            if (S.autoplayInfinite && !isAudiusTrack(chosen)) {
               // Radio de la canción elegida: la siguiente será similar, no el
               // resultado que venía debajo en la búsqueda.
               S.queue = [chosen];
@@ -8100,7 +8332,11 @@
     setupLyricsView();
 
     // Botón Limpiar Cola
+    $('queueMixControls')?.classList.toggle('hidden', !isIOSDevice || !!nativeAudio);
+    $('searchAudiusBtn')?.classList.toggle('hidden', !!nativeAudio);
+    $('queueMixBtn')?.addEventListener('click', prepareQueueMix);
     $('queueClearBtn')?.addEventListener('click', () => {
+      if (queueMix) { showToast('Sal de la mezcla para cambiar sus pistas'); return; }
       if (S.queue.length > S.currentIndex + 1) {
         S.queue = S.queue.slice(0, S.currentIndex + 1);
         renderQueue();
@@ -8202,6 +8438,7 @@
       const track = S.queue[S.currentIndex];
       const dur = getEffectiveDuration(p, track);
       if (p && dur > 0) {
+        if (seekQueueMix((pct / 100) * dur)) return;
         p.currentTime = (pct / 100) * dur;
         if (track) rememberPosition(track.id, p.currentTime);
       }
@@ -8477,7 +8714,7 @@
     xfRange.value = S.crossfadeDuration;
     xfLabel.textContent = `${S.crossfadeDuration} segundos`;
     xfWrap.classList.toggle('hidden', !S.crossfade);
-    const xfAvailable = webCrossfadeAvailable || !!nativeAudio;
+    const xfAvailable = webCrossfadeAvailable || !!nativeAudio || isIOSDevice;
     xfToggle.disabled = !xfAvailable;
     xfRange.disabled = !xfAvailable;
     if (!xfAvailable) {
@@ -8486,8 +8723,9 @@
     }
     if ($('crossfadeAvailability')) $('crossfadeAvailability').textContent = nativeAudio
       ? 'Fundido nativo entre canciones, también con el iPhone bloqueado.'
-      : webCrossfadeAvailable ? 'Fundido entre canciones mientras la app está visible.'
-        : 'Este navegador no permite ajustar el volumen de cada pista. En iPhone, el IPA de FreeSong usa audio nativo para el crossfade.';
+      : isIOSDevice ? 'En Siguiente, prepara una mezcla de hasta tres pistas para escuchar con la pantalla bloqueada.'
+        : webCrossfadeAvailable ? 'Fundido entre canciones mientras la app está visible.'
+          : 'Este navegador no permite ajustar el volumen de cada pista.';
 
     xfToggle.addEventListener('change', () => {
       S.crossfade = xfToggle.checked;
