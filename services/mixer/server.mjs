@@ -35,7 +35,31 @@ const sweep = setInterval(() => {
 }, 30_000);
 sweep.unref();
 
+const audiusId = /^audius:([A-Za-z0-9]{1,32})$/;
+async function audiusSource(id) {
+  const url = new URL(`https://api.audius.co/v1/tracks/${id}/stream`);
+  url.searchParams.set('app_name', 'FreeSong');
+  const response = await fetch(url, {
+    headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(12_000)
+  });
+  try {
+    if (![200, 206].includes(response.status) || !/^audio\//i.test(response.headers.get('content-type') || '') ||
+        !response.body || new URL(response.url).protocol !== 'https:') throw new Error('Audius no entregó audio');
+    const reader = response.body.getReader();
+    try {
+      const { value } = await reader.read();
+      if (!value?.length) throw new Error('Audius devolvió audio vacío');
+    } finally { await reader.cancel().catch(() => {}); }
+  } finally {
+    if (!response.body?.locked) await response.body?.cancel().catch(() => {});
+  }
+  // Usar el endpoint oficial para que cada lectura obtenga una redirección vigente.
+  return url.href;
+}
+
 async function audioSource(track) {
+  const audius = audiusId.exec(track.id);
+  if (audius) return audiusSource(audius[1]);
   // Resolver desde el mismo host que consume el audio. La ruta de Vercel
   // permanece como respaldo, pero no debe ser la única fuente del mezclador.
   if (process.env.RESOLVE_ON_HOST !== '0') {
@@ -77,7 +101,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
-      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 2 });
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 2, audius: true });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
       if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
@@ -90,7 +114,8 @@ const server = http.createServer(async (req, res) => {
       try { data = JSON.parse(body); } catch { return json(res, 400, { error: 'JSON inválido' }); }
       const tracks = data.tracks;
       if (!Array.isArray(tracks) || tracks.length < 2 || tracks.length > 3 || tracks.some(t =>
-        !t || !/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || typeof t.title !== 'string' || t.title.length > 200 ||
+        !t || typeof t.id !== 'string' || !(/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || audiusId.test(t.id)) ||
+        typeof t.title !== 'string' || t.title.length > 200 ||
         (t.artist != null && (typeof t.artist !== 'string' || t.artist.length > 200)))) {
         return json(res, 400, { error: 'Se requieren 2–3 pistas válidas' });
       }
@@ -103,8 +128,16 @@ const server = http.createServer(async (req, res) => {
       try { session.directory = await mkdtemp(join(tmpdir(), 'freesong-mix-')); }
       catch (error) { sessions.delete(id); throw error; }
       const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
-      const sources = await Promise.all(tracks.map(audioSource));
-      session.sources = sources.map(source => new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy');
+      let sources;
+      try { sources = await Promise.all(tracks.map(audioSource)); }
+      catch {
+        await dispose(id);
+        return json(res, 502, { error: 'Audius no entregó audio reproducible para una de las pistas.' });
+      }
+      session.sources = sources.map((source, i) => {
+        if (audiusId.test(tracks[i].id)) return 'audius';
+        return new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy';
+      });
       for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
       const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
       let previous = 'a0';

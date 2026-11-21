@@ -164,6 +164,11 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
   `/mixer-test.html`. Esta prueba separa la reproducción en Safari de los
   problemas de las fuentes de canciones.
 - Conseguir una fuente estable de audio y medirla desde Render.
+- Probar Audius desde Render con IDs explícitos (`audius:<id>`) en
+  `/mixer-test.html`. Su catálogo es independiente del de YouTube.
+  OpenTune verifica sus fuentes alternativas por grabación y mantiene
+  identificada cada versión. FreeSong conserva el proveedor explícito y
+  evita sustituciones automáticas.
 - Medir tiempo al primer segmento y CPU real.
 - Control de sesiones por usuario y renovación de cola.
 - Integrar línea de tiempo, metadatos, pausa, seek y cambios de cola en la PWA.

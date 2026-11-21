@@ -1,6 +1,10 @@
 (() => {
   const $ = id => document.getElementById(id), audio = $('audio');
   let session = null, generation = 0;
+  $('audius-example')?.addEventListener('click', () => {
+    $('first').value = 'audius:V66vyPP';
+    $('second').value = 'audius:6kPrmyl';
+  });
   const status = text => { $('status').textContent = text; };
   async function api(method = 'GET', body, id) {
     const res = await fetch('/api/health?mixer=1' + (id ? '&session=' + encodeURIComponent(id) : ''), {
