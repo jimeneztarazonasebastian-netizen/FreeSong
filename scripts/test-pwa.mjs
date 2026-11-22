@@ -171,7 +171,7 @@ try {
     if (route.request().method() === 'DELETE') { mixReleased = true; return route.fulfill({ json: { ok: true } }); }
     if (route.request().method() === 'POST') {
       mixesRequested.push(route.request().postDataJSON().tracks.map(t => t.id));
-      return route.fulfill({ json: { id: mixId, playlist: base + '/mixer-demo/test.wav', editable: true } });
+      return route.fulfill({ json: { id: mixId, playlist: `${base}/mixer-demo/sessions/${mixId}/test.wav`, editable: true } });
     }
     if (route.request().method() === 'PATCH') {
       const { editId, tracks } = route.request().postDataJSON();
@@ -181,15 +181,12 @@ try {
     }
     return route.fulfill({ json: { status: 'complete', edit: mixEdit } });
   });
-  await page.route('**/mixer-demo/test.wav', route => route.request().resourceType() === 'media' ||
+  await page.route('**/mixer-demo/sessions/*/test.wav', route => route.request().resourceType() === 'media' ||
     route.request().headers()['sec-fetch-dest'] === 'audio'
     ? route.fulfill({ contentType: 'audio/wav', body: wav })
     : route.fulfill({ headers: { 'Cache-Control': 'no-store' }, body: '#EXTM3U\n#EXTINF:8,\nsegment.ts\n' }));
-  await page.evaluate(() => {
-    document.querySelector('#playerCloseBtn').click();
-    document.querySelector('[data-nav="search"]').click();
-    document.querySelector('#searchAudiusBtn').click();
-  });
+  await page.getByRole('button', { name: 'Buscar en Audius' }).click();
+  assert.equal(await page.locator('#searchInput').inputValue(), 'Fuente caída');
   await page.locator('#searchInput').fill('Audius prueba');
   await page.locator('#searchResultsList [data-search-idx]').first().click();
   await page.evaluate(() => {
@@ -238,9 +235,25 @@ try {
   assert.match(await page.locator('#queueMixStatus').textContent(), /después del bloque/);
   assert.deepEqual((await page.locator('[data-queue-idx] p.text-white').allTextContents()).slice(0, 4),
     ['Fifth', 'Fourth', 'Third', 'Second']);
-  await page.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 3; });
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.getElementById('queueMixAudio').currentTime = 3;
+  });
   await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Fifth');
   assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
+  const diag = await page.evaluate(() => window.FreeSongDiag.report());
+  assert.equal(diag.visibility, 'hidden');
+  assert.equal(diag.playback.isPlaying, true);
+  assert.equal(diag.playback.engine, 'hls-mixer');
+  assert.equal(diag.playback.mixer.part, 1);
+  assert.match(diag.playback.mixer.audio, /sessions\/\[oculta\]/);
+  assert.ok(!JSON.stringify(diag).includes(mixId), 'El diagnóstico nunca debe exponer la credencial HLS');
+  assert.ok(diag.events.some(event => event.name === 'mixer-edit-applied'));
+  await page.evaluate(() => {
+    delete document.visibilityState;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
   const released = page.waitForResponse(response => response.request().method() === 'DELETE' && response.url().includes(mixId));
   await page.getByRole('button', { name: 'Salir de la mezcla' }).click();
   await released;

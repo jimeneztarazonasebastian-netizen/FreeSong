@@ -65,4 +65,32 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
-console.log('STREAM RANGES OK: rangos de Safari, sufijos, HEAD, descarga y 416 sin reiniciar');
+
+const savedRelays = process.env.INVIDIOUS_INSTANCES;
+const requestedHosts = [];
+try {
+  process.env.INVIDIOUS_INSTANCES = 'https://relay-one.test,https://relay-two.test';
+  globalThis.fetch = async (input, options) => {
+    const url = new URL(input);
+    requestedHosts.push(url.host + url.pathname);
+    if (url.pathname.startsWith('/api/v1/videos/')) {
+      return Response.json({ adaptiveFormats: [{ itag: 140, mimeType: 'audio/mp4', url: url.origin + '/audio' }] });
+    }
+    assert.equal(options.headers.Range, 'bytes=0-1');
+    if (url.hostname === 'relay-one.test') return new Response('No disponible', { status: 403 });
+    assert.equal(url.hostname, 'relay-two.test');
+    return new Response('01', { status: 206, headers: { 'Content-Range': 'bytes 0-1/10', 'Content-Type': 'audio/mp4' } });
+  };
+  const response = await handler({ method: 'GET', url: '/api/stream?id=relay-fallback&itag=140', headers: { range: 'bytes=0-1' } });
+  assert.equal(response.status, 206);
+  assert.equal(await response.text(), '01');
+  assert.deepEqual(requestedHosts, [
+    'relay-one.test/api/v1/videos/relay-fallback', 'relay-one.test/audio',
+    'relay-two.test/api/v1/videos/relay-fallback', 'relay-two.test/audio'
+  ]);
+} finally {
+  if (savedRelays === undefined) delete process.env.INVIDIOUS_INSTANCES;
+  else process.env.INVIDIOUS_INSTANCES = savedRelays;
+  globalThis.fetch = originalFetch;
+}
+console.log('STREAM RANGES OK: rangos de Safari, 416 y siguiente relay si falla el audio');

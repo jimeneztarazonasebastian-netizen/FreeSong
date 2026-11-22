@@ -119,7 +119,8 @@
     try {
       const url = new URL(String(raw), location.href);
       const isSame = url.origin === location.origin;
-      const base = isSame ? url.pathname : `${url.host}${url.pathname}`;
+      const path = url.pathname.replace(/\/sessions\/[a-f0-9]{48}(?=\/|$)/gi, '/sessions/[oculta]');
+      const base = isSame ? path : `${url.host}${path}`;
       return base.slice(0, MAX_TEXT);
     } catch {
       return String(raw).split('?')[0].slice(0, MAX_TEXT);

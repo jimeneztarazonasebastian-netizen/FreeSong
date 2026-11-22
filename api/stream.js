@@ -445,14 +445,38 @@ function resolveMweb(videoId, wantedItag) {
 }
 
 // Lo mismo para el relay: varios rangos simultáneos comparten una sola consulta.
-function resolveRelay(videoId, wantedItag) {
-  const dedupeKey = `RELAY:${videoId}:${wantedItag || ''}`;
+function resolveRelay(videoId, wantedItag, excluded) {
+  const dedupeKey = JSON.stringify(['RELAY', videoId, wantedItag, ...excluded]);
   const pending = pendingResolves.get(dedupeKey);
   if (pending) return pending;
-  const task = resolveRelayAudio(videoId, wantedItag);
+  const task = resolveRelayAudio(videoId, wantedItag, excluded);
   pendingResolves.set(dedupeKey, task);
   task.finally(() => pendingResolves.delete(dedupeKey)).catch(() => {});
   return task;
+}
+
+async function openRelay(videoId, itag, range, state) {
+  const rejected = [];
+  const errors = [];
+  // Un relay puede devolver metadatos válidos y fallar al entregar los bytes.
+  // Probar el mismo ID en las demás instancias preserva la grabación elegida.
+  const limit = Math.min(3, relayInstances().length);
+  for (let attempt = 0; attempt < limit; attempt++) {
+    try {
+      const target = await resolveRelay(videoId, itag, rejected);
+      if (state?.done) return null;
+      rejected.push(target.relay);
+      try {
+        return { target, upstream: await openUpstream(target, range) };
+      } catch (error) {
+        errors.push(`${new URL(target.relay).host}: ${error.message}`);
+      }
+    } catch (error) {
+      errors.push(error.message);
+      break;
+    }
+  }
+  throw new Error(errors.join(' | ') || 'ningún relay entregó audio');
 }
 
 function cacheTarget(cacheKey, target) {
@@ -490,9 +514,9 @@ async function tryAltCandidates(altIds, itag, range, cacheKey, state, errors) {
     if (state.done) return { ok: false };
     const altKey = `${altId}:${itag}`;
     try {
-      const target = await resolveRelay(altId, itag);
-      if (state.done) return { ok: false };
-      const resp = await openUpstream(target, range);
+      const result = await openRelay(altId, itag, range, state);
+      if (!result) return { ok: false };
+      const { target, upstream: resp } = result;
       if (state.done) {
         try { await resp.body?.cancel(); } catch {}
         return { ok: false };
@@ -530,9 +554,9 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
 
   const primaryTask = (async () => {
     try {
-      const target = await resolveRelay(videoId, itag);
-      if (state.done) return { ok: false };
-      const resp = await openUpstream(target, range);
+      const result = await openRelay(videoId, itag, range, state);
+      if (!result) return { ok: false };
+      const { target, upstream: resp } = result;
       if (state.done) {
         try { await resp.body?.cancel(); } catch {}
         return { ok: false };
@@ -603,8 +627,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
         const altKey = `${altVideoId}:${itag}`;
 
         try {
-          const target = await resolveRelay(altVideoId, itag);
-          const resp = await openUpstream(target, range);
+          const { target, upstream: resp } = await openRelay(altVideoId, itag, range);
           cacheTarget(altKey, target);
           cacheTarget(cacheKey, target);
           return { upstream: resp, errors };
@@ -784,12 +807,10 @@ export default async function handler(req, res) {
   }
 
   if (!upstream) {
-    const [vd, ck] = await Promise.all([getVisitorData(), getVisitorCookies()]);
     return json(502, {
       error: 'No se pudo obtener el audio de esta canción',
       code: 'STREAM_UNAVAILABLE',
-      details: errors,
-      debug: { visitorData: vd ? vd.length : 0, cookies: ck ? ck.length : 0, cookieConfigured: !!process.env.YOUTUBE_COOKIE }
+      details: errors
     });
   }
 

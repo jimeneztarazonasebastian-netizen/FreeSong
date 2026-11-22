@@ -34,15 +34,15 @@ export function relayInstances() {
   return configuredInstances();
 }
 
-export async function resolveRelayAudio(videoId, wantedItag) {
-  const all = configuredInstances();
+export async function resolveRelayAudio(videoId, wantedItag, excluded = []) {
+  const all = configuredInstances().filter(base => !excluded.includes(base));
   const order = preferred && all.includes(preferred) ? [preferred, ...all.filter((i) => i !== preferred)] : all;
   const errors = [];
 
   // Si todas están marcadas como caídas (o solo hay una), se reintentan igual:
   // un corte momentáneo no debe dejar la app sin audio durante minutos.
   const healthy = order.filter((base) => (badUntil.get(base) || 0) <= Date.now());
-  const candidates = healthy.length ? healthy : order;
+  const candidates = [...healthy, ...order.filter(base => !healthy.includes(base))];
 
   for (const base of candidates) {
     try {

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.42 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.43 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.42';
+  const APP_VERSION = '3.9.43';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1101,6 +1101,23 @@
     dialog.showModal();
   });
   $('streamVideoDialog').addEventListener('close', () => $('streamVideoFrame').replaceChildren());
+  $('streamFallbackRetry')?.addEventListener('click', () => {
+    if (unavailableTrack && S.queue[S.currentIndex] === unavailableTrack) playTrack(S.currentIndex, true);
+  });
+  $('streamFallbackAudius')?.addEventListener('click', () => {
+    if (!unavailableTrack || nativeAudio) return;
+    closeFullPlayer();
+    switchTab('search');
+    const input = $('searchInput');
+    input.value = '';
+    $('searchAudiusBtn').click();
+    input.value = unavailableTrack.title || '';
+    if (input.value) {
+      $('searchClearBtn').classList.remove('hidden');
+      executeSearch(input.value);
+    }
+  });
+  $('streamFallbackAudius')?.classList.toggle('hidden', !!nativeAudio);
 
   function stopAfterStreamFailures() {
     Diag.inc('stops');
@@ -1486,6 +1503,16 @@
       return;
     }
     syncMediaSessionPlayback();
+    if (queueMix?.active) {
+      // HLS ya contiene la mezcla. La recuperación del deck normal podría
+      // abrir otra fuente si iOS bloquea la página durante el primer búfer.
+      if (!isBackground()) {
+        setupAudioSession();
+        updateQueueMixPosition();
+      }
+      saveSession(true);
+      return;
+    }
     if (document.visibilityState === 'hidden') {
       if (isCrossfading && pendingTrackCommit) {
         // Al ocultarse la app, el fundido se cierra y la sesión guarda la
@@ -1501,7 +1528,7 @@
       const ap = getActivePlayer();
       const curTrack = S.queue[S.currentIndex];
       if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
-        rememberPosition(curTrack.id, queueMix?.active ? queueMixPosition() : ap.currentTime);
+        rememberPosition(curTrack.id, ap.currentTime);
       }
       // Si se bloqueó el teléfono mientras la canción aún cargaba (0:00), iOS
       // congela la carga. Al volver hay que abrir una fuente nueva, no llamar
@@ -3162,6 +3189,7 @@
       pauseAudioKeepAlive();
       isYtMode = false;
       mix.active = true;
+      Diag.log('mixer-start', { editable: mix.editable, tracks: mix.tracks.length });
       userIntentionalPause = false;
       queueMixAudio.src = mix.playlist;
       queueMixAudio.playbackRate = mix.editable ? 1 : S.playbackRate;
@@ -3253,6 +3281,7 @@
       return;
     }
     mix.editing = true;
+    Diag.log('mixer-edit-start', { part, seconds: queueMixPosition() });
     queueMixStatus('Preparando la nueva siguiente sin interrumpir el audio…');
     try {
       const editId = crypto.randomUUID().replaceAll('-', '');
@@ -3274,7 +3303,8 @@
         if (queueMix !== mix) return;
         const edit = state?.edit?.id === editId ? state.edit : null;
         if (edit?.status === 'rejected' || (!edit && state && (!accepted || Date.now() >= deadline))) {
-          throw new Error('La transición anterior ya está lista');
+          const reason = ['published', 'source', 'not_ready'].includes(edit?.reason) ? edit.reason : 'unconfirmed';
+          throw Object.assign(new Error('La mezcla no se pudo actualizar'), { reason });
         }
         if (edit?.status === 'applied') {
           const start = S.queue.indexOf(mix.tracks[0]);
@@ -3289,12 +3319,16 @@
           renderQueue();
           queueMixStatus('Siguiente actualizada con crossfade.');
           showToast('La siguiente canción cambió sin interrumpir el audio');
+          Diag.log('mixer-edit-applied', { part, revision: state.revision });
           return;
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-    } catch {
-      if (queueMix === mix) queueTrackNext(track, true);
+    } catch (error) {
+      if (queueMix === mix) {
+        Diag.log('mixer-edit-deferred', { part, status: error.status, reason: error.reason });
+        queueTrackNext(track, true);
+      }
     } finally {
       mix.editing = false;
     }
@@ -3349,6 +3383,7 @@
   });
   queueMixAudio.addEventListener('error', () => {
     if (queueMix?.active) {
+      Diag.log('mixer-audio-error', { code: queueMixAudio.error?.code, part: queueMix.part });
       const message = 'Se interrumpió el flujo de la mezcla. Prepara otra para continuar.';
       stopQueueMix(message);
       showToast(message);
@@ -9126,7 +9161,8 @@
     if (!src) return '';
     try {
       const url = new URL(src, location.href);
-      return `${url.origin}${url.pathname}`;
+      const path = url.pathname.replace(/\/sessions\/[a-f0-9]{48}(?=\/|$)/gi, '/sessions/[oculta]');
+      return `${url.origin}${path}`;
     } catch {
       return String(src).split('?')[0].slice(0, 120);
     }
@@ -9160,7 +9196,13 @@
         : null,
       queueLength: S.queue.length,
       isPlaying: !!S.isPlaying,
-      engine: nativeAudio ? 'avplayer' : 'html',
+      engine: nativeAudio ? 'avplayer' : queueMix?.active ? 'hls-mixer' : 'html',
+      mixer: queueMix ? {
+        active: queueMix.active, editable: queueMix.editable === true, editing: queueMix.editing === true,
+        part: queueMix.part, tracks: queueMix.tracks.length,
+        position: queueMix.active ? queueMixPosition() : 0,
+        audio: describeAudioSource(queueMixAudio.currentSrc || queueMixAudio.src)
+      } : null,
       native: nativeAudio ? nativeAudio.state : null,
       nativeInfo: nativeAudio ? nativeAudio.info : null,
       userIntentionalPause,

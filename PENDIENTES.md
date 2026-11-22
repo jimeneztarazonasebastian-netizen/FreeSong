@@ -2,7 +2,7 @@
 
 Fecha: 21 de noviembre de 2026.
 Base de la auditoría original: `35db606`. Estado de los avances actualizado
-para la versión web **3.9.42**.
+para la versión web **3.9.43**.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
 [OpenTune](https://github.com/justshivv/Opentune) y los límites que no conviene
@@ -175,11 +175,14 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
 - Si deslizas una pista antes de reproducir un bloque, la PWA reconstruye
   la mezcla con el orden nuevo. Durante la reproducción conserva el
   bloque HLS y permite insertar una pista después de él.
-- El reemplazo en una sesión activa está implementado y probado localmente con
-  FFmpeg y Audius. Se aplica cuando la transición aún no se publicó y la
-  variante está lista; se conservan los segmentos ya publicados. Queda
-  validarlo desde Render y en la cola habitual del iPhone bloqueado. También
-  falta encadenar bloques con fundido.
+- El reemplazo en una sesión activa pasó la prueba local con FFmpeg y una
+  prueba de producción en Render con Audius. Conservó tres segmentos ya
+  publicados y el flujo se pudo decodificar hasta después de la transición
+  bajo la misma URL. Se aplica cuando la transición aún no se publicó y la
+  variante llega a tiempo. Falta verificar el gesto y el fundido resultante
+  en la cola habitual del iPhone bloqueado y encadenar bloques con fundido.
+- El diagnóstico de la PWA registra cambios de mezcla, errores y motivo
+  del aplazamiento. La credencial de reproducción HLS queda oculta.
 - Render intenta obtener una URL directa de audio y recurre a `/api/stream`
   cuando la primera vía no devuelve audio reproducible.
 
@@ -257,6 +260,6 @@ rápido de la versión 3.9.28 sigue como referencia histórica.
 1. Completar la validación física del IPA vigente (2.1).
 2. Añadir el fallback HLS (3.1) y confirmar la política de sesión de audio (3.2).
 3. Verificar el troceado de descargas y adoptar `loudnessDb` (3.3 y 3.4).
-4. Desplegar y verificar el reemplazo HLS desde Render. Validarlo también en
-   el iPhone y encadenar bloques con fundido (4.3).
+4. Validar el reemplazo HLS en el iPhone bloqueado y encadenar bloques con
+   fundido (4.3).
 5. Abordar letras multifuente como feature independiente (4.1).
