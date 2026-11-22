@@ -34,6 +34,66 @@ export function relayInstances() {
   return configuredInstances();
 }
 
+const BROWSER_RELAY_HOST = 'yt.chocolatemoo53.com';
+const BROWSER_RELAY_COMPANION = 'yt-comp2.chocolatemoo53.com';
+
+// Accept only the AAC media URL returned by this relay. Never follow a
+// redirect to an arbitrary host or forward headers supplied by the caller.
+export function parseBrowserRelayMedia(value, host = BROWSER_RELAY_HOST) {
+  if (typeof value !== 'string' || value.length > 3500) return null;
+  let url;
+  try { url = new URL(value); } catch { return null; }
+  const q = url.searchParams;
+  if (url.origin !== `https://${host}` || url.pathname !== '/videoplayback' || url.username || url.password || url.hash
+    || new Set(q.keys()).size !== [...q.keys()].length
+    || !/^rr?\d+---sn-[a-z0-9-]+\.googlevideo\.com$/.test(q.get('host') || '')
+    || q.get('source') !== 'youtube' || q.get('mime') !== 'audio/mp4'
+    || !['139', '140', '141'].includes(q.get('itag')) || !q.get('sig') || !q.get('lsig')
+    || q.has('range')) return null;
+  const size = Number(q.get('clen'));
+  const expiresAt = Number(q.get('expire')) * 1000;
+  if (!Number.isSafeInteger(size) || size <= 0 || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return null;
+  return { url, size };
+}
+
+export async function fetchBrowserRelayMedia(media, range) {
+  const start = range.suffix ? Math.max(0, media.size - range.suffix) : range.start;
+  const end = range.suffix ? media.size - 1 : Math.min(range.end, media.size - 1);
+  if (start >= media.size) {
+    return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${media.size}` } });
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7500);
+  const options = {
+    redirect: 'manual',
+    signal: controller.signal,
+    headers: {
+      Range: `bytes=${start}-${end}`,
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1',
+      Origin: 'https://freesong-pied.vercel.app',
+      Referer: 'https://freesong-pied.vercel.app/'
+    }
+  };
+  try {
+    let response = await fetch(media.url, options);
+    if ([302, 307, 308].includes(response.status)) {
+      const next = parseBrowserRelayMedia(response.headers.get('location'), BROWSER_RELAY_COMPANION);
+      void response.body?.cancel().catch(() => {});
+      if (!next || next.size !== media.size || next.url.search !== media.url.search) return null;
+      response = await fetch(next.url, options);
+    }
+    if (response.status === 206
+      && response.headers.get('content-range') === `bytes ${start}-${end}/${media.size}`
+      && response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() === 'audio/mp4') return response;
+    void response.body?.cancel().catch(() => {});
+  } catch {
+    // The relay URL contains short-lived source parameters and stays out of diagnostics.
+  } finally {
+    clearTimeout(timeout);
+  }
+  return null;
+}
+
 export async function resolveRelayAudio(videoId, wantedItag, excluded = []) {
   const all = configuredInstances().filter(base => !excluded.includes(base));
   const order = preferred && all.includes(preferred) ? [preferred, ...all.filter((i) => i !== preferred)] : all;
