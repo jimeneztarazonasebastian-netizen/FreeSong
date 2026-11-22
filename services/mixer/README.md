@@ -17,7 +17,8 @@ La clave generada debe permanecer en el servidor; nunca incluirla en JavaScript 
 
 Devuelve rutas de estado y lista HLS. Hay que esperar a que la lista esté disponible.
 FFmpeg mezcla audio AAC y sirve segmentos temporales; no exige descargas manuales en el teléfono.
-Máximo 2 sesiones simultáneas, 2–3 canciones de hasta 10 minutos por sesión, caducidad a los 20 minutos.
+Máximo 2 sesiones simultáneas. Se pueden preparar 2–3 canciones de hasta 10 minutos cada una.
+Una sesión caduca tras 20 minutos sin reproducir segmentos o al cumplir 60 minutos.
 Los identificadores aleatorios de sesión son credenciales de reproducción: no compartirlos.
 
 ## Fuentes y validación

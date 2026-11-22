@@ -14,12 +14,14 @@ async function call(method, origin, body, session) {
 try {
   delete process.env.MIXER_API_KEY;
   assert.equal((await call('GET')).data.configured, false);
+  assert.equal((await call('GET')).data.wakeUrl, undefined);
   assert.equal((await call('POST')).code, 503);
   process.env.MIXER_API_KEY = 'server-only-test-secret';
   globalThis.fetch = async (url, options) => {
     forwarded = { url, options };
     return new Response(JSON.stringify({ id, expiresIn: 1200 }), { status: 202, headers: { 'content-type': 'application/json' } });
   };
+  assert.equal((await call('GET')).data.wakeUrl, 'https://freesong-mixer.onrender.com/health');
   assert.equal((await call('POST', 'https://unrelated.test', {})).code, 403);
   assert.equal(forwarded, null);
   const result = await call('POST', 'https://freesong-pied.vercel.app', { tracks: [{ id: 'one' }, { id: 'two' }], crossfade: 6 });

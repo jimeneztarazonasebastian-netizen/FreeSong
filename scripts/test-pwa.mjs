@@ -158,7 +158,11 @@ try {
   await page.getByRole('button', { name: 'Cerrar vídeo' }).click();
   await page.waitForFunction(() => !document.querySelector('#streamVideoFrame iframe'));
   const mixId = 'a'.repeat(48);
+  const wakeUrl = 'https://freesong-mixer.onrender.com/health';
   let mixReleased = false;
+  let wakeAttempts = 0;
+  let releaseFirstWake;
+  const firstWakeResponse = new Promise(resolve => { releaseFirstWake = resolve; });
   const mixesRequested = [];
   const mixEdits = [];
   let mixEdit = null;
@@ -167,6 +171,14 @@ try {
   }, headers: { 'Access-Control-Allow-Origin': '*' } }));
   await page.route('https://api.audius.co/v1/tracks/*/stream?**', route =>
     route.fulfill({ contentType: 'audio/wav', body: wav }));
+  await page.route(wakeUrl, async route => {
+    const attempt = ++wakeAttempts;
+    const headers = { 'Access-Control-Allow-Origin': '*' };
+    if (attempt === 1) await firstWakeResponse;
+    if (attempt === 2) return route.fulfill({ status: 503, body: 'Iniciando', headers });
+    // La primera solicitud puede haber sido cancelada antes de responder.
+    await route.fulfill({ json: { ok: true }, headers }).catch(() => {});
+  });
   await page.route('**/api/health?mixer=1**', route => {
     if (route.request().method() === 'DELETE') { mixReleased = true; return route.fulfill({ json: { ok: true } }); }
     if (route.request().method() === 'POST') {
@@ -178,6 +190,9 @@ try {
       mixEdits.push(tracks.map(t => t.id));
       mixEdit = { id: editId, status: mixEdits.length === 1 ? 'applied' : 'rejected' };
       return route.fulfill({ json: { edit: { id: editId, status: 'pending' } } });
+    }
+    if (!new URL(route.request().url()).searchParams.has('session')) {
+      return route.fulfill({ json: { configured: true, wakeUrl } });
     }
     const trackDurations = mixEdit ? [null, 11, 601] : [10, null, null];
     return route.fulfill({ json: { status: 'complete', edit: mixEdit, trackDurations } });
@@ -194,8 +209,17 @@ try {
     document.getElementById('miniPlayer').click();
     document.getElementById('tabQueueBtn').click();
   });
+  const slowWake = page.waitForRequest(wakeUrl);
   await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await slowWake;
+  assert.equal(mixesRequested.length, 0, 'Una instancia aún en inicio no debe recibir la creación de la mezcla');
+  await page.getByRole('button', { name: 'Cancelar preparación' }).click();
+  releaseFirstWake();
+  await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await page.waitForFunction(() => /servidor de audio está iniciando/.test(document.getElementById('queueMixStatus').textContent));
   await page.getByRole('button', { name: 'Reproducir mezcla' }).waitFor();
+  assert.equal(wakeAttempts, 3);
+  assert.equal(mixesRequested.length, 1, 'Solo se crea una sesión después de confirmar que Render está listo');
   const swipeQueue = title => page.evaluate(title => {
     const row = [...document.querySelectorAll('[data-queue-idx]')].find(r => r.textContent.includes(title));
     for (const [type, x] of [['touchstart', 40], ['touchmove', 140], ['touchend', 140]]) {

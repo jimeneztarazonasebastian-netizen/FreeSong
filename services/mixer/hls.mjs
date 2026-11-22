@@ -3,6 +3,13 @@ import { join } from 'node:path';
 
 const mediaFile = /^segment-\d{5}\.ts$/;
 const lookahead = 20;
+export const idleSessionMs = 20 * 60_000;
+const maxSessionMs = 60 * 60_000;
+
+export function sessionExpired(session, now = Date.now()) {
+  return now - (session.lastSegmentAt ?? session.created) >= idleSessionMs ||
+    now - session.created >= maxSessionMs;
+}
 
 export async function readManifest(render) {
   const text = await readFile(join(render.directory, 'index.m3u8'), 'utf8');

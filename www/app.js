@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.45 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.46 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.45';
+  const APP_VERSION = '3.9.46';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -3147,10 +3147,10 @@
     });
   }
 
-  async function queueMixRequest(method, id, body) {
+  async function queueMixRequest(method, id, body, signal = AbortSignal.timeout(20_000)) {
     const query = id ? '&session=' + encodeURIComponent(id) : '';
     const response = await fetch('/api/health?mixer=1' + query, {
-      method, cache: 'no-store', signal: AbortSignal.timeout(20_000),
+      method, cache: 'no-store', signal,
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})
     });
     const data = await response.json();
@@ -3160,14 +3160,38 @@
     return data;
   }
 
+  async function wakeQueueMixer(warmup) {
+    const { signal } = warmup;
+    const timer = setTimeout(() => warmup.abort(new Error('El servidor de audio tardó en iniciar. Inténtalo otra vez.')), 85_000);
+    try {
+      const { configured, wakeUrl } = await queueMixRequest('GET', null, undefined, signal);
+      if (!configured || !wakeUrl) throw new Error('El servidor de audio aún no está configurado.');
+      while (!signal.aborted) {
+        try {
+          const response = await fetch(wakeUrl, { cache: 'no-store', signal, headers: { Accept: 'application/json' } });
+          if (response.ok && (await response.json()).ok === true) return;
+        } catch {
+          // Una instancia detenida puede devolver una página de inicio en vez de JSON.
+        }
+        if (signal.aborted) break;
+        queueMixStatus('El servidor de audio está iniciando. Puede tardar un minuto…');
+        await new Promise(resolve => setTimeout(resolve, 2500));
+      }
+      throw signal.reason;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function releaseQueueMix(id) {
     if (id) return queueMixRequest('DELETE', id).catch(() => {});
   }
 
   function stopQueueMix(message = '') {
     if (!queueMix) return;
-    const { id, active } = queueMix;
+    const { id, active, warmup } = queueMix;
     queueMix = null;
+    warmup?.abort();
     if (active) {
       queueMixAudio.pause();
       queueMixAudio.removeAttribute('src');
@@ -3240,13 +3264,18 @@
       return;
     }
     const offsets = mixOffsets(durations, fade);
-    const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease };
+    const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease,
+      warmup: new AbortController() };
     queueMix = mix;
     $('queueMixBtn').textContent = 'Cancelar preparación';
-    queueMixStatus(previousRelease ? 'Actualizando el orden de la mezcla…' : 'Preparando pistas por streaming…');
+    queueMixStatus(previousRelease ? 'Actualizando el orden de la mezcla…' : 'Conectando con el servidor de audio…');
     try {
       await previousRelease;
       if (queueMix !== mix) return;
+      await wakeQueueMixer(mix.warmup);
+      if (queueMix !== mix) return;
+      mix.warmup = null;
+      if (!previousRelease) queueMixStatus('Preparando pistas por streaming…');
       const request = {
         tracks: tracks.map(mixerTrack), crossfade: fade, editable: S.playbackRate === 1
       };
@@ -5719,6 +5748,24 @@
     updatePlayPauseIcons(S.isPlaying, isLoading);
   }
 
+  function setPlayerAccessibility(open) {
+    const sheet = $('fullPlayerSheet');
+    sheet.inert = !open;
+    for (const region of [$('appHeader'), $('mainContainer'), $('miniPlayer'), document.querySelector('nav.bottom-nav')]) {
+      if (region) region.inert = open;
+    }
+    $('miniOpenBtn')?.setAttribute('aria-expanded', String(open));
+    if (open) {
+      sheet.removeAttribute('aria-hidden');
+      requestAnimationFrame(() => {
+        if (!sheet.inert) $('playerCloseBtn')?.focus({ preventScroll: true });
+      });
+    } else {
+      $('miniOpenBtn')?.focus({ preventScroll: true });
+      sheet.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   function openFullPlayer() {
     const sheet = $('fullPlayerSheet');
     if (!sheet.classList.contains('translate-y-full')) return;
@@ -5726,6 +5773,7 @@
     sheet.style.transition = '';
     sheet.style.transform = '';
     sheet.classList.remove('translate-y-full');
+    setPlayerAccessibility(true);
     pushModalState('player');
     haptic('light');
     if (S.activePlayerSubTab === 'lyrics') {
@@ -5744,6 +5792,7 @@
     const sheet = $('fullPlayerSheet');
     if (!sheet.classList.contains('translate-y-full')) {
       sheet.classList.add('translate-y-full');
+      setPlayerAccessibility(false);
       popModalState();
     }
     sheet.style.transition = '';
@@ -6894,6 +6943,7 @@
   }
 
   function maybeRemindBackup() {
+    if (S.activeTab !== 'home' || !$('fullPlayerSheet').inert) return;
     const hasData = (S.favorites && S.favorites.length) || (S.playlists && S.playlists.length) || (S.downloads && S.downloads.length);
     if (!hasData) return;
     const days = backupAgeDays();
@@ -7234,13 +7284,13 @@
     $('quickAccessSection')?.classList.remove('hidden');
 
     grid.innerHTML = source.map((t, idx) => `
-      <div class="flex items-center rounded-xl bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 overflow-hidden cursor-pointer press shadow-sm group" data-quick-idx="${idx}">
-        <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" class="w-12 h-12 object-cover bg-zinc-800 shrink-0" />
-        <span class="text-xs font-bold text-white px-2.5 truncate flex-1 leading-tight">${esc(t.title)}</span>
-        <div class="w-7 h-7 rounded-full bg-emerald-500 text-black flex items-center justify-center mr-2 opacity-0 group-hover:opacity-100 transition shadow-md shrink-0">
+      <button type="button" class="quick-track flex items-center rounded-xl bg-zinc-900/80 hover:bg-zinc-800/90 border border-zinc-800/80 overflow-hidden press group" data-quick-idx="${idx}">
+        <img src="${esc(thumbAt(t.thumbnail, 160))}" data-vid="${esc(t.id)}" width="48" height="48" alt="" class="object-cover bg-zinc-800 shrink-0" />
+        <span class="quick-track-title text-xs font-bold text-white mx-2 flex-1 leading-tight">${esc(t.title)}</span>
+        <span class="quick-track-play w-7 h-7 rounded-full bg-violet-300 text-black flex items-center justify-center mr-2 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition shrink-0" aria-hidden="true">
           <svg class="w-3.5 h-3.5"><use href="#i-play"/></svg>
-        </div>
-      </div>
+        </span>
+      </button>
     `).join('');
 
     $$('[data-quick-idx]').forEach((card) => {
@@ -8275,19 +8325,20 @@
   // --- Navegación entre pestañas ---
   function switchTab(tab) {
     closeArtistProfile();
-    if (S.activeTab !== tab) haptic('light');
+    const changed = S.activeTab !== tab;
+    if (changed) haptic('light');
     S.activeTab = tab;
+    document.body.dataset.tab = tab;
     updateGreeting();
     $('viewHome').classList.toggle('hidden', tab !== 'home');
     $('viewSearch').classList.toggle('hidden', tab !== 'search');
     $('viewLibrary').classList.toggle('hidden', tab !== 'library');
     $('viewSettings').classList.toggle('hidden', tab !== 'settings');
+    if (changed) $('mainContainer').scrollTop = 0;
 
     $$('[data-nav]').forEach((btn) => {
-      const isCurrent = btn.getAttribute('data-nav') === tab;
-      btn.className = isCurrent
-        ? 'flex flex-col items-center gap-1 py-1 px-3 text-emerald-400 font-semibold text-[10px] press'
-        : 'flex flex-col items-center gap-1 py-1 px-3 text-zinc-400 hover:text-zinc-200 font-semibold text-[10px] press';
+      if (btn.dataset.nav === tab) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
     });
 
     if (tab === 'library') {
@@ -8305,54 +8356,32 @@
 
   // --- Gestos Táctiles (Swipe en Carátula y Sheet) ---
   function setupGestures() {
-    let touchStartX = 0;
-    let touchStartY = 0;
-    const coverArea = $('sheetTrackView');
     const playerSheet = $('fullPlayerSheet');
 
-    if (coverArea) {
-      coverArea.addEventListener('touchstart', (e) => {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
+    const bindPlayerSwipe = (area, onSwipe) => {
+      if (!area) return;
+      let start;
+      area.addEventListener('touchstart', ({ touches }) => {
+        start = touches.length === 1 ? touches[0] : null;
       }, { passive: true });
-
-      coverArea.addEventListener('touchend', (e) => {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        const dy = e.changedTouches[0].clientY - touchStartY;
-
-        // Deslizar horizontalmente para cambiar de canción
-        if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-          if (dx < 0) {
-            playNext(true);
-          } else {
-            playPrev();
-          }
+      area.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+      area.addEventListener('touchend', ({ changedTouches }) => {
+        if (!start) return;
+        const end = Array.from(changedTouches).find(touch => touch.identifier === start.identifier);
+        if (end) {
+          onSwipe(end.clientX - start.clientX, end.clientY - start.clientY);
+          start = null;
         }
       }, { passive: true });
-    }
-
-    if (playerSheet) {
-      playerSheet.addEventListener('touchstart', (e) => {
-        // Si el toque empieza en el tercio superior
-        if (e.touches[0].clientY < window.innerHeight * 0.35) {
-          touchStartY = e.touches[0].clientY;
-          touchStartX = e.touches[0].clientX;
-        } else {
-          touchStartY = 0;
-        }
-      }, { passive: true });
-
-      playerSheet.addEventListener('touchend', (e) => {
-        if (touchStartY > 0) {
-          const dy = e.changedTouches[0].clientY - touchStartY;
-          const dx = e.changedTouches[0].clientX - touchStartX;
-          // Deslizar hacia abajo minimiza el reproductor
-          if (dy > 70 && Math.abs(dy) > Math.abs(dx) * 1.5) {
-            closeFullPlayer();
-          }
-        }
-      }, { passive: true });
-    }
+    };
+    bindPlayerSwipe(playerSheet?.querySelector('.player-artwork'), (dx, dy) => {
+      if (Math.abs(dx) <= 55 || Math.abs(dx) <= Math.abs(dy) * 1.4) return;
+      if (dx < 0) playNext(true);
+      else playPrev();
+    });
+    bindPlayerSwipe(playerSheet?.querySelector('.player-header'), (dx, dy) => {
+      if (dy > 70 && dy > Math.abs(dx) * 1.5) closeFullPlayer();
+    });
 
     const artistModal = $('artistViewModal');
     if (artistModal) {
@@ -8768,13 +8797,6 @@
       }
     });
 
-    // Clicks en nombres de artista en reproductores
-    $('miniArtist')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const cur = S.queue[S.currentIndex];
-      if (cur) openArtistPage(cur.artist, cur.thumbnail);
-    });
-
     $('playerArtist')?.addEventListener('click', (e) => {
       e.stopPropagation();
       const cur = S.queue[S.currentIndex];
@@ -9072,17 +9094,11 @@
   function updateGreeting() {
     const el = $('headerGreeting');
     if (!el) return;
-    // En las demás pestañas el saludo no tiene sentido: la cabecera muestra
-    // la marca y cada vista conserva su título grande, como en Spotify.
-    if (S.activeTab && S.activeTab !== 'home') {
-      el.textContent = 'FreeSong';
-      return;
-    }
+    el.hidden = S.activeTab !== 'home';
     const hour = new Date().getHours();
-    let text = 'FreeSong';
+    let text = 'Buenas noches';
     if (hour >= 5 && hour < 12) text = 'Buenos días';
     else if (hour >= 12 && hour < 20) text = 'Buenas tardes';
-    else text = 'Buenas noches';
     el.textContent = text;
   }
 

@@ -21,6 +21,7 @@ jobs:
       - run: npm ci
       - run: npx playwright-core install --with-deps chrome
       - run: npm run build
+      - run: git diff --exit-code -- www/app.css www/app.min.js
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
   mixer:

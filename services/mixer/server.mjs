@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { identicalSegments, publishManifest, readManifest, segmentIndex } from './hls.mjs';
+import { identicalSegments, idleSessionMs, publishManifest, readManifest, segmentIndex, sessionExpired } from './hls.mjs';
 import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from './european-relay.mjs';
 
 // La PWA reproduce el fundido desde segmentos temporales de una sesión.
@@ -13,7 +13,6 @@ const key = process.env.MIXER_API_KEY;
 if (!key || key.length < 24) throw new Error('MIXER_API_KEY debe tener al menos 24 caracteres');
 const backend = process.env.AUDIO_BACKEND || 'https://freesong-pied.vercel.app';
 const sessions = new Map();
-const ttl = 20 * 60_000;
 let replacementInFlight = false;
 const authorized = req => {
   const a = Buffer.from(req.headers.authorization || '');
@@ -33,7 +32,8 @@ async function dispose(id) {
   await Promise.all([discardRender(session.render), discardRender(session.candidate)]);
 }
 const sweep = setInterval(() => {
-  for (const [id, session] of sessions) if (Date.now() - session.created > ttl) dispose(id).catch(() => {});
+  const now = Date.now();
+  for (const [id, session] of sessions) if (sessionExpired(session, now)) dispose(id).catch(() => {});
 }, 30_000);
 sweep.unref();
 
@@ -249,7 +249,7 @@ const server = http.createServer(async (req, res) => {
         sessions.delete(id);
         return json(res, 502, { error: 'El proveedor no entregó audio reproducible para una de las pistas.' });
       }
-      return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: ttl / 1000, editable: session.editable });
+      return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: idleSessionMs / 1000, editable: session.editable });
     }
     const match = /^\/sessions\/([a-f0-9]{48})(?:\/(index\.m3u8|segment-\d{5}\.ts))?$/.exec(url.pathname);
     if (match) {
@@ -303,7 +303,8 @@ const server = http.createServer(async (req, res) => {
             if (render === session.render) throw error;
             bytes = await readFile(join(session.render.directory, match[2]));
           }
-          if (session.editable && session.startedAt == null) session.startedAt = Date.now();
+          session.lastSegmentAt = Date.now();
+          if (session.editable && session.startedAt == null) session.startedAt = session.lastSegmentAt;
         }
       } catch { return json(res, session.render?.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }
       res.writeHead(200, { 'Content-Type': match[2].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',

@@ -9,7 +9,9 @@ const reply = (res, code, body) => {
 export async function mixerControl(req, res, url) {
   const key = process.env.MIXER_API_KEY;
   const id = url.searchParams.get('session');
-  if (req.method === 'GET' && !id) return reply(res, 200, { configured: !!key, experimental: true });
+  if (req.method === 'GET' && !id) return reply(res, 200, {
+    configured: !!key, experimental: true, ...(key ? { wakeUrl: `${origin}/health` } : {})
+  });
   if (!key) return reply(res, 503, { error: 'Falta configurar MIXER_API_KEY en Vercel.' });
   if (id && !/^[a-f0-9]{48}$/.test(id)) return reply(res, 400, { error: 'Sesión inválida' });
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method) || (req.method !== 'POST' && !id)) return reply(res, 405, { error: 'Método no admitido' });

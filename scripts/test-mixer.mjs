@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { idleSessionMs, sessionExpired } from '../services/mixer/hls.mjs';
 import { mock } from 'node:test';
 import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from '../services/mixer/european-relay.mjs';
 
@@ -63,6 +64,10 @@ async function verifyEuropeanRelay() {
 await verifyEuropeanRelay();
 
 const key = 'test-only-secret-for-local-mixer-123456';
+assert.equal(sessionExpired({ created: 0 }, idleSessionMs), true);
+assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 38 * 60_000), false);
+assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 51 * 60_000), true);
+assert.equal(sessionExpired({ created: 0, lastSegmentAt: 59 * 60_000 }, 60 * 60_000), true);
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const tone = (frequency, duration = 5) => execFileSync(ffmpeg,
   ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', 'wav', 'pipe:1'],

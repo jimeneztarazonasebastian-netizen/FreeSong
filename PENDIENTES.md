@@ -1,8 +1,7 @@
 # Pendientes y mejoras de FreeSong
 
-Fecha: 21 de noviembre de 2026.
-Base de la auditoría original: `35db606`. Estado de los avances actualizado
-para la versión web **3.9.44**.
+Auditoría del 22 de noviembre de 2026 para la versión web **3.9.46**.
+La auditoría original partió del commit `35db606`.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
 [OpenTune](https://github.com/justshivv/Opentune) y los límites que no conviene
@@ -25,18 +24,33 @@ cómo se comprueba.
   `health`, `explore`, `artist`, `album`, `search`, `queue`, `playlist`,
   `lyrics`, `import`, `home`, `suggestions`, `stream`. `_hls`, `_yt`, `_relay`
   y `_mixer` son módulos compartidos, no rutas.
-- El mezclador HLS de Render entregó una mezcla completa de dos canciones
-  de Audius. La página experimental se probó con el iPhone bloqueado.
+- El mezclador HLS de Render entregó las grabaciones exactas de «Stereo Love» y
+  «Fanática Sensual» desde el relay europeo. La mezcla de 9:16 incluyó un fundido
+  de seis segundos. La PWA avanzó entre las canciones en Chrome con perfil de
+  iPhone, página oculta y un decodificador HLS de prueba. El control con Audius
+  también funcionó. [Revisión del mezclador en producción](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/commit/5265a20)
 - La PWA incluye búsqueda de Audius, gestos de cola y reproducción HLS en
   **Siguiente** por bloques de hasta tres pistas.
+- La PWA espera a que Render responda antes de crear una sesión de mezcla. Las
+  pruebas cubren una respuesta temporal `503`, cancelar durante el arranque y
+  crear una sola sesión cuando el servidor ya está listo.
 
 ---
 
 ## 2. Prioridad P0 — reproducción y validación real
 
-### 2.1 Validar el IPA en un iPhone físico
+### 2.1 Validar la PWA y el IPA en un iPhone físico
 
-Es el criterio que ningún test de Chrome puede sustituir. Falta completar:
+Pruebas pendientes para la PWA instalada y Safari:
+
+- Completar el fundido exacto de «Stereo Love» a «Fanática Sensual» con el iPhone
+  bloqueado y comprobar el título, la portada y los controles antes y después.
+- Repetir en Wi-Fi y datos móviles. Probar una mezcla después de un periodo de
+  inactividad de Render y al deslizar una pista para ponerla de siguiente.
+- Verificar la Isla Dinámica, la barra inferior, el teclado al buscar y el
+  reproductor en vertical y horizontal con texto ampliado.
+
+Pruebas pendientes para el IPA:
 
 - 30 minutos con la pantalla bloqueada y al menos 10 cambios de pista.
 - Pausa, reanudación, siguiente y seek desde la pantalla bloqueada.
@@ -75,10 +89,24 @@ porta por ahora.**
 Trabajo pendiente, por orden:
 
 1. Usar HLS cuando el cliente lo entregue (ver 3.1).
-2. Medir la disponibilidad de ambos relays en otras redes y desde Render.
+2. Repetir desde Render con una muestra variada y comparar con Wi-Fi y datos
+   móviles. La prueba de dos canciones ya confirma la ruta directa para ese caso.
 3. Conservar la cookie de YouTube como vía MWEB cuando la IP no esté bloqueada.
 4. Medir con una lista fija de 20 pistas variadas: primer byte, seek, URL
    caducada y fallo explícito, en Wi-Fi y datos móviles, repetido otro día.
+
+### 2.4 Autorización del catálogo antes de distribuir el proyecto
+
+- Identificar al proveedor y documentar los permisos aplicables a cada catálogo.
+  Revisar reproducción pública bajo demanda, mezcla o retransmisión desde Render,
+  descargas y uso de portadas y letras. Los permisos sobre la grabación y la obra
+  musical deben cubrir el uso previsto. [Términos de YouTube](https://www.youtube.com/t/terms) · [Políticas para sus API](https://developers.google.com/youtube/terms/developer-policies) · [Licencia de Audius](https://openaudiofoundation.org/open-music-license.pdf)
+- Confirmar con el proveedor que el acceso y el volumen de tráfico previstos
+  estén autorizados. El operador del relay documenta límites en su API pública y
+  una respuesta de audio válida solo demuestra que la ruta técnica funciona.
+  [Condiciones del relay](https://www.chocolatemoo53.com/faq/)
+- Definir el catálogo que se incluirá al publicar y verificar licencias del código
+  y de los recursos visuales que se entreguen.
 
 ---
 
@@ -132,7 +160,20 @@ mano.
 La PWA prueba el relay europeo y conserva el anterior como respaldo. Comprueba
 un rango de audio antes de recordar la fuente. En el navegador se verificaron
 las publicaciones exactas de «Stereo Love» y «Fanática Sensual» en el relay
-europeo. Queda medir su disponibilidad desde distintas redes, Safari y Render.
+europeo. Falta ampliar la muestra en Render y repetir las pruebas con Safari,
+Wi-Fi y datos móviles.
+
+### 3.7 Diseño adaptable y accesibilidad
+
+- Revisar Inicio, Buscar, Biblioteca, Siguiente, Reproductor y Ajustes en pantallas
+  estrechas, horizontal y escritorio. Medir desbordamiento de la página y
+  verificar que los controles sigan al alcance con nombres largos y texto ampliado.
+- En iPhone físico, comprobar el área segura alrededor de la Isla Dinámica y el
+  indicador de inicio. Repetir la búsqueda con teclado abierto y recorrer los
+  controles con VoiceOver.
+- Pasar `npm run build` y `npm test` al preparar una publicación. La CI comprueba
+  que el CSS y el JavaScript generados coincidan con los archivos del repositorio
+  que se publican.
 
 ---
 
@@ -151,27 +192,30 @@ Unison + subtítulos del vídeo, con offset por canción y palabra por palabra.
 
 - Validar curvas equal-power y duraciones mínima/intermedia/máxima en el IPA.
 - La PWA debe mostrar disponibilidad real: primer plano frente a bloqueado.
-- No anunciar crossfade bloqueado en Safari sin haberlo demostrado.
+- Completar una prueba con Safari en un iPhone físicamente bloqueado antes de
+  anunciar el fundido en segundo plano como verificado.
 
 ### 4.3 Mezclador HLS experimental (Render)
 
-Render Free y el puente de Vercel están operativos. La prueba en producción
-aceptó la sesión, pero ambas canciones cayeron al proxy. Por separado,
-`/api/stream` devolvió `502 STREAM_UNAVAILABLE` para ambas, con rechazos
-`403` de origen. La mezcla no produjo segmentos. El endpoint público de Render
-reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
+Render Free y el puente de Vercel están operativos. La revisión `5265a20`
+incorporó el relay europeo como fuente directa. Producción devolvió ambas fuentes
+como `relay-eu` y entregó 140 segmentos de la mezcla completa. El relay y el
+proxy siguen sujetos a la disponibilidad de cada pista. La prueba cruzada
+confirmó el control Audius.
 
 - Validar en un iPhone bloqueado la demostración HLS de dos tonos en
   `/mixer-test.html`. Esta prueba separa la reproducción en Safari de los
   problemas de las fuentes de canciones.
-- Conseguir una fuente estable de audio y medirla desde Render.
-- Probar Audius desde Render con IDs explícitos (`audius:<id>`) en
-  `/mixer-test.html`. Su catálogo es independiente del de YouTube.
-  OpenTune verifica sus fuentes alternativas por grabación y mantiene
-  identificada cada versión. FreeSong conserva el proveedor explícito y
-  evita sustituciones automáticas.
-- Medir tiempo al primer segmento y CPU real.
-- Control de sesiones por usuario y renovación de cola.
+- Medir tiempo al primer segmento con Render recién iniciado, CPU y consumo
+  durante varias sesiones. El plan gratuito entra en reposo después de 15 minutos
+  de inactividad, puede reiniciarse y tiene límites de transferencia. Las sesiones
+  y los segmentos viven en almacenamiento temporal.
+  [Límites del plan gratuito](https://render.com/docs/free)
+- Probar dos oyentes concurrentes y el mensaje para un tercero. Revisar el límite
+  global de dos sesiones antes de ampliar el uso público.
+- Probar en Render un bloque de pistas largas que supere los 20 minutos. Esta
+  revisión renueva el plazo con cada segmento servido, hasta una hora desde que
+  se creó la sesión, y deja caducar una sesión tras 20 minutos de inactividad.
 - Si deslizas una pista antes de reproducir un bloque, la PWA reconstruye
   la mezcla con el orden nuevo. Durante la reproducción conserva el
   bloque HLS y permite insertar una pista después de él.
@@ -183,8 +227,9 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
   en la cola habitual del iPhone bloqueado y encadenar bloques con fundido.
 - El diagnóstico de la PWA registra cambios de mezcla, errores y motivo
   del aplazamiento. La credencial de reproducción HLS queda oculta.
-- Render intenta obtener una URL directa de audio y recurre a `/api/stream`
-  cuando la primera vía no devuelve audio reproducible.
+- Render valida primero un rango AAC del relay europeo para el ID solicitado.
+  Si falla, intenta la fuente directa y luego `/api/stream`. Las pistas de Audius
+  conservan su proveedor propio.
 
 ### 4.4 Audio avanzado (solo después de P0/P1)
 
@@ -197,7 +242,8 @@ reportaba `b12949d` durante la prueba, con el diagnóstico anterior.
 ### 4.5 Biblioteca y offline
 
 - Copias, migraciones y recuperación sin pérdida.
-- Medir memoria con bibliotecas grandes; hoy se preparan blobs al arrancar.
+- Medir memoria con bibliotecas grandes. La prueba offline comprueba que el
+  arranque prepara solamente los blobs de la pista actual y la siguiente.
 - Rehidratar descargas y probar modo avión tras relanzar.
 
 ### 4.6 Documentación desactualizada
@@ -257,9 +303,12 @@ rápido de la versión 3.9.28 sigue como referencia histórica.
 
 ## 8. Siguiente trabajo recomendado
 
-1. Completar la validación física del IPA vigente (2.1).
-2. Añadir el fallback HLS (3.1) y confirmar la política de sesión de audio (3.2).
-3. Verificar el troceado de descargas y adoptar `loudnessDb` (3.3 y 3.4).
-4. Validar el reemplazo HLS en el iPhone bloqueado y encadenar bloques con
+1. Completar la validación física del reproductor y del diseño en la PWA y el
+   IPA (2.1 y 3.7).
+2. Verificar los permisos del catálogo y medir capacidad y caducidad antes de
+   ampliar el uso público (2.4 y 4.3).
+3. Validar el reemplazo HLS en el iPhone bloqueado y encadenar bloques con
    fundido (4.3).
-5. Abordar letras multifuente como feature independiente (4.1).
+4. Añadir el respaldo HLS en el IPA, confirmar la política de sesión de audio,
+   verificar descargas y adoptar `loudnessDb` (3.1 a 3.4).
+5. Abordar letras multifuente como mejora independiente (4.1).
