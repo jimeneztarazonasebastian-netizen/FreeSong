@@ -1,6 +1,6 @@
 # Pendientes y mejoras de FreeSong
 
-Auditoría del 22 de noviembre de 2026 para la versión web **3.9.46**.
+Auditoría del 22 de noviembre de 2026 para la versión web **3.9.47**.
 La auditoría original partió del commit `35db606`.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
@@ -191,7 +191,11 @@ Unison + subtítulos del vídeo, con offset por canción y palabra por palabra.
 ### 4.2 Crossfade
 
 - Validar curvas equal-power y duraciones mínima/intermedia/máxima en el IPA.
-- La PWA debe mostrar disponibilidad real: primer plano frente a bloqueado.
+- Con Crossfade activado, la PWA del iPhone prepara una mezcla al iniciar la
+  cola. Mientras Render carga, el reproductor normal sigue sonando. La PWA
+  cambia al HLS en la misma posición cuando Safari lo acepta en primer plano.
+  Si el teléfono se bloquea antes de que esté lista, continúa la reproducción
+  normal y se reintenta el cambio cuando la PWA vuelve a estar visible.
 - Completar una prueba con Safari en un iPhone físicamente bloqueado antes de
   anunciar el fundido en segundo plano como verificado.
 
@@ -211,11 +215,16 @@ confirmó el control Audius.
   de inactividad, puede reiniciarse y tiene límites de transferencia. Las sesiones
   y los segmentos viven en almacenamiento temporal.
   [Límites del plan gratuito](https://render.com/docs/free)
-- Probar dos oyentes concurrentes y el mensaje para un tercero. Revisar el límite
-  global de dos sesiones antes de ampliar el uso público.
-- Probar en Render un bloque de pistas largas que supere los 20 minutos. Esta
-  revisión renueva el plazo con cada segmento servido, hasta una hora desde que
-  se creó la sesión, y deja caducar una sesión tras 20 minutos de inactividad.
+- Producción sirvió a la vez una mezcla de Audius y una mezcla de «Stereo Love»
+  y «Fanática Sensual» desde la cola de la PWA. El límite de dos sesiones se
+  comprobó localmente con cuatro solicitudes concurrentes: dos se aceptaron
+  y las otras dos recibieron un 429. Revisar capacidad antes de ampliar el uso.
+- La revisión `f9b78e4` está publicada en Render y renueva la sesión con cada
+  segmento servido, hasta una hora desde que se creó. La prueba local con reloj
+  acelerado decodificó un segmento en 20:12 y comprobó la caducidad por
+  inactividad. En Render se decodificó al minuto 15. La sesión seguía accesible
+  a 19:15, pero en esa consulta faltó el segmento esperado. Queda repetir la
+  prueba de extremo a extremo con más de 20 minutos de tiempo real.
 - Si deslizas una pista antes de reproducir un bloque, la PWA reconstruye
   la mezcla con el orden nuevo. Durante la reproducción conserva el
   bloque HLS y permite insertar una pista después de él.

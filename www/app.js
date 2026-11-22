@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.46 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.47 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.46';
+  const APP_VERSION = '3.9.47';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -307,6 +307,7 @@
   ];
   const queueMixAudio = $('queueMixAudio') || new Audio();
   let queueMix = null;
+  let queueMixPrimed = false;
   audioDecks.forEach((a) => {
     a.preload = 'auto';
     a.playsInline = true;
@@ -524,8 +525,12 @@
     if (['140', '139'].includes(String(data.quality))) S.audioQuality = String(data.quality);
     if (typeof data.normalize === 'boolean') S.audioNormalize = data.normalize;
     if (typeof data.playbackRate === 'number' && data.playbackRate > 0.25 && data.playbackRate < 4) S.playbackRate = data.playbackRate;
-    if (typeof data.crossfade === 'boolean') S.crossfade = data.crossfade;
-    if (typeof data.crossfadeDuration === 'number') S.crossfadeDuration = data.crossfadeDuration;
+    if (savedXf === null && typeof data.crossfade === 'boolean') S.crossfade = data.crossfade;
+    if (!savedXfDur && typeof data.crossfadeDuration === 'number') S.crossfadeDuration = data.crossfadeDuration;
+    $('settingCrossfadeToggle').checked = S.crossfade && !$('settingCrossfadeToggle').disabled;
+    $('settingCrossfadeRange').value = S.crossfadeDuration;
+    $('crossfadeDurationLabel').textContent = `${S.crossfadeDuration} segundos`;
+    $('crossfadeSliderWrap').classList.toggle('hidden', !$('settingCrossfadeToggle').checked);
     if (typeof data.autoplay === 'boolean') S.autoplayInfinite = data.autoplay;
 
     const seconds = Math.max(0, Number(data.position) || 0);
@@ -1508,6 +1513,10 @@
       return;
     }
     if (document.visibilityState === 'hidden') {
+      if (queueMix?.handoff) {
+        queueMix.handoff = null;
+        resetQueueMixMedia();
+      }
       if (isCrossfading && pendingTrackCommit) {
         // Al ocultarse la app, el fundido se cierra y la sesión guarda la
         // pista entrante con su posición real.
@@ -1540,6 +1549,7 @@
     } else {
       setupAudioSession();
       ensurePlaybackAlive();
+      if (queueMix?.autoPlayer) void startAutomaticMix(queueMix);
       if (autoPlayBlocked && !userIntentionalPause) {
         showToast('Toca play para continuar', 3000);
       }
@@ -1633,6 +1643,7 @@
       // Con la canción ya sonando, deja resuelta la siguiente (relay directo)
       // sin competir con el arranque de la actual.
       if (idx === activeDeckIdx && !isYtMode) {
+        if (queueMix?.autoPlayer) void startAutomaticMix(queueMix);
         setTimeout(() => {
           if (S.isPlaying && !isYtMode && S.queue[S.currentIndex]) prefetchNextTrack();
         }, 1500);
@@ -3187,22 +3198,28 @@
     if (id) return queueMixRequest('DELETE', id).catch(() => {});
   }
 
+  function resetQueueMixMedia() {
+    queueMixAudio.pause();
+    queueMixAudio.removeAttribute('src');
+    queueMixAudio.preload = 'none';
+    queueMixAudio.muted = false;
+    queueMixAudio.load();
+  }
+
   function stopQueueMix(message = '') {
     if (!queueMix) return;
-    const { id, active, warmup } = queueMix;
+    const { id, active, handoff, warmup } = queueMix;
     queueMix = null;
     warmup?.abort();
+    if (active || handoff) resetQueueMixMedia();
     if (active) {
-      queueMixAudio.pause();
-      queueMixAudio.removeAttribute('src');
-      queueMixAudio.load();
       S.isPlaying = false;
       updatePlayPauseIcons(false, false);
       unavailableTrack = S.currentTrack;
     }
     const released = releaseQueueMix(id);
     $('queueMixBtn').disabled = false;
-    $('queueMixBtn').textContent = 'Preparar crossfade con pantalla bloqueada';
+    $('queueMixBtn').textContent = 'Preparar mezcla manual';
     queueMixStatus(message);
     return released;
   }
@@ -3222,6 +3239,97 @@
     return true;
   }
 
+  function queueMixCanSeek(target, headroom = 0) {
+    const ranges = queueMixAudio.seekable;
+    for (let i = 0; i < ranges.length; i++) {
+      if (target >= ranges.start(i) && target + headroom < ranges.end(i)) return true;
+    }
+    return false;
+  }
+
+  function canUseAutomaticMix() {
+    return isIOSDevice && !nativeAudio && S.crossfade && navigator.onLine !== false &&
+      S.playbackRate === 1 && S.shuffleMode === 0 && S.repeat !== 'one' && !S.sleepTimerEndTrack;
+  }
+
+  function requestAutomaticMix(player, previousRelease) {
+    if (queueMix || !canUseAutomaticMix() || isBackground() || !S.isPlaying || userIntentionalPause) return;
+    if (!player || !S.currentTrack || player.dataset.trackId !== S.currentTrack.id) return;
+    const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
+    if (tracks.length < 2 || tracks.some(track => isDownloaded(track.id))) return;
+    if (!queueMixPrimed) {
+      if (navigator.userActivation?.isActive === false) return;
+      // WebKit grants media permission per element during the original Play gesture.
+      queueMixAudio.load();
+      queueMixPrimed = true;
+    }
+    void buildQueueMix(previousRelease, player);
+  }
+
+  async function startAutomaticMix(mix) {
+    const player = mix?.autoPlayer;
+    if (!player || queueMix !== mix || !mix.playlist || mix.active || mix.handoff) return;
+    const current = () => queueMix === mix && canUseAutomaticMix() && !isBackground() && !userIntentionalPause &&
+      getActivePlayer() === player && mix.tracks.every((track, index) => S.queue[S.currentIndex + index] === track);
+    if (!current() || player.paused) return;
+    const handoff = Symbol();
+    mix.handoff = handoff;
+    let stage = 'duration';
+    const waitForMedia = async (ready) => {
+      const deadline = Date.now() + 6500;
+      while (current() && mix.handoff === handoff && !queueMixAudio.error && Date.now() < deadline) {
+        if (ready()) return true;
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+      return false;
+    };
+    try {
+      if (mix.measuredFirst && Number.isFinite(player.duration) && Math.abs(player.duration - mix.durations[0]) > 3) return;
+      stage = 'seekable';
+      queueMixAudio.muted = true;
+      queueMixAudio.preload = 'auto';
+      queueMixAudio.playbackRate = 1;
+      queueMixAudio.src = mix.playlist;
+      if (!await waitForMedia(() => queueMixAudio.readyState >= 1 && queueMixCanSeek(player.currentTime, 0.5))) return;
+      const target = player.currentTime;
+      if (!Number.isFinite(target) || target >= mix.offsets[1] - 1) return;
+      stage = 'buffer';
+      queueMixAudio.currentTime = target;
+      if (!await waitForMedia(() => !queueMixAudio.seeking && queueMixAudio.readyState >= 2)) return;
+      stage = 'play';
+      let started = false;
+      let rejected = false;
+      queueMixAudio.play().then(() => { started = true; }, () => { rejected = true; });
+      if (!await waitForMedia(() => started || rejected) || rejected || queueMixAudio.paused) return;
+      stage = 'position';
+      if (player.paused || Math.abs(queueMixAudio.currentTime - player.currentTime) > 0.8) return;
+
+      mix.active = true;
+      mix.handoff = null;
+      player.pause();
+      pauseAudioKeepAlive();
+      window.activeStreamAbort?.abort();
+      if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
+      queueMixAudio.muted = false;
+      updatePlayPauseIcons(true, false);
+      syncMediaSessionPlayback();
+      updateQueueMixPosition();
+      $('queueMixBtn').textContent = 'Salir de la mezcla';
+      queueMixStatus('Crossfade activo. Puedes bloquear el iPhone.');
+      showToast('Crossfade activo');
+      Diag.log('mixer-start-auto', { tracks: mix.tracks.length });
+    } catch {
+      // The normal player keeps playing if iOS refuses the second source.
+    } finally {
+      if (queueMix === mix && mix.handoff === handoff) {
+        Diag.log('mixer-auto-fallback', { stage });
+        const recover = current() && player.paused;
+        stopQueueMix('El crossfade no pudo arrancar. La reproducción sigue por streaming.');
+        if (recover) player.play().catch(() => {});
+      }
+    }
+  }
+
   async function prepareQueueMix() {
     if (queueMix?.playlist && !queueMix.active) {
       const mix = queueMix;
@@ -3229,6 +3337,11 @@
         stopQueueMix('La cola cambió. Prepara otra mezcla.');
         return;
       }
+      if (mix.handoff) {
+        mix.handoff = null;
+        resetQueueMixMedia();
+      }
+      mix.autoPlayer = null;
       pausePlayback();
       window.activeStreamAbort?.abort();
       if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
@@ -3255,7 +3368,7 @@
     return buildQueueMix();
   }
 
-  async function buildQueueMix(previousRelease) {
+  async function buildQueueMix(previousRelease, autoPlayer = null) {
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
     const fade = Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
     const durations = tracks.map(mixDuration);
@@ -3264,7 +3377,7 @@
       return;
     }
     const offsets = mixOffsets(durations, fade);
-    const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease,
+    const mix = { tracks, durations, offsets, fade, part: 0, active: false, replacement: !!previousRelease, autoPlayer,
       warmup: new AbortController() };
     queueMix = mix;
     $('queueMixBtn').textContent = 'Cancelar preparación';
@@ -3279,14 +3392,22 @@
       const request = {
         tracks: tracks.map(mixerTrack), crossfade: fade, editable: S.playbackRate === 1
       };
+      const createMix = () => {
+        if (autoPlayer) {
+          const position = Math.floor(autoPlayer.currentTime) || 0;
+          if (position > 180 || position >= offsets[1] - 1) throw new Error('La pista ya está avanzada. El crossfade se preparará en la siguiente.');
+          request.startAt = Math.max(0, position);
+        }
+        return queueMixRequest('POST', null, request);
+      };
       let result;
-      try { result = await queueMixRequest('POST', null, request); }
+      try { result = await createMix(); }
       catch (error) {
-        if (error.status !== 429 || !mix.replacement || queueMix !== mix) throw error;
-        queueMixStatus('Actualizando el orden de la mezcla. Esperando al servidor…');
+        if (error.status !== 429 || !(mix.replacement || autoPlayer) || queueMix !== mix) throw error;
+        queueMixStatus('Esperando un espacio en el servidor de audio…');
         await new Promise(resolve => setTimeout(resolve, 15_000));
         if (queueMix !== mix) return;
-        result = await queueMixRequest('POST', null, request);
+        result = await createMix();
       }
       if (queueMix !== mix) { releaseQueueMix(result.id); return; }
       mix.id = result.id;
@@ -3299,11 +3420,21 @@
         const body = playlist.ok ? await playlist.text() : '';
         if (queueMix !== mix) return;
         if (body.startsWith('#EXTM3U') && body.includes('#EXTINF:')) {
+          if (autoPlayer) {
+            const available = Array.from(body.matchAll(/#EXTINF:([\d.]+)/g), item => Number(item[1])).reduce((a, b) => a + b, 0);
+            const target = Math.min((autoPlayer.currentTime || 0) + 2, offsets[1] - 1);
+            if (available < target) {
+              await new Promise(resolve => setTimeout(resolve, 1200));
+              continue;
+            }
+          }
           mix.durations = mixTrackDurations(tracks, state.trackDurations, fade, mix);
           mix.offsets = mixOffsets(mix.durations, fade);
+          mix.measuredFirst = Number.isFinite(state.trackDurations?.[0]);
           mix.playlist = result.playlist;
           $('queueMixBtn').textContent = 'Reproducir mezcla';
           queueMixStatus(`Lista para reproducir · ${tracks.length} pistas · fundido de ${fade} s`);
+          if (autoPlayer) void startAutomaticMix(mix);
           return;
         }
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -3551,7 +3682,7 @@
     if (index < 0 || index >= S.queue.length) return;
     if (queueMix) {
       const part = queueMix.tracks.indexOf(S.queue[index]);
-      if (queueMix.active && part >= 0) {
+      if (queueMix.active && part >= 0 && (!queueMix.autoPlayer || !immediate || queueMixCanSeek(queueMix.offsets[part]))) {
         queueMixAudio.currentTime = queueMix.offsets[part];
         resumePlayback();
         return;
@@ -3808,6 +3939,7 @@
       // la URL está muerta y se reintenta de inmediato. Si ya hay metadatos
       // pero sigue en 0:00, se le dan unos segundos más antes de intervenir.
       armStreamWatchdog(track);
+      requestAutomaticMix(inPlayer);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
@@ -3921,6 +4053,7 @@
       return;
     }
     userIntentionalPause = true;
+    if (queueMix?.autoPlayer && !queueMix.active) stopQueueMix();
     isTransitioningTrack = false;
     clearEndOfTrackTimer();
     clearAutoPlayRetry();
@@ -4034,6 +4167,7 @@
       S.isPlaying = true;
       updatePlayPauseIcons(true);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      requestAutomaticMix(p);
     }
   }
 
@@ -5972,6 +6106,7 @@
       return;
     }
     const rebuildMix = !!queueMix && !queueMix.active;
+    const automaticPlayer = rebuildMix ? queueMix.autoPlayer : null;
     const previousRelease = rebuildMix ? stopQueueMix() : null;
     const next = Math.max(0, (afterBlock ? lastMixedIndex : S.currentIndex) + 1);
     const existing = S.queue.findIndex((t, i) => i >= next && t === track);
@@ -5986,13 +6121,15 @@
     if (nowPlaying) prefetchNextTrack();
     haptic('light');
     if (rebuildMix) {
-      buildQueueMix(previousRelease || Promise.resolve());
+      if (automaticPlayer) requestAutomaticMix(automaticPlayer, previousRelease);
+      else buildQueueMix(previousRelease || Promise.resolve());
       showToast('Se reproducirá a continuación en la mezcla actualizada');
     } else if (afterBlock) {
       const message = 'Se reproducirá justo después del bloque de crossfade actual';
       queueMixStatus(message);
       showToast(message);
     } else {
+      if (!afterBlockOnly && nowPlaying) requestAutomaticMix(getActivePlayer());
       showToast('Se reproducirá a continuación');
     }
   }
@@ -8936,7 +9073,7 @@
     }
     if ($('crossfadeAvailability')) $('crossfadeAvailability').textContent = nativeAudio
       ? 'Fundido nativo entre canciones, también con el iPhone bloqueado.'
-      : isIOSDevice ? 'En Siguiente, prepara una mezcla de hasta tres pistas para escuchar con la pantalla bloqueada.'
+      : isIOSDevice ? 'Prepara y activa automáticamente el fundido al reproducir una cola compatible.'
         : webCrossfadeAvailable ? 'Fundido entre canciones mientras la app está visible.'
           : 'Este navegador no permite ajustar el volumen de cada pista.';
 
@@ -8945,6 +9082,13 @@
       configureNativeAudio();
       Store.writeRaw('fs_crossfade', S.crossfade.toString());
       xfWrap.classList.toggle('hidden', !S.crossfade);
+      if (S.crossfade) requestAutomaticMix(getActivePlayer());
+      else if (queueMix?.autoPlayer) {
+        const continuePlaying = queueMix.active && S.isPlaying;
+        if (queueMix.active && S.currentTrack) S.pendingResume = { id: S.currentTrack.id, seconds: queueMixPosition() };
+        stopQueueMix();
+        if (continuePlaying) playTrack(S.currentIndex, true);
+      }
     });
 
     xfRange.addEventListener('input', () => {

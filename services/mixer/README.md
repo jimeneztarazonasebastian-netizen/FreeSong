@@ -1,6 +1,8 @@
 # Mezclador HLS experimental
 
-La PWA usa este servicio desde **Siguiente**. La prueba de dos pistas de Audius
+Con Crossfade activado, la PWA en iPhone prepara este servicio al reproducir
+una cola compatible. **Siguiente** conserva la opción de preparación manual.
+La prueba de dos pistas de Audius
 funcionó con el iPhone bloqueado. El comportamiento de la edición durante la
 reproducción se prueba con FFmpeg y requiere confirmación en el iPhone.
 
@@ -33,6 +35,9 @@ Los identificadores aleatorios de sesión son credenciales de reproducción: no 
 - Verificar varios cambios de canción con un iPhone físico bloqueado, sin actualizar iOS.
 
 Las sesiones creadas con `editable: true` publican el manifiesto de forma progresiva.
+El campo opcional `startAt` indica la posición alcanzada mientras arrancaba
+Render. Se limita a 180 segundos y adelanta la primera ventana de HLS sin
+cambiar los segmentos anteriores.
 Un `PATCH /sessions/:id` autenticado conserva los IDs hasta el índice `part`,
 incluido, y prepara una variante con las pistas siguientes. El manifiesto y las
 URLs de audio permanecen iguales. Solo se cambia el render cuando los segmentos

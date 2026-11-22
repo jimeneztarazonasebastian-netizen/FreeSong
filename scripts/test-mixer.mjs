@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { idleSessionMs, sessionExpired } from '../services/mixer/hls.mjs';
+import { idleSessionMs, publishManifest, sessionExpired } from '../services/mixer/hls.mjs';
 import { mock } from 'node:test';
 import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from '../services/mixer/european-relay.mjs';
 
@@ -68,6 +68,15 @@ assert.equal(sessionExpired({ created: 0 }, idleSessionMs), true);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 38 * 60_000), false);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 51 * 60_000), true);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 59 * 60_000 }, 60 * 60_000), true);
+const entries = Array.from({ length: 30 }, (_, index) => ({
+  line: '#EXTINF:4.0,', duration: 4, file: `segment-${String(index).padStart(5, '0')}.ts`
+}));
+const delayed = { startAt: 61, startedAt: null, published: 0, editable: true };
+const encoded = { text: '#EXTM3U', entries };
+assert.match(publishManifest(delayed, encoded, 0), /#EXT-X-START:TIME-OFFSET=61,PRECISE=YES/);
+assert.equal(delayed.published, 21);
+delayed.startedAt = 1000;
+assert.equal(publishManifest(delayed, encoded, 13_000).includes('segment-00023.ts'), true);
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const tone = (frequency, duration = 5) => execFileSync(ffmpeg,
   ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', 'wav', 'pipe:1'],

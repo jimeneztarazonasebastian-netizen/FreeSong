@@ -23,7 +23,8 @@ export async function readManifest(render) {
 // suspends the page. Leave enough media ahead for native HLS buffering.
 export function publishManifest(session, manifest, now = Date.now()) {
   const elapsed = session.startedAt == null ? 0 : (now - session.startedAt) / 1000;
-  const horizon = Math.max(0, elapsed) + lookahead;
+  const startAt = session.startAt ?? 0;
+  const horizon = startAt + Math.max(0, elapsed) + lookahead;
   let position = 0;
   let count = 0;
   for (const entry of manifest.entries) {
@@ -40,7 +41,12 @@ export function publishManifest(session, manifest, now = Date.now()) {
   const published = manifest.entries.slice(0, countToPublish);
   session.published = published.length;
   session.endPublished = manifest.ended && countToPublish === manifest.entries.length;
-  return [...header, '#EXT-X-START:TIME-OFFSET=0', ...published.flatMap(e => [e.line, e.file]),
+  // Keep the entire prefix stable for queue edits, while telling the player
+  // where it can join the track that is already playing.
+  const start = session.editable && startAt > 0 && position >= startAt
+    ? `#EXT-X-START:TIME-OFFSET=${startAt},PRECISE=YES`
+    : '#EXT-X-START:TIME-OFFSET=0';
+  return [...header, start, ...published.flatMap(e => [e.line, e.file]),
     ...(session.endPublished ? ['#EXT-X-ENDLIST'] : []), ''].join('\n');
 }
 

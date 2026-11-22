@@ -183,7 +183,7 @@ async function run() {
     await page.goto(`${BASE}/?v=ios-end`, { waitUntil: 'load' });
     await page.waitForSelector('[data-nav="search"]');
     assert.equal(await page.locator('#settingCrossfadeToggle').isDisabled(), false);
-    assert.match(await page.locator('#crossfadeAvailability').textContent(), /prepara una mezcla/);
+    assert.match(await page.locator('#crossfadeAvailability').textContent(), /automáticamente el fundido/);
     await page.evaluate(() => document.querySelector('[data-nav="search"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await page.waitForSelector('#searchInput');
     await page.fill('#searchInput', 'iphone');

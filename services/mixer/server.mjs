@@ -236,7 +236,9 @@ const server = http.createServer(async (req, res) => {
       if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10) return json(res, 400, { error: 'Crossfade entre 1 y 10 segundos' });
       const id = randomBytes(24).toString('hex');
       // Reservar antes de esperar I/O para respetar el límite bajo concurrencia.
-      const session = { created: Date.now(), editable: data.editable === true, seconds, tracks,
+      const startAt = data.editable === true && Number.isFinite(data.startAt)
+        ? Math.max(0, Math.min(180, data.startAt)) : 0;
+      const session = { created: Date.now(), editable: data.editable === true, seconds, tracks, startAt,
         published: 0, startedAt: null, endPublished: false, render: null, revision: 0, edit: null };
       sessions.set(id, session);
       try {

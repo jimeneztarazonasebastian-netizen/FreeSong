@@ -5,6 +5,11 @@ import { chromium } from 'playwright-core';
 
 const port = 5228;
 const base = `http://127.0.0.1:${port}`;
+const iphone = {
+  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  viewport: { width: 393, height: 852 },
+  screen: { width: 393, height: 852 }
+};
 const server = spawn(process.execPath, ['scripts/serve.mjs'], { env: { ...process.env, PORT: String(port) }, stdio: 'ignore' });
 let browser;
 try {
@@ -13,11 +18,7 @@ try {
     await delay(100);
   }
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
-    viewport: { width: 393, height: 852 },
-    screen: { width: 393, height: 852 }
-  });
+  const context = await browser.newContext(iphone);
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'standalone', { value: true });
     const match = Cache.prototype.match;
@@ -210,12 +211,12 @@ try {
     document.getElementById('tabQueueBtn').click();
   });
   const slowWake = page.waitForRequest(wakeUrl);
-  await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await page.getByRole('button', { name: 'Preparar mezcla manual' }).click();
   await slowWake;
   assert.equal(mixesRequested.length, 0, 'Una instancia aún en inicio no debe recibir la creación de la mezcla');
   await page.getByRole('button', { name: 'Cancelar preparación' }).click();
   releaseFirstWake();
-  await page.getByRole('button', { name: 'Preparar crossfade con pantalla bloqueada' }).click();
+  await page.getByRole('button', { name: 'Preparar mezcla manual' }).click();
   await page.waitForFunction(() => /servidor de audio está iniciando/.test(document.getElementById('queueMixStatus').textContent));
   await page.getByRole('button', { name: 'Reproducir mezcla' }).waitFor();
   assert.equal(wakeAttempts, 3);
@@ -293,6 +294,182 @@ try {
   assert.deepEqual(errors, []);
   console.log('  isla dinámica protegida, descarga ausente recuperada por red y vídeo alternativo a petición');
   await context.close();
+
+  const autoContext = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
+  const autoplayTracks = [
+    { id: 'audius:Autofirst', title: 'Pista automática inicial', artist: 'Prueba', duration: 8 },
+    { id: 'audius:Autosecond', title: 'Pista automática siguiente', artist: 'Prueba', duration: 8 }
+  ];
+  await autoContext.addInitScript(queue => {
+    Object.defineProperty(navigator, 'standalone', { value: true });
+    localStorage.setItem('fs_crossfade', 'true');
+    localStorage.setItem('fs_session_v2', JSON.stringify({
+      queue, currentIndex: 0, repeat: 'off', autoplay: false, crossfade: true,
+      crossfadeDuration: 2, savedAt: Date.now()
+    }));
+  }, autoplayTracks);
+
+  const serveSeekableWave = route => {
+    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range || '');
+    const headers = { 'Accept-Ranges': 'bytes' };
+    if (!range) return route.fulfill({ headers, contentType: 'audio/wav', body: wav });
+    const start = Number(range[1]);
+    const end = range[2] ? Math.min(Number(range[2]), wav.length - 1) : wav.length - 1;
+    return route.fulfill({
+      status: 206,
+      headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${wav.length}` },
+      contentType: 'audio/wav',
+      body: wav.subarray(start, end + 1)
+    });
+  };
+
+  for (const action of ['continuar', 'pausar', 'saltar', 'bloqueo de autoplay']) {
+    const autoPage = await autoContext.newPage();
+    const creations = [];
+    const crashes = [];
+    const automaticId = 'b'.repeat(48);
+    const playlist = `${base}/mixer-demo/sessions/${automaticId}/autoplay.wav`;
+    let openManifest;
+    const manifestReady = new Promise(resolve => { openManifest = resolve; });
+    let wakeMixer;
+    const mixerReady = new Promise(resolve => { wakeMixer = resolve; });
+    if (action !== 'continuar') wakeMixer();
+    let settleManifest;
+    const manifestSettled = new Promise(resolve => { settleManifest = resolve; });
+    autoPage.on('pageerror', error => crashes.push(error.message));
+    autoPage.on('requestfailed', request => {
+      if (request.url() === playlist) settleManifest();
+    });
+    try {
+      if (action === 'bloqueo de autoplay') {
+        await autoPage.addInitScript(() => {
+          const play = HTMLMediaElement.prototype.play;
+          window.rejectedMixAttempts = 0;
+          HTMLMediaElement.prototype.play = function () {
+            if (this.src.endsWith('/autoplay.wav')) {
+              window.rejectedMixAttempts++;
+              return Promise.reject(new DOMException('Autoplay bloqueado en la prueba', 'NotAllowedError'));
+            }
+            return play.call(this);
+          };
+        });
+      }
+      await autoPage.route('https://**/*', route => route.abort());
+      await autoPage.route('https://api.audius.co/v1/tracks/*/stream?**', serveSeekableWave);
+      await autoPage.route(wakeUrl, async route => {
+        await mixerReady;
+        return route.fulfill({ headers: { 'Access-Control-Allow-Origin': '*' }, json: { ok: true } });
+      });
+      await autoPage.route('**/api/**', route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.searchParams.get('mixer') !== '1') {
+          return route.fulfill({ json: { tracks: [], shelves: [], queries: [] } });
+        }
+        if (request.method() === 'POST') {
+          creations.push(request.postDataJSON());
+          return route.fulfill({ json: { id: automaticId, playlist, editable: true } });
+        }
+        if (request.method() === 'DELETE') return route.fulfill({ json: { ok: true } });
+        if (!url.searchParams.has('session')) return route.fulfill({ json: { configured: true, wakeUrl } });
+        return route.fulfill({ json: { status: 'complete', trackDurations: [8, 8] } });
+      });
+      await autoPage.route(playlist, async route => {
+        const request = route.request();
+        if (request.resourceType() === 'media' || request.headers()['sec-fetch-dest'] === 'audio') {
+          return serveSeekableWave(route);
+        }
+        await manifestReady;
+        await route.fulfill({ headers: { 'Cache-Control': 'no-store' }, body: '#EXTM3U\n#EXTINF:8,\nsegment.ts\n' }).catch(() => {});
+        settleManifest();
+      });
+      await autoPage.goto(base, { waitUntil: 'domcontentloaded' });
+      const manifestRequest = autoPage.waitForRequest(request =>
+        request.url() === playlist && request.resourceType() !== 'media', { timeout: 10000 }).catch(error => error);
+      await autoPage.locator('#miniPlayBtn').click();
+      await autoPage.waitForFunction(() => [...document.querySelectorAll('audio')].some(audio =>
+        audio.src.includes('/Autofirst/stream') && !audio.paused && audio.currentTime > 0.1));
+      if (action === 'continuar') {
+        assert.equal(creations.length, 0, 'La pista suena mientras el servidor sigue iniciando');
+        await autoPage.evaluate(() => {
+          const original = [...document.querySelectorAll('audio')].find(audio => audio.src.includes('/Autofirst/stream'));
+          original.currentTime = 2;
+        });
+        await autoPage.waitForFunction(() => [...document.querySelectorAll('audio')].some(audio =>
+          audio.src.includes('/Autofirst/stream') && !audio.seeking && audio.currentTime >= 2));
+        wakeMixer();
+      }
+      const request = await manifestRequest;
+      if (request instanceof Error) throw request;
+      assert.deepEqual(creations.map(payload => payload.tracks.map(track => track.id)),
+        [autoplayTracks.map(track => track.id)], 'El toque de reproducción prepara una sola mezcla de la cola actual');
+
+      if (action === 'pausar') {
+        await autoPage.locator('#miniPlayBtn').click();
+      } else if (action === 'saltar') {
+        await autoPage.locator('#miniNextBtn').click();
+        await autoPage.waitForFunction(() => [...document.querySelectorAll('audio')].some(audio =>
+          audio.src.includes('/Autosecond/stream') && !audio.paused && audio.currentTime > 0.1));
+      } else if (action === 'bloqueo de autoplay') {
+        await autoPage.evaluate(() => {
+          const original = [...document.querySelectorAll('audio')].find(audio => audio.src.includes('/Autofirst/stream'));
+          original.currentTime = 2;
+        });
+      }
+      openManifest();
+      await manifestSettled;
+
+      if (action === 'continuar') {
+        assert.ok(creations[0].startAt >= 2, 'La mezcla pide la posición vigente después de despertar el servidor');
+        const switched = await autoPage.waitForFunction(() => {
+          const state = window.FreeSongDiag.report().playback;
+          const audio = [...document.querySelectorAll('audio')].filter(element => !element.paused && !element.muted);
+          return state.engine === 'hls-mixer' && audio.length === 1 && { time: audio[0].currentTime, track: state.track.id };
+        }, null, { timeout: 10000 });
+        const handoff = await switched.jsonValue();
+        assert.ok(handoff.time >= 1.7, 'El fundido de servidor conserva la posición de la canción');
+        assert.equal(handoff.track, autoplayTracks[0].id);
+        await autoPage.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+          document.dispatchEvent(new Event('visibilitychange'));
+          document.getElementById('queueMixAudio').currentTime = 6.2;
+        });
+        await autoPage.waitForFunction(id => {
+          const report = window.FreeSongDiag.report();
+          return report.visibility === 'hidden' && report.playback.engine === 'hls-mixer' &&
+            report.playback.track?.id === id && report.playback.isPlaying;
+        }, autoplayTracks[1].id);
+      } else if (action === 'bloqueo de autoplay') {
+        await autoPage.waitForFunction(() => window.rejectedMixAttempts > 0);
+        await autoPage.waitForFunction(() => {
+          const state = window.FreeSongDiag.report().playback;
+          const original = [...document.querySelectorAll('audio')].find(audio => audio.src.includes('/Autofirst/stream'));
+          return state.engine !== 'hls-mixer' && state.isPlaying && !original.paused && original.currentTime > 2.2;
+        });
+        assert.equal(await autoPage.evaluate(() => window.rejectedMixAttempts), 1);
+      } else {
+        await autoPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await autoPage.waitForFunction(action => {
+          const state = window.FreeSongDiag.report().playback;
+          return state.engine !== 'hls-mixer' && (action === 'pausar'
+            ? !state.isPlaying && state.userIntentionalPause
+            : state.track?.id === 'audius:Autosecond' && state.isPlaying);
+        }, action);
+        assert.equal(await autoPage.evaluate(() => [...document.querySelectorAll('audio')].some(element =>
+          element.src.endsWith('/autoplay.wav') && !element.paused && !element.muted)), false,
+        'Una mezcla pendiente no debe reanudar una pausa ni recuperar una pista saltada');
+      }
+      assert.equal(creations.length, 1);
+      assert.deepEqual(crashes, []);
+      assert.equal(await autoPage.evaluate(() => JSON.parse(localStorage.getItem('fs_downloads') || '[]').length), 0);
+    } finally {
+      wakeMixer();
+      openManifest();
+      await autoPage.close();
+    }
+  }
+  await autoContext.close();
+  console.log('  fundido automático sin reiniciar la pista, respetando las pausas y saltos');
 
   const blocked = await browser.newContext({ serviceWorkers: 'block' });
   await blocked.addInitScript(() => {
