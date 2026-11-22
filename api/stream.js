@@ -4,7 +4,7 @@
 import { Readable } from 'stream';
 import { fetchYt, getRunsText, normalizeCookieInput, parseDuration } from './_yt.js';
 import { getAudioBuffer, getCookie, resolveMwebAudio } from './_hls.js';
-import { fetchBrowserRelayMedia, parseBrowserRelayMedia, resolveRelayAudio, relayInstances } from './_relay.js';
+import { resolveRelayAudio, relayInstances } from './_relay.js';
 
 const PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
@@ -767,9 +767,8 @@ export default async function handler(req, res) {
   const prewarm = param('prewarm') === '1';
   // En descargas se pide solo la pista de audio (sin el vídeo de itag 18).
   const audioOnly = param('audio') === '1';
-  const relayMediaParam = param('relayMedia');
   // full=1 se usa para descargas: devuelve la pista completa en vez de un fragmento.
-  const full = !relayMediaParam && (param('full') === '1' || param('full') === 'true');
+  const full = param('full') === '1' || param('full') === 'true';
 
   const node = !!(res && res.setHeader);
   // Estas respuestas son siempre errores: nunca deben quedar cacheadas.
@@ -795,20 +794,13 @@ export default async function handler(req, res) {
     return json(400, { error: 'Falta el id de la canción o es inválido' });
   }
 
-  const relayMedia = relayMediaParam ? parseBrowserRelayMedia(relayMediaParam) : null;
-  if (relayMediaParam && (!relayMedia || !['GET', 'HEAD'].includes(req.method))) {
-    return json(400, { error: 'Fuente de audio no válida' });
-  }
-
   // Limita los fragmentos a 2 MB y conserva los rangos de sufijo de Safari.
   // Un rango inválido nunca debe convertirse silenciosamente en el byte cero.
   const range = parseStreamRange(req.method === 'HEAD' ? null : req.headers?.range, full);
   if (!range) return json(416, { error: 'Rango de audio inválido' });
   const boundedRange = req.method === 'HEAD' ? 'bytes=0-1' : range.header;
 
-  const { upstream, buffer, errors } = relayMedia
-    ? { upstream: await fetchBrowserRelayMedia(relayMedia, req.method === 'HEAD' ? { start: 0, end: 1 } : range) }
-    : await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm, audioOnly);
+  const { upstream, buffer, errors } = await getUpstream(videoId, itag, boundedRange, backupIndex, title, artist, duration, prewarm, audioOnly);
 
   if (buffer) {
     return serveBuffer(buffer, req, res, node, range, full);
@@ -844,7 +836,7 @@ export default async function handler(req, res) {
     'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
     'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': full || relayMedia ? 'private, max-age=0, no-store' : 'public, max-age=3600, s-maxage=3600',
+    'Cache-Control': full ? 'private, max-age=0, no-store' : 'public, max-age=3600, s-maxage=3600',
     Vary: 'Range'
   };
 
@@ -879,9 +871,6 @@ export default async function handler(req, res) {
     return res.end();
   }
 
-  if (req.method === 'HEAD') {
-    try { await upstream.body?.cancel(); } catch {}
-  }
   return new Response(req.method === 'HEAD' ? null : upstream.body, {
     status: req.method === 'HEAD' ? 200 : upstream.status,
     headers

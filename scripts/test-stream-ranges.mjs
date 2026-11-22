@@ -93,49 +93,4 @@ try {
   else process.env.INVIDIOUS_INSTANCES = savedRelays;
   globalThis.fetch = originalFetch;
 }
-
-const relayMedia = new URL('https://yt.chocolatemoo53.com/videoplayback');
-relayMedia.search = new URLSearchParams({
-  host: 'rr2---sn-a.googlevideo.com', source: 'youtube', mime: 'audio/mp4',
-  itag: '140', sig: 'signature', lsig: 'location-signature', clen: '10',
-  expire: String(Math.floor(Date.now() / 1000) + 60)
-});
-const serveRelay = (media, range, method = 'GET') => handler({
-  url: '/api/stream?' + new URLSearchParams({ id: 'range-test-1', relayMedia: media, full: '1' }),
-  headers: { range }, method
-});
-
-try {
-  const hosts = [];
-  globalThis.fetch = async (url, options) => {
-    hosts.push(url.host);
-    assert.equal(options.redirect, 'manual');
-    assert.equal(options.headers.Range, 'bytes=7-9');
-    if (url.host === relayMedia.host) {
-      return new Response(null, { status: 307, headers: { Location: `https://yt-comp2.chocolatemoo53.com${url.pathname}${url.search}` } });
-    }
-    return new Response('789', { status: 206, headers: { 'Content-Type': 'audio/mp4', 'Content-Range': 'bytes 7-9/10' } });
-  };
-  const response = await serveRelay(relayMedia, 'bytes=-3');
-  assert.equal(response.status, 206);
-  assert.equal(await response.text(), '789');
-  assert.match(response.headers.get('cache-control'), /no-store/);
-  assert.deepEqual(hosts, [relayMedia.host, 'yt-comp2.chocolatemoo53.com']);
-  assert.equal((await serveRelay(relayMedia, 'bytes=10-')).status, 416);
-  assert.equal((await serveRelay('https://elsewhere.test/videoplayback', 'bytes=0-1')).status, 400);
-  const ambiguous = new URL(relayMedia);
-  ambiguous.searchParams.append('host', 'other.test');
-  assert.equal((await serveRelay(ambiguous, 'bytes=0-1')).status, 400);
-  assert.equal(hosts.length, 2);
-
-  let redirected = false;
-  globalThis.fetch = async (url) => {
-    if (url.host !== relayMedia.host) redirected = true;
-    return new Response(null, { status: 307, headers: { Location: `https://elsewhere.test${url.pathname}${url.search}` } });
-  };
-  assert.equal((await serveRelay(relayMedia, 'bytes=0-1')).status, 502);
-  assert.equal(redirected, false);
-} finally {
-  globalThis.fetch = originalFetch;
-}
 console.log('STREAM RANGES OK: rangos de Safari, 416 y siguiente relay si falla el audio');

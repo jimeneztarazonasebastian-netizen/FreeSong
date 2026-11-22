@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.43 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.44 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.43';
+  const APP_VERSION = '3.9.44';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -1450,17 +1450,17 @@
       }
 
       const failedOnRelay = isDirectRelayUrl(player.src);
-      if (!failedOnRelay && navigator.onLine !== false) {
+      if (navigator.onLine !== false) {
         const direct = await Promise.race([
-          resolveRelaySource(track.id, S.audioQuality).catch(() => null),
+          resolveRelaySource(track.id, S.audioQuality, failedOnRelay ? failedSource : '').catch(() => null),
           new Promise((resolve) => setTimeout(() => resolve(null), 3000))
         ]);
         if (!canRecover()) return;
-        if (direct && direct.url) {
+        if (direct?.url && direct.url !== failedSource) {
           if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
           rememberRelaySource(track, direct);
           // El relay ya está sonando: no consumas un reintento del proxy.
-          track._fallbackStep = 0;
+          track._fallbackStep = failedOnRelay ? 1 : 0;
           if (switchPlayerSource(player, direct.url, resumeAt, retryIfRejected)) {
             armStreamWatchdog(track, 7000);
             return;
@@ -1473,12 +1473,6 @@
       delete track._relayExpires;
       delete track._relaySize;
 
-      // Si la URL directa falló, no vuelvas a pedir la misma: pasa ya al proxy
-      // con una resolución nueva. El relay se refresca en segundo plano para
-      // la próxima reproducción.
-      if (step === 0) {
-        resolveRelaySource(track.id, S.audioQuality, true).catch(() => {});
-      }
       const nextUrl = buildStreamUrl(track, track._fallbackStep);
 
       if (!canRecover()) return;
@@ -1990,7 +1984,7 @@
   // Pasar por /api/stream añade ~1-4 s por canción (resolución + función de Vercel).
   // La instancia Invidious permite CORS en su API y en el audio, así que el propio
   // navegador puede resolver y reproducir la URL directa. El proxy queda de respaldo.
-  const RELAY_DEFAULT_BASES = ['https://yt.chocolatemoo53.com'];
+  const RELAY_DEFAULT_BASES = ['https://eu.yt.chocolatemoo53.com', 'https://yt.chocolatemoo53.com'];
   const RELAY_URL_TTL_MS = 20 * 60 * 1000;
   const RELAY_PICK_CACHE_MAX = 150;
   const RELAY_AUDIO_ITAGS = ['139', '140', '141', '249', '250', '251'];
@@ -2005,7 +1999,7 @@
 
   // Caché en disco de URLs ya resueltas: al reabrir la app la primera canción
   // arranca al instante en vez de esperar ~3 s a la resolución en frío.
-  const RELAY_DISK_CACHE_KEY = 'fs_relay_urls_v1';
+  const RELAY_DISK_CACHE_KEY = 'fs_relay_urls_v2';
   const RELAY_DISK_CACHE_MAX = 40;
 
   function loadRelayDiskCache() {
@@ -2058,7 +2052,7 @@
             const list = Array.isArray(data && data.instances)
               ? data.instances.filter((b) => /^https?:\/\//.test(String(b)))
               : [];
-            if (list.length) relayBases = list;
+            if (list.length) relayBases = [...new Set([...list, ...RELAY_DEFAULT_BASES])];
           })
           .catch(() => {})
           .finally(() => clearTimeout(timer));
@@ -2084,22 +2078,39 @@
     try { return Number(new URL(f.url).searchParams.get('clen')) || 0; } catch { return 0; }
   }
 
+  async function probeRelayAudio(url) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3500);
+    let reader;
+    try {
+      const response = await fetch(url, { headers: { Range: 'bytes=0-31' }, cache: 'no-store', signal: ctrl.signal });
+      if (!response.body) return false;
+      reader = response.body.getReader();
+      if (!response.ok || !/^audio\//i.test(response.headers.get('content-type') || '')) return false;
+      const { value } = await reader.read();
+      return !!value?.length;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+      if (reader) void reader.cancel().catch(() => {});
+    }
+  }
+
   // Devuelve { url, itag, size, relay, expires } o null. Deduplica peticiones
   // simultáneas (Safari pide varios rangos de golpe) y cachea ~20 minutos.
-  async function resolveRelaySource(videoId, wantedItag, force = false) {
+  async function resolveRelaySource(videoId, wantedItag, rejectedUrl = '') {
     if (!videoId) return null;
     const cacheKey = `${videoId}:${wantedItag || ''}`;
-    if (force) {
+    if (rejectedUrl) {
       // Un intento fallido no debe devolver siempre el mismo enlace roto.
-      relaySources.delete(cacheKey);
+      if (relaySources.get(cacheKey)?.url === rejectedUrl) relaySources.delete(cacheKey);
       relaySourceFailures.delete(cacheKey);
-    } else {
-      const cached = relaySources.get(cacheKey);
-      if (cached && cached.expires > Date.now()) return cached;
-      const failedUntil = relaySourceFailures.get(cacheKey);
-      if (failedUntil && failedUntil > Date.now()) return null;
-      if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
     }
+    const cached = relaySources.get(cacheKey);
+    if (cached && cached.expires > Date.now()) return cached;
+    if ((relaySourceFailures.get(cacheKey) || 0) > Date.now()) return null;
+    if (relayPending.has(cacheKey)) return relayPending.get(cacheKey);
 
     const task = (async () => {
       const bases = loadRelayBases();
@@ -2107,19 +2118,19 @@
         try {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), 6000);
-          let res;
+          let data;
           try {
-            res = await fetch(`${base}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`, {
+            const res = await fetch(`${base}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`, {
               headers: { Accept: 'application/json' },
               cache: 'no-store',
               signal: ctrl.signal
             });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            data = await res.json();
           } finally {
             clearTimeout(timer);
           }
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (!data || data.error) throw new Error(String((data && data.error) || 'respuesta vacía'));
+          if (!data || data.error) throw new Error('metadatos de audio no disponibles');
 
           const formats = relayAudioFormats(data);
           if (!formats.length) throw new Error('sin formatos de audio');
@@ -2133,16 +2144,18 @@
           ].filter(Boolean);
           // Algunos vídeos solo se ofrecen como segmentos SABR (página del
           // companion con captcha): eso no se puede reproducir con <audio>.
-          const fmt = ordered.find((f) => f && f.url && isPlayableRelayUrl(f.url));
+          const fmt = ordered.find((f) => f.url !== rejectedUrl && isPlayableRelayUrl(f.url));
           if (!fmt) throw new Error('la instancia no entrega un archivo de audio');
+          if (!await probeRelayAudio(fmt.url)) throw new Error('la URL no entregó audio reproducible');
 
+          const signedExpiry = Number(new URL(fmt.url, window.location.href).searchParams.get('expire')) * 1000;
           const source = {
             url: fmt.url,
             itag: String(fmt.itag),
             size: relaySizeOf(fmt),
             relay: base,
             videoId,
-            expires: Date.now() + RELAY_URL_TTL_MS
+            expires: Math.min(Date.now() + RELAY_URL_TTL_MS, signedExpiry || Infinity)
           };
           relaySources.set(cacheKey, source);
           if (relaySources.size > RELAY_PICK_CACHE_MAX) {
@@ -2366,7 +2379,7 @@
   // listo conservando la posición. El proxy de Vercel corta la conexión a los
   // ~15 s; el relay aguanta la canción completa. Nunca toca copias offline.
   function upgradePlaybackToRelay(track, player) {
-    if (!track || !player || isYtMode || !S.isPlaying || userIntentionalPause) return;
+    if (!track || !player || isYtMode || queueMix?.active || !S.isPlaying || userIntentionalPause) return;
     if (isIOSDevice && isBackground()) return;
     if (isDirectRelayUrl(player.src)) return;
     const currentSrc = player.src || '';
@@ -2375,7 +2388,7 @@
 
     resolveRelaySource(track.id, S.audioQuality).then((source) => {
       if (!source || token !== relayUpgradeToken) return;
-      if (S.queue[S.currentIndex] !== track || isYtMode || !S.isPlaying || userIntentionalPause) return;
+      if (S.queue[S.currentIndex] !== track || isYtMode || queueMix?.active || !S.isPlaying || userIntentionalPause) return;
       if (player !== getActivePlayer()) return;
       if ((player.src || '').startsWith('blob:')) return;
       if (player.currentTime > 0.35 && !player.paused) return;

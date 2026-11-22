@@ -2,7 +2,7 @@
 
 Fecha: 21 de noviembre de 2026.
 Base de la auditoría original: `35db606`. Estado de los avances actualizado
-para la versión web **3.9.43**.
+para la versión web **3.9.44**.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
 [OpenTune](https://github.com/justshivv/Opentune) y los límites que no conviene
@@ -75,8 +75,7 @@ porta por ahora.**
 Trabajo pendiente, por orden:
 
 1. Usar HLS cuando el cliente lo entregue (ver 3.1).
-2. Mantener el relay con comprobación de salud y rotación; hoy hay una sola
-   instancia por defecto.
+2. Medir la disponibilidad de ambos relays en otras redes y desde Render.
 3. Conservar la cookie de YouTube como vía MWEB cuando la IP no esté bloqueada.
 4. Medir con una lista fija de 20 pistas variadas: primer byte, seek, URL
    caducada y fallo explícito, en Wi-Fi y datos móviles, repetido otro día.
@@ -128,11 +127,12 @@ mano.
   fallo de red, con mensajes distintos.
 - No sustituir una canción por otra sin comprobar identidad y duración.
 
-### 3.6 Relay único
+### 3.6 Disponibilidad de los relays
 
-Hay una sola instancia por defecto (`yt.chocolatemoo53.com`). Añadir health-check,
-rotación y una instancia propia documentada. La disponibilidad externa sigue
-siendo un riesgo abierto de la auditoría.
+La PWA prueba el relay europeo y conserva el anterior como respaldo. Comprueba
+un rango de audio antes de recordar la fuente. En el navegador se verificaron
+las publicaciones exactas de «Stereo Love» y «Fanática Sensual» en el relay
+europeo. Queda medir su disponibilidad desde distintas redes, Safari y Render.
 
 ---
 
