@@ -20,13 +20,15 @@ FFmpeg mezcla audio AAC y sirve segmentos temporales; no exige descargas manuale
 Máximo 2 sesiones simultáneas, 2–3 canciones de hasta 10 minutos por sesión, caducidad a los 20 minutos.
 Los identificadores aleatorios de sesión son credenciales de reproducción: no compartirlos.
 
-## Pendientes antes de conectarlo a producción
+## Fuentes y validación
 
-- Cuenta y despliegue real en Render; comprobar consumo gratuito y suspensión al alcanzar límites.
-- Verificar fuentes desde el proveedor. Actualmente usa `/api/stream`: si devuelve 403/502, la mezcla falla también.
+- Render comprueba el primer rango AAC del relay europeo para el ID exacto y,
+  cuando responde, FFmpeg consume ese audio directamente por HTTPS. Si el relay
+  falla, se prueban las fuentes anteriores. Las pistas de Audius conservan su fuente propia.
+- En el estado de la sesión, `relay-eu` identifica la fuente directa. `relayIssues`
+  distingue rechazos de metadatos y de audio sin mostrar las URLs de origen.
 - Medir tiempo hasta primer segmento y CPU real. No se garantiza que la instancia gratuita sea suficiente.
-- Añadir API autenticada desde Vercel, sesiones por usuario y renovación de cola.
-- Integrar la línea de tiempo de canciones, metadatos, pausa, seek y cambios de cola en la PWA.
+- Quedan por completar las sesiones por usuario y la renovación de la cola.
 - Verificar varios cambios de canción con un iPhone físico bloqueado, sin actualizar iOS.
 
 Las sesiones creadas con `editable: true` publican el manifiesto de forma progresiva.

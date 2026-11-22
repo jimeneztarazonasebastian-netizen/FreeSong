@@ -2,6 +2,66 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { mock } from 'node:test';
+import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from '../services/mixer/european-relay.mjs';
+
+async function verifyEuropeanRelay() {
+  const trackId = 'bfl76Sr-Rsk';
+  const relay = 'https://eu.yt.chocolatemoo53.com';
+  const media = relay + '/videoplayback?dur=321.326&sig=test-only-signature';
+  const companion = 'https://eu.yt-comp5.chocolatemoo53.com/companion/videoplayback?sig=test-only-signature';
+  const metadata = videoId => Response.json({ videoId, adaptiveFormats: [{ itag: '140', url: media }] });
+  const redirect = location => new Response(null, { status: 302, headers: { Location: location } });
+  const mp4 = Buffer.alloc(1024);
+  mp4.write('ftyp', 4);
+
+  let requests;
+  let responses;
+  const fetchStub = mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url: String(url), options });
+    return responses.shift();
+  });
+  const logStubs = ['log', 'warn', 'error'].map(method => mock.method(console, method, () => {}));
+  async function resolveFrom(...fixtures) {
+    requests = [];
+    responses = fixtures;
+    const result = await resolveEuropeanAudio(trackId);
+    assert.equal(responses.length, 0);
+    return result;
+  }
+
+  try {
+    const result = await resolveFrom(metadata(trackId), redirect(companion), new Response(mp4, {
+      status: 206,
+      headers: { 'Content-Type': 'audio/mp4', 'Content-Range': 'bytes 0-1023/5202363' }
+    }));
+    assert.deepEqual(result, { kind: 'relay-eu', url: media, duration: 321.326 });
+    assert.deepEqual(requests.map(request => request.url), [relay + '/api/v1/videos/' + trackId + '?local=true', media, companion]);
+    assert.equal(requests[0].options.redirect, 'error');
+    for (const { options } of requests.slice(1)) {
+      assert.equal(options.redirect, 'manual');
+      assert.deepEqual(options.headers, { 'User-Agent': relayUserAgent, Origin: relayPlaybackOrigin, Range: 'bytes=0-1023' });
+    }
+
+    assert.deepEqual(await resolveFrom(metadata('4oxWnLQZnpk')), { issue: 'metadata_format' });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(await resolveFrom(metadata(trackId), redirect('https://example.invalid/videoplayback?sig=test-only-signature')),
+      { issue: 'media_redirect' });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(await resolveFrom(metadata(trackId), new Response('test-only-upstream-message', { status: 403 })),
+      { issue: 'media_403' });
+    assert.deepEqual(await resolveFrom(new Response('test-only-upstream-message', { status: 403 })),
+      { issue: 'metadata_403' });
+    for (const stub of logStubs) assert.equal(stub.mock.callCount(), 0);
+  } finally {
+    fetchStub.mock.restore();
+    for (const stub of logStubs) stub.mock.restore();
+  }
+  console.log('MIXER RELAY OK: AAC por rango, redirecciones validadas y diagnósticos sin URLs ni datos privados');
+}
+
+await verifyEuropeanRelay();
+
 const key = 'test-only-secret-for-local-mixer-123456';
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const tone = (frequency, duration = 5) => execFileSync(ffmpeg,

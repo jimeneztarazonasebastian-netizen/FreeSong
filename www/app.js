@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.44 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.45 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.44';
+  const APP_VERSION = '3.9.45';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -3138,6 +3138,15 @@
   const mixOffsets = (durations, fade) => durations.map((_, i) =>
     durations.slice(0, i).reduce((sum, duration) => sum + duration - fade, 0));
 
+  function mixTrackDurations(tracks, reported, fade, previous) {
+    return tracks.map((track, index) => {
+      const measured = Array.isArray(reported) ? reported[index] : null;
+      if (Number.isFinite(measured) && measured > fade && measured <= 600) return measured;
+      const oldIndex = previous ? previous.tracks.indexOf(track) : -1;
+      return oldIndex >= 0 ? previous.durations[oldIndex] : mixDuration(track);
+    });
+  }
+
   async function queueMixRequest(method, id, body) {
     const query = id ? '&session=' + encodeURIComponent(id) : '';
     const response = await fetch('/api/health?mixer=1' + query, {
@@ -3261,6 +3270,8 @@
         const body = playlist.ok ? await playlist.text() : '';
         if (queueMix !== mix) return;
         if (body.startsWith('#EXTM3U') && body.includes('#EXTINF:')) {
+          mix.durations = mixTrackDurations(tracks, state.trackDurations, fade, mix);
+          mix.offsets = mixOffsets(mix.durations, fade);
           mix.playlist = result.playlist;
           $('queueMixBtn').textContent = 'Reproducir mezcla';
           queueMixStatus(`Lista para reproducir · ${tracks.length} pistas · fundido de ${fade} s`);
@@ -3288,7 +3299,7 @@
     const selected = tail.find(t => t === track) || tail.find(t => t.id === track.id) || { ...track };
     const tracks = [...mix.tracks.slice(0, part + 1), selected,
       ...tail.filter(t => t.id !== selected.id)].slice(0, Math.max(3, part + 2));
-    const durations = tracks.map(mixDuration);
+    const durations = mixTrackDurations(tracks, null, mix.fade, mix);
     if (durations.some(d => !Number.isFinite(d) || d <= mix.fade || d > 600)) {
       queueTrackNext(track, true);
       return;
@@ -3324,9 +3335,9 @@
           if (start < 0) return;
           const rest = S.queue.slice(start).filter(t => !tracks.includes(t));
           S.queue.splice(start, S.queue.length - start, ...tracks, ...rest);
+          mix.durations = mixTrackDurations(tracks, state.trackDurations, mix.fade, mix);
+          mix.offsets = mixOffsets(mix.durations, mix.fade);
           mix.tracks = tracks;
-          mix.durations = durations;
-          mix.offsets = mixOffsets(durations, mix.fade);
           mix.part = -1;
           updateQueueMixPosition();
           renderQueue();

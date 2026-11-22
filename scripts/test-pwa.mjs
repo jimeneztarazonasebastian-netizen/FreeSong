@@ -179,7 +179,8 @@ try {
       mixEdit = { id: editId, status: mixEdits.length === 1 ? 'applied' : 'rejected' };
       return route.fulfill({ json: { edit: { id: editId, status: 'pending' } } });
     }
-    return route.fulfill({ json: { status: 'complete', edit: mixEdit } });
+    const trackDurations = mixEdit ? [null, 11, 601] : [10, null, null];
+    return route.fulfill({ json: { status: 'complete', edit: mixEdit, trackDurations } });
   });
   await page.route('**/mixer-demo/sessions/*/test.wav', route => route.request().resourceType() === 'media' ||
     route.request().headers()['sec-fetch-dest'] === 'audio'
@@ -225,6 +226,7 @@ try {
     })), errors);
     throw error;
   });
+  await page.waitForFunction(() => document.getElementById('playerDurTime').textContent === '0:10');
   await swipeQueue('Fifth');
   await page.waitForFunction(() => document.querySelector('#queueMixStatus').textContent.includes('Siguiente actualizada'));
   assert.deepEqual(mixEdits[0], ['audius:Track0', 'audius:Track4', 'audius:Track3']);
@@ -238,9 +240,14 @@ try {
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
-    document.getElementById('queueMixAudio').currentTime = 3;
+    const audio = document.getElementById('queueMixAudio');
+    audio.currentTime = 3;
+    audio.dispatchEvent(new Event('timeupdate'));
   });
+  assert.equal(await page.locator('#playerTitle').textContent(), 'First', 'La edición conserva la duración medida de la pista que sigue sonando');
+  await page.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 5; });
   await page.waitForFunction(() => document.getElementById('playerTitle').textContent === 'Fifth');
+  assert.equal(await page.locator('#playerDurTime').textContent(), '0:11');
   assert.match(await page.locator('#queueMixAudio').getAttribute('src'), /test\.wav$/);
   const diag = await page.evaluate(() => window.FreeSongDiag.report());
   assert.equal(diag.visibility, 'hidden');

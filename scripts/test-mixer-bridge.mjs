@@ -28,6 +28,8 @@ try {
   assert.equal(JSON.stringify(result).includes('server-only-test-secret'), false);
   assert.equal(result.data.playlist, `https://freesong-mixer.onrender.com/sessions/${id}/index.m3u8`);
   assert.equal((await call('GET', null, null, '../health')).code, 400);
+  globalThis.fetch = async () => new Response(JSON.stringify({ trackDurations: [321.326, null, '281', 601, 99] }));
+  assert.deepEqual((await call('GET', null, null, id)).data.trackDurations, [321.326, null, null, null]);
   globalThis.fetch = async () => new Response('{}', { status: 401 });
   assert.equal((await call('GET', null, null, id)).code, 502);
   console.log('MIXER BRIDGE OK: clave privada, origen, rutas, configuración y errores');

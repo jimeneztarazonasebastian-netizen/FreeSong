@@ -50,8 +50,15 @@ export async function mixerControl(req, res, url) {
         expiresIn: data.expiresIn, editable: data.editable === true });
     }
     if (req.method === 'PATCH') return reply(res, 202, { edit: data.edit });
+    const trackDurations = Array.isArray(data.trackDurations)
+      ? data.trackDurations.slice(0, 4).map(seconds =>
+        Number.isFinite(seconds) && seconds > 0 && seconds <= 600 ? seconds : null)
+      : undefined;
+    const relayIssues = Array.isArray(data.relayIssues)
+      ? data.relayIssues.slice(0, 4).map(issue => typeof issue === 'string' && /^(metadata|media)_(\d{3}|format|no_aac|empty|redirect|timeout|unavailable)$/.test(issue) ? issue : null)
+      : undefined;
     return reply(res, 200, { status: data.status, ok: data.ok,
       sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus,
-      exitCode: data.exitCode, exitSignal: data.exitSignal, revision: data.revision, edit: data.edit });
+      exitCode: data.exitCode, exitSignal: data.exitSignal, revision: data.revision, edit: data.edit, trackDurations, relayIssues });
   } catch { return reply(res, 502, { error: 'Render no respondió a tiempo; puede estar arrancando. Reintenta en un minuto.' }); }
 }

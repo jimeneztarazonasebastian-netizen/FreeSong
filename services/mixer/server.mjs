@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { identicalSegments, publishManifest, readManifest, segmentIndex } from './hls.mjs';
+import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from './european-relay.mjs';
 
-// Servicio experimental: una sesión fija de 2–3 pistas, segmentos temporales.
-// No se conecta a la PWA hasta validar fuentes, controles y reproducción en iOS.
+// La PWA reproduce el fundido desde segmentos temporales de una sesión.
 const key = process.env.MIXER_API_KEY;
 if (!key || key.length < 24) throw new Error('MIXER_API_KEY debe tener al menos 24 caracteres');
 const backend = process.env.AUDIO_BACKEND || 'https://freesong-pied.vercel.app';
@@ -61,10 +61,14 @@ async function audiusSource(id) {
 
 async function audioSource(track) {
   const audius = audiusId.exec(track.id);
-  if (audius) return audiusSource(audius[1]);
+  if (audius) return { kind: 'audius', url: await audiusSource(audius[1]) };
+  let relayIssue;
   // Resolver desde el mismo host que consume el audio. La ruta de Vercel
   // permanece como respaldo, pero no debe ser la única fuente del mezclador.
   if (process.env.RESOLVE_ON_HOST !== '0') {
+    const relay = await resolveEuropeanAudio(track.id);
+    if (relay.url) return relay;
+    relayIssue = relay.issue;
     try {
       const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
         method: 'POST', headers: { 'Content-Type': 'application/json',
@@ -72,7 +76,7 @@ async function audioSource(track) {
         body: JSON.stringify({ videoId: track.id, context: { client: {
           clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2',
           osName: 'iPhone', osVersion: '18.3.2.22D82', hl: 'es', gl: 'US'
-        } } }), signal: AbortSignal.timeout(6000)
+        } } }), signal: AbortSignal.timeout(4500)
       });
       if (response.ok) {
         const data = await response.json();
@@ -81,11 +85,11 @@ async function audioSource(track) {
         if (data.playabilityStatus?.status === 'OK' && format) {
           const url = new URL(format.url);
           if (url.protocol === 'https:' && url.hostname.endsWith('.googlevideo.com')) {
-            const probe = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(4000) });
+            const probe = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(3000) });
             try {
               if ([200,206].includes(probe.status) && /^audio\//i.test(probe.headers.get('content-type') || '')) {
                 const reader = probe.body.getReader();
-                try { if (!(await reader.read()).done) return url.href; }
+                try { if (!(await reader.read()).done) return { kind: 'direct', url: url.href, relayIssue }; }
                 finally { await reader.cancel().catch(() => {}); }
               }
             } finally { if (!probe.body?.locked) await probe.body?.cancel().catch(() => {}); }
@@ -96,7 +100,7 @@ async function audioSource(track) {
   }
   const source = new URL('/api/stream', backend);
   source.search = new URLSearchParams({ id: track.id, title: track.title, artist: track.artist || '', itag: '140' });
-  return source.href;
+  return { kind: 'proxy', url: source.href, relayIssue };
 }
 
 async function requestBody(req) {
@@ -116,16 +120,18 @@ function validTracks(tracks, max = 3) {
 }
 
 async function startRender(tracks, seconds, retained) {
-  const sources = await Promise.all(tracks.map((track, i) =>
-    retained?.tracks[i]?.id === track.id && retained.urls[i] ? retained.urls[i] : audioSource(track)));
+  const inputs = await Promise.all(tracks.map((track, i) =>
+    retained?.tracks[i]?.id === track.id && retained.inputs[i] ? retained.inputs[i] : audioSource(track)));
   const directory = await mkdtemp(join(tmpdir(), 'freesong-mix-'));
-  const render = { directory, tracks, urls: sources, status: 'preparing' };
-  render.sources = sources.map((source, i) => {
-    if (audiusId.test(tracks[i].id)) return 'audius';
-    return new URL(source).hostname.endsWith('.googlevideo.com') ? 'direct' : 'proxy';
-  });
+  const render = { directory, tracks, inputs, status: 'preparing',
+    sources: inputs.map(source => source.kind), trackDurations: inputs.map(source => source.duration ?? null),
+    relayIssues: inputs.map(source => source.relayIssue ?? null) };
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-filter_complex_threads', '1'];
-  for (const source of sources) args.push('-rw_timeout', '15000000', '-i', source);
+  for (const source of inputs) {
+    if (source.kind === 'relay-eu') args.push('-user_agent', relayUserAgent, '-headers', `Origin: ${relayPlaybackOrigin}\r\n`,
+      '-tls_verify', '1', '-protocol_whitelist', 'https,tls,tcp');
+    args.push('-rw_timeout', '15000000', '-i', source.url);
+  }
   const filters = tracks.map((_, i) => `[${i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration=600,asetpts=PTS-STARTPTS[a${i}]`);
   let previous = 'a0';
   for (let i = 1; i < tracks.length; i++) {
@@ -218,7 +224,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
-      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 3, audius: true, editableMix: true });
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 4, audius: true, editableMix: true });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
       if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
@@ -274,8 +280,8 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method !== 'GET') return json(res, 405, { error: 'Método no admitido' });
       if (!match[2]) {
-        const { status, sources, failure, upstreamStatus, exitCode, exitSignal } = session.render || { status: 'preparing' };
-        return json(res, 200, { status, sources, failure, upstreamStatus, exitCode, exitSignal,
+        const { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal } = session.render || { status: 'preparing' };
+        return json(res, 200, { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal,
           revision: session.revision, edit: session.edit });
       }
       let bytes;
