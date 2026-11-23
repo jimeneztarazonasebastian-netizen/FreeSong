@@ -1,6 +1,6 @@
 # Pendientes y mejoras de FreeSong
 
-Auditoría actualizada el 23 de noviembre de 2026 para la versión web **3.9.48**.
+Auditoría actualizada el 23 de noviembre de 2026 para la versión web **3.9.49**.
 La auditoría original partió del commit `35db606`.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
@@ -44,6 +44,11 @@ cómo se comprueba.
 - Inicio y Buscar comparten la consulta predeterminada en curso. El shell de
   la PWA usa una sola copia del HTML y las portadas provisionales reutilizan
   el icono que ya está cargado.
+- Se añadió el importador opcional de listas y Me gusta de YouTube. La prueba
+  web simula Google y verifica el consentimiento, la importación, el reemplazo
+  de una copia repetida y la revocación sin cambiar el audio que está sonando.
+  La activación real depende de `YOUTUBE_OAUTH_CLIENT_ID` y del cliente externo
+  de Google. Los pasos de configuración están en [README.md](README.md).
 
 ---
 
@@ -60,6 +65,9 @@ Pruebas pendientes para la PWA instalada y Safari:
   inactividad de Render y al deslizar una pista para ponerla de siguiente.
 - Verificar la Isla Dinámica, la barra inferior, el teclado al buscar y el
   reproductor en vertical y horizontal con texto ampliado.
+- Cuando esté habilitada la cuenta de YouTube, probar la ventana de Google
+  desde la PWA instalada. Importar una lista y Me gusta, reimportar la lista
+  para comprobar que no se duplica y desconectar para retirar las copias.
 
 Pruebas pendientes para el IPA:
 
@@ -265,6 +273,18 @@ confirmó el control Audius.
 - Medir memoria con bibliotecas grandes. La prueba offline comprueba que el
   arranque prepara solamente los blobs de la pista actual y la siguiente.
 - Rehidratar descargas y probar modo avión tras relanzar.
+- Probar el importador de la cuenta de YouTube con varias cuentas externas.
+  Antes de ofrecerlo a todo el público, revisar la verificación del permiso
+  de solo lectura y las políticas aplicables al uso del catálogo.
+- Medir si la radio mejora al favorecer artistas de los favoritos e historial
+  local. Ofrecer por separado el uso de listas importadas como señal voluntaria
+  y probarlo con canciones de géneros distintos, sin cambiar la cola manual.
+- SimpMusic describe las recomendaciones personalizadas de YouTube Music y el
+  uso de Spotify para recursos como letras y Canvas. La Web API de Spotify
+  requiere Premium del titular de nuevas aplicaciones en modo de desarrollo.
+  FreeSong conserva la importación por enlace para acceder a listas públicas
+  dentro del alcance gratuito. [SimpMusic](https://github.com/maxrave-dev/SimpMusic#data)
+  · [Condiciones de desarrollo de Spotify](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
 
 ### 4.6 Documentación desactualizada
 
@@ -323,11 +343,11 @@ rápido de la versión 3.9.28 sigue como referencia histórica.
 
 ## 8. Siguiente trabajo recomendado
 
-1. Completar la validación física del reproductor y del diseño en la PWA y el
-   IPA (2.1 y 3.7).
-2. Verificar los permisos del catálogo y medir capacidad y caducidad antes de
-   ampliar el uso público (2.4 y 4.3).
-3. Validar el reemplazo HLS en el iPhone bloqueado y encadenar bloques con
+1. Activar el cliente externo de Google, probar con las cuentas de prueba y
+   completar la validación física del reproductor y el diseño (2.1 y 3.7).
+2. Revisar permisos del catálogo y medir arranque en frío, capacidad y
+   caducidad antes de ampliar el uso público (2.4 y 4.3).
+3. Verificar el reemplazo HLS en el iPhone bloqueado y encadenar bloques con
    fundido (4.3).
 4. Añadir el respaldo HLS en el IPA, confirmar la política de sesión de audio,
    verificar descargas y adoptar `loudnessDb` (3.1 a 3.4).

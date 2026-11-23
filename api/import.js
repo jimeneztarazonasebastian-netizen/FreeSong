@@ -8,6 +8,13 @@ const MAX_TRACKS = 200;
 
 export default async function handler(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
+  if (urlObj.searchParams.get('youtube-config') === '1') {
+    if (req.method !== 'GET') return sendJson(res, { error: 'Método no admitido' }, 405, 0);
+    const clientId = (process.env.YOUTUBE_OAUTH_CLIENT_ID || '').trim();
+    return sendJson(res, {
+      clientId: /^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId) ? clientId : null
+    }, 200, 0);
+  }
   const raw = String((req.query && req.query.url) || urlObj.searchParams.get('url') || '').trim();
 
   if (!raw) {

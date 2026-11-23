@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="app.css?v=3.9.48" />
+  <link rel="stylesheet" href="app.css?v=3.9.49" />
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
@@ -560,7 +560,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor de música para iPhone y la web. Incluye cola editable, letras sincronizadas y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.48</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.49</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -1079,7 +1079,7 @@
         <div class="flex items-center justify-between">
           <div class="dialog-heading flex items-center gap-2">
             <svg class="w-5 h-5 text-emerald-400"><use href="#i-download"/></svg>
-            <h3 id="importPlaylistTitle" class="font-bold text-white text-base">Importar playlist</h3>
+            <h3 id="importPlaylistTitle" class="font-bold text-white text-base">Importar a tu biblioteca</h3>
           </div>
           <button id="importPlaylistCloseBtn" type="button" aria-label="Cerrar importador" class="p-1 text-zinc-400 hover:text-white press">
             <svg class="w-5 h-5"><use href="#i-close"/></svg>
@@ -1093,6 +1093,38 @@
           <button id="importPlaylistStartBtn" class="py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-black press">Importar</button>
         </div>
         <p class="text-[10px] text-zinc-500 leading-relaxed">La playlist de Spotify debe ser pública. La importación puede tardar según el número de canciones.</p>
+        <details id="youtubeImportDetails" class="rounded-2xl border border-zinc-800 bg-zinc-950/50">
+          <summary id="youtubeImportTitle" class="flex cursor-pointer items-center justify-between gap-2 rounded-2xl px-3 py-2 text-xs font-bold text-white">
+            Desde mi cuenta de YouTube
+            <svg aria-hidden="true" class="h-4 w-4 shrink-0 text-zinc-400"><use href="#i-down"/></svg>
+          </summary>
+          <section id="youtubeImportPanel" class="space-y-2 border-t border-zinc-800 p-3" aria-labelledby="youtubeImportTitle">
+            <p class="text-xs leading-relaxed text-zinc-400">Las listas se guardan en este dispositivo hasta 30 días. Me gusta se importa como su propia lista.</p>
+            <div id="youtubeImportConsentWrap" class="flex items-start gap-2 p-1">
+              <input id="youtubeImportConsent" type="checkbox" aria-describedby="youtubeImportPolicies" class="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500" />
+              <div class="min-w-0 text-xs leading-relaxed text-zinc-300">
+                <label for="youtubeImportConsent">Acepto las condiciones de importación.</label>
+                <p id="youtubeImportPolicies">
+                  <a href="/youtube-privacy.html" target="_blank" rel="noopener noreferrer" class="text-emerald-300 underline">Privacidad de la importación</a>
+                  · <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer" class="text-emerald-300 underline">Términos de YouTube</a>
+                </p>
+              </div>
+            </div>
+            <button id="youtubeConnectBtn" type="button" disabled class="w-full rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-300 press">Conectar cuenta</button>
+            <div id="youtubeImportAccount" class="hidden space-y-2">
+              <p id="youtubeImportChannel" class="hidden text-xs font-semibold text-zinc-200"></p>
+              <div class="responsive-actions grid gap-2">
+                <button id="youtubePlaylistsBtn" type="button" aria-controls="youtubeImportList" class="rounded-xl border border-zinc-700 bg-zinc-800 px-2 py-2 text-xs font-bold text-white press">Mis playlists</button>
+                <button id="youtubeLikedBtn" type="button" class="rounded-xl border border-zinc-700 bg-zinc-800 px-2 py-2 text-xs font-bold text-white press">Importar Me gusta</button>
+              </div>
+              <button id="youtubeDisconnectBtn" type="button" class="rounded-lg px-2 text-xs font-semibold text-zinc-400 hover:text-white press">Desconectar y borrar copias</button>
+            </div>
+            <button id="youtubeClearCopiesBtn" type="button" class="hidden rounded-lg px-2 text-xs font-semibold text-zinc-400 hover:text-white press">Borrar copias importadas</button>
+            <p id="youtubeImportStatus" class="hidden text-xs leading-relaxed text-zinc-300" role="status" aria-atomic="true"></p>
+            <ul id="youtubeImportList" class="hidden" aria-label="Mis playlists de YouTube"></ul>
+            <p id="youtubeImportEmpty" class="hidden text-xs leading-relaxed text-zinc-400" role="status">No hay contenido para importar desde esta cuenta.</p>
+          </section>
+        </details>
       </div>
     </div>
 
@@ -1135,12 +1167,12 @@
     <div id="ytDeck"></div>
   </div>
 
-  <script src="util.js?v=3.9.48"></script>
-  <script src="storage.js?v=3.9.48"></script>
-  <script src="lyrics.js?v=3.9.48"></script>
-  <script src="diag.js?v=3.9.48"></script>
-  <script src="pwa.js?v=3.9.48"></script>
-  <script src="native-audio.js?v=3.9.48"></script>
-  <script src="app.min.js?v=3.9.48"></script>
+  <script src="util.js?v=3.9.49"></script>
+  <script src="storage.js?v=3.9.49"></script>
+  <script src="lyrics.js?v=3.9.49"></script>
+  <script src="diag.js?v=3.9.49"></script>
+  <script src="pwa.js?v=3.9.49"></script>
+  <script src="native-audio.js?v=3.9.49"></script>
+  <script src="app.min.js?v=3.9.49"></script>
 </body>
 </html>

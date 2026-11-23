@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.48 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.49 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.48';
+  const APP_VERSION = '3.9.49';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -6667,6 +6667,7 @@
   }
 
   function renderLibrary() {
+    expireYoutubeCopies();
     $('libLikedList').classList.toggle('hidden', S.libFilter !== 'likes');
     $('libDownloadsList')?.classList.toggle('hidden', S.libFilter !== 'downloads');
     $('libHistoryList').classList.toggle('hidden', S.libFilter !== 'history');
@@ -6877,6 +6878,83 @@
   }
 
   // --- Importador de playlists de Spotify / YouTube ---
+  const youtubeCopyLifetime = 30 * 86400_000;
+  let youtubeAccount;
+  let youtubeAccountLoading;
+
+  function expireYoutubeCopies() {
+    const now = Date.now();
+    const remaining = S.playlists.filter((list) => !list.youtubeImport ||
+      (Number.isFinite(list.youtubeImport.savedAt) && now - list.youtubeImport.savedAt < youtubeCopyLifetime));
+    if (remaining.length === S.playlists.length) return;
+    S.playlists = remaining;
+    if (!remaining.some((list) => list.id === S.openPlaylistId)) S.openPlaylistId = null;
+    savePlaylists();
+  }
+
+  function storeYoutubeCopies(playlists) {
+    if (!Store.write('fs_playlists', playlists)) throw new Error('No se pudieron guardar los cambios en este dispositivo.');
+    S.playlists = playlists;
+  }
+
+  function saveYoutubeCopy({ channelId, sourceId, name, tracks }) {
+    const playlist = S.playlists.find((list) => list.youtubeImport?.channelId === channelId && list.youtubeImport?.sourceId === sourceId);
+    const copy = {
+      id: playlist?.id || crypto.randomUUID(),
+      name: playlist?.name || name.slice(0, 60),
+      tracks: validTracks(tracks),
+      youtubeImport: { channelId, sourceId, savedAt: Date.now() }
+    };
+    const playlists = playlist ? S.playlists.map((list) => list === playlist ? copy : list) : [...S.playlists, copy];
+    storeYoutubeCopies(playlists);
+    S.libFilter = 'playlists';
+    S.libSearch = '';
+    S.openPlaylistId = copy.id;
+    renderLibrary();
+  }
+
+  function removeYoutubeCopies() {
+    const playlists = S.playlists.filter((list) => !list.youtubeImport);
+    if (playlists.length === S.playlists.length) return;
+    storeYoutubeCopies(playlists);
+    if (!playlists.some((list) => list.id === S.openPlaylistId)) S.openPlaylistId = null;
+    renderLibrary();
+  }
+
+  function loadImportScript(name) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = `${name}?v=${APP_VERSION}`;
+      script.onload = resolve;
+      script.onerror = () => { script.remove(); reject(new Error('No se pudo cargar la importación.')); };
+      document.head.appendChild(script);
+    });
+  }
+
+  async function openYoutubeAccount() {
+    if (!$('youtubeImportDetails')?.open) return;
+    try {
+      if (!youtubeAccount) {
+        youtubeAccountLoading ||= Promise.all([
+          window.FreeSongYouTubeImport || loadImportScript('youtube-import.js'),
+          window.FreeSongYouTubeAccount || loadImportScript('youtube-account.js')
+        ]).then(() => {
+          youtubeAccount = window.FreeSongYouTubeAccount({
+            savePlaylist: saveYoutubeCopy, removeCopies: removeYoutubeCopies,
+            hasCopies: () => S.playlists.some((list) => !!list.youtubeImport)
+          });
+        });
+        await youtubeAccountLoading;
+      }
+      if ($('youtubeImportDetails').open) void youtubeAccount.open();
+    } catch {
+      youtubeAccountLoading = null;
+      const status = $('youtubeImportStatus');
+      status.textContent = 'No se pudo abrir la importación de YouTube. Vuelve a abrir esta sección para reintentar.';
+      status.classList.remove('hidden');
+    }
+  }
+
   function setImportStatus(message, isError = false) {
     const el = $('importPlaylistStatus');
     if (!el) return;
@@ -6900,14 +6978,19 @@
       startBtn.disabled = false;
       startBtn.textContent = 'Importar';
     }
+    const youtubeDetails = $('youtubeImportDetails');
+    if (youtubeDetails) youtubeDetails.hidden = !!nativeAudio || window.Capacitor?.isNativePlatform?.() === true;
     modal.classList.remove('hidden');
     pushModalState('importPlaylist');
-    setTimeout(() => $('importPlaylistUrl')?.focus(), 280);
+    // Do not open the iPhone keyboard before the user chooses a source.
+    $('importPlaylistCloseBtn')?.focus();
   }
 
   function closeImportPlaylistModal() {
     const modal = $('importPlaylistModal');
     if (!modal || modal.classList.contains('hidden')) return;
+    youtubeAccount?.cancel();
+    if ($('youtubeImportDetails')) $('youtubeImportDetails').open = false;
     modal.classList.add('hidden');
     popModalState();
   }
@@ -7296,7 +7379,7 @@
     const backupData = {
       favorites: S.favorites,
       downloads: S.downloads,
-      playlists: S.playlists,
+      playlists: S.playlists.filter((list) => !list.youtubeImport),
       history: S.history,
       stats: S.stats,
       exportedAt: new Date().toISOString(),
@@ -9236,6 +9319,10 @@
     $('importPlaylistCloseBtn')?.addEventListener('click', closeImportPlaylistModal);
     $('importPlaylistCancelBtn')?.addEventListener('click', closeImportPlaylistModal);
     $('importPlaylistStartBtn')?.addEventListener('click', importPlaylistFromUrl);
+    $('youtubeImportDetails')?.addEventListener('toggle', (event) => {
+      if (event.currentTarget.open) void openYoutubeAccount();
+      else youtubeAccount?.cancel();
+    });
     $('importPlaylistModal')?.addEventListener('click', (e) => {
       if (e.target.id === 'importPlaylistModal') closeImportPlaylistModal();
     });
@@ -9633,6 +9720,7 @@
 
   // --- Inicialización ---
   document.addEventListener('DOMContentLoaded', () => {
+    expireYoutubeCopies();
     if (nativeAudio) nativeAudio.setListener(onNativeState);
     setupAudioSession();
     updateGreeting();

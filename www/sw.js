@@ -1,6 +1,6 @@
-// Service worker de FreeSong v3.9.48: App Shell local con actualizaciones de fondo
+// Service worker de FreeSong v3.9.49: App Shell local con actualizaciones de fondo
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.48';
+const VERSION = 'freesong-v3.9.49';
 const SHELL = [
   './',
   'app.css',
@@ -54,6 +54,7 @@ self.addEventListener('fetch', (event) => {
   if (!['GET', 'HEAD'].includes(req.method) || url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith('/api/')) return;
+  if (url.pathname === '/youtube-privacy' || url.pathname === '/youtube-privacy.html') return;
   // La prueba es una página independiente. Su navegación, redirecciones y
   // segmentos HLS deben ir a la red, sin recibir el shell ni perder rangos.
   if (['/mixer-test', '/mixer-test.html', '/mixer-test.js'].includes(url.pathname) ||

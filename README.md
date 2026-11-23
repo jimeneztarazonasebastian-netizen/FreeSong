@@ -5,7 +5,7 @@ Reproductor de música web optimizado para iPhone (iOS) y navegadores modernos, 
 ## ✨ Características
 
 - **Diseñado para iPhone**: Instálalo como PWA tocando **Compartir → Agregar a inicio** en Safari. Funciona en pantalla completa con soporte de controles en pantalla de bloqueo (`MediaSession`), reproduce en segundo plano al cambiar de app o bloquear el teléfono (`AudioSession` tipo `playback`) y conserva la cola, la canción y el segundo exacto al volver a abrir la app.
-- **Crossfade**: Dos reproductores HTML en escritorio y dos AVPlayer en el IPA. La PWA de iPhone puede preparar un bloque HLS en **Siguiente** para escucharlo con la pantalla bloqueada. Las fuentes y la validación en hardware se registran en [PENDIENTES.md](PENDIENTES.md).
+- **Crossfade**: Dos reproductores HTML en escritorio y dos AVPlayer en el IPA. La PWA instalada en iPhone puede iniciar HLS desde el primer toque en una cola compatible. Las fuentes y la validación en hardware se registran en [PENDIENTES.md](PENDIENTES.md).
 - **Música y Streaming**: Búsqueda en YouTube Music, streaming y descargas para escuchar sin conexión; disponibilidad sujeta a las fuentes externas.
 - **Buscar con contenido real**: cuadrícula de géneros con portadas inclinadas al estilo Spotify, mezclas listas para reproducir e historial, sin pantallas vacías.
 - **Letras sincronizadas**: Integración con LRCLIB para cantar con la letra en tiempo real. Puedes compartir el verso que suena como historia 9:16 y cambiar de verso dentro de la vista previa.
@@ -22,6 +22,36 @@ Este repositorio está preconfigurado con `vercel.json` para despliegue automát
 1. Conecta este repositorio en Vercel.
 2. Pulsa **Deploy** (los archivos se sirven directamente desde `www`).
 3. Abre el enlace en tu iPhone y disfrútalo.
+
+## Importación opcional de YouTube
+
+En la web y la PWA, abre **Biblioteca → Importar → Desde mi cuenta de YouTube**.
+El permiso de solo lectura permite copiar playlists propias y Me gusta a la
+biblioteca local. Se importan hasta 200 elementos por operación. Las copias
+caducan tras 30 días, se pueden actualizar reimportándolas y se eliminan al
+desconectar. La reproducción usa su configuración habitual.
+
+Para habilitar el acceso en un despliegue:
+
+1. En Google Cloud, habilita **YouTube Data API v3** en el proyecto de FreeSong.
+   Configura el consentimiento para `https://www.googleapis.com/auth/youtube.readonly`.
+   Usa cuentas de prueba durante el desarrollo o completa la verificación de
+   Google antes de ofrecer el acceso general.
+2. Crea un cliente OAuth de tipo **Aplicación web**. Agrega
+   `https://freesong-pied.vercel.app` a los orígenes autorizados de JavaScript.
+   La página de privacidad es `https://freesong-pied.vercel.app/youtube-privacy`.
+3. Agrega el **ID público del cliente** como `YOUTUBE_OAUTH_CLIENT_ID` en el
+   entorno **Production** de Vercel. Publica un despliegue nuevo para aplicar
+   la variable. En desarrollo, registra `http://localhost:5173` y pasa la misma
+   variable a `npm start`.
+
+El permiso vive en la memoria del navegador y se envía a Google al consultar
+la biblioteca. El cliente web usa el ID público y la cuota incluida de YouTube
+Data API. Mantén el secreto del cliente y las contraseñas fuera del repositorio.
+Si falta el ID, el importador por enlace público sigue disponible.
+
+[Configurar el cliente OAuth de Google](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid)
+· [Cuota de YouTube Data API](https://developers.google.com/youtube/data/determine_quota_cost)
 
 ## 🛠️ Desarrollo local
 

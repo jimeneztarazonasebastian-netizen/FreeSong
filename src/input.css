@@ -1014,6 +1014,35 @@ body[data-aurora="off"] .aurora-bg { display: none; }
   max-width: 100%;
 }
 
+#youtubeImportList > li {
+  min-width: 0;
+  padding-block: .25rem;
+  border-top: 1px solid #27272a;
+}
+
+#youtubeImportPanel button:disabled {
+  opacity: .6;
+  cursor: default;
+}
+
+#youtubeImportDetails > summary {
+  min-height: 44px;
+  list-style: none;
+}
+
+#youtubeImportDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+#youtubeImportDetails[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+#youtubeImportDetails > summary:focus-visible {
+  outline: 2px solid #34d399;
+  outline-offset: -2px;
+}
+
 .dialog-heading + button {
   flex: none;
   min-width: 44px;
