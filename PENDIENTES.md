@@ -1,6 +1,6 @@
 # Pendientes y mejoras de FreeSong
 
-Auditoría actualizada el 23 de noviembre de 2026 para la versión web **3.9.49**.
+Auditoría actualizada el 23 de noviembre de 2026 para la versión web **3.9.50**.
 La auditoría original partió del commit `35db606`.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto

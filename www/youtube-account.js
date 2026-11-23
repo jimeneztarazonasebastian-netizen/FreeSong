@@ -45,6 +45,7 @@
       const node = $('youtubeImportStatus');
       node.textContent = message;
       node.classList.toggle('text-red-400', error);
+      node.classList.toggle('text-zinc-300', !error);
       visible(node.id, !!message);
     }
 
