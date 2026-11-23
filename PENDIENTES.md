@@ -185,7 +185,10 @@ Wi-Fi y datos móviles.
 El 23 de noviembre, Render siguió entregando audio de Audius, pero el relay
 europeo devolvió segmentos SABR para «Fanática Sensual». El mezclador incorpora
 el relay estadounidense existente como segundo intento para el mismo ID y
-valida que entregue AAC antes de usarlo.
+valida que entregue AAC antes de usarlo. La mezcla exacta de «Stereo Love» y
+«Fanática Sensual» pasó con FFmpeg en local. El nuevo despliegue de Render
+entregó HLS de Audius, pero la prueba exacta aún devolvió `502` al resolver la
+segunda pista desde la nube. Sigue pendiente comprobar esa fuente desde Render.
 
 ### 3.7 Diseño adaptable y accesibilidad
 
