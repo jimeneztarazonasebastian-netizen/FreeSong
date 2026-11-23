@@ -182,6 +182,11 @@ las publicaciones exactas de «Stereo Love» y «Fanática Sensual» en el relay
 europeo. Falta ampliar la muestra en Render y repetir las pruebas con Safari,
 Wi-Fi y datos móviles.
 
+El 23 de noviembre, Render siguió entregando audio de Audius, pero el relay
+europeo devolvió segmentos SABR para «Fanática Sensual». El mezclador incorpora
+el relay estadounidense existente como segundo intento para el mismo ID y
+valida que entregue AAC antes de usarlo.
+
 ### 3.7 Diseño adaptable y accesibilidad
 
 - Revisar Inicio, Buscar, Biblioteca, Siguiente, Reproductor y Ajustes en pantallas

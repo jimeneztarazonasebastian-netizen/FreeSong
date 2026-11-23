@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { identicalSegments, idleSessionMs, publishManifest, readManifest, segmentIndex, sessionExpired } from './hls.mjs';
-import { relayPlaybackOrigin, relayUserAgent, resolveEuropeanAudio } from './european-relay.mjs';
+import { relayPlaybackOrigin, relayUserAgent, resolveMixerRelayAudio } from './european-relay.mjs';
 
 // La PWA reproduce el fundido desde segmentos temporales de una sesión.
 const key = process.env.MIXER_API_KEY;
@@ -69,7 +69,9 @@ async function audioSource(track) {
   // Resolver desde el mismo host que consume el audio. La ruta de Vercel
   // permanece como respaldo, pero no debe ser la única fuente del mezclador.
   if (process.env.RESOLVE_ON_HOST !== '0') {
-    const relay = await resolveEuropeanAudio(track.id);
+    // Acotar toda la resolución para dejar margen a la creación de sesión de Vercel.
+    const deadline = AbortSignal.timeout(10_500);
+    const relay = await resolveMixerRelayAudio(track.id, deadline);
     if (relay.url) return relay;
     relayIssue = relay.issue;
     try {
@@ -79,7 +81,7 @@ async function audioSource(track) {
         body: JSON.stringify({ videoId: track.id, context: { client: {
           clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2',
           osName: 'iPhone', osVersion: '18.3.2.22D82', hl: 'es', gl: 'US'
-        } } }), signal: AbortSignal.timeout(4500)
+        } } }), signal: AbortSignal.any([deadline, AbortSignal.timeout(4500)])
       });
       if (response.ok) {
         const data = await response.json();
@@ -88,7 +90,8 @@ async function audioSource(track) {
         if (data.playabilityStatus?.status === 'OK' && format) {
           const url = new URL(format.url);
           if (url.protocol === 'https:' && url.hostname.endsWith('.googlevideo.com')) {
-            const probe = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(3000) });
+            const probe = await fetch(url, { headers: { Range: 'bytes=0-1023' },
+              signal: AbortSignal.any([deadline, AbortSignal.timeout(3000)]) });
             try {
               if ([200,206].includes(probe.status) && /^audio\//i.test(probe.headers.get('content-type') || '')) {
                 const reader = probe.body.getReader();
@@ -131,7 +134,7 @@ async function startRender(tracks, seconds, retained) {
     relayIssues: inputs.map(source => source.relayIssue ?? null) };
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-filter_complex_threads', '1'];
   for (const source of inputs) {
-    if (source.kind === 'relay-eu') args.push('-user_agent', relayUserAgent, '-headers', `Origin: ${relayPlaybackOrigin}\r\n`,
+    if (source.kind === 'relay-eu' || source.kind === 'relay-us') args.push('-user_agent', relayUserAgent, '-headers', `Origin: ${relayPlaybackOrigin}\r\n`,
       '-tls_verify', '1', '-protocol_whitelist', 'https,tls,tcp');
     args.push('-rw_timeout', '15000000', '-i', source.url);
   }
