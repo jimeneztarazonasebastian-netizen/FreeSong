@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.47 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.48 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.47';
+  const APP_VERSION = '3.9.48';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -308,6 +308,8 @@
   const queueMixAudio = $('queueMixAudio') || new Audio();
   let queueMix = null;
   let queueMixPrimed = false;
+  let nativeMixLauncher = location.origin === 'https://freesong-pied.vercel.app';
+  let mixerWarmAt = 0;
   audioDecks.forEach((a) => {
     a.preload = 'auto';
     a.playsInline = true;
@@ -1507,6 +1509,7 @@
       // abrir otra fuente si iOS bloquea la página durante el primer búfer.
       if (!isBackground()) {
         setupAudioSession();
+        if (queueMix.nativeLaunch && !queueMix.starting && !queueMix.trackListReady) void readNativeMixTracks(queueMix);
         updateQueueMixPosition();
       }
       saveSession(true);
@@ -1548,6 +1551,7 @@
       ensurePlaybackAlive();
     } else {
       setupAudioSession();
+      warmNativeMixLauncher();
       ensurePlaybackAlive();
       if (queueMix?.autoPlayer) void startAutomaticMix(queueMix);
       if (autoPlayBlocked && !userIntentionalPause) {
@@ -2565,85 +2569,146 @@
     if (!nextTrack.streamUrl) nextTrack.streamUrl = buildStreamUrl(nextTrack);
   }
 
-  // --- Autoplay Continuo: Recomendaciones Infinitas (SimpMusic Engine via /api/queue) ---
-  let isFetchingRelated = false;
-  async function ensureUpcomingTracks(track, signal) {
-    if (isAudiusTrack(track) || queueMix?.active) return;
-    if (!S.autoplayInfinite || !track || isFetchingRelated) return;
-    const remaining = S.queue.length - 1 - S.currentIndex;
-    if (remaining < 4) {
-      const queue = S.queue;
-      isFetchingRelated = true;
-      try {
-        const res = await fetch(`/api/queue?id=${encodeURIComponent(track.id)}`, { signal });
-        const data = await res.json();
-        if (signal?.aborted || S.queue !== queue) return;
-        if (data.tracks && data.tracks.length > 0) {
-          const existingIds = new Set(S.queue.map((t) => t.id));
-          const newTracks = data.tracks.filter((t) => !existingIds.has(t.id));
-          if (newTracks.length > 0) {
-            S.queue.push(...newTracks);
-            renderQueue();
-            showToast('🎵 Cola infinita: pistas similares añadidas', 1800);
-          }
-        }
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          console.error('Error al cargar recomendaciones continuas:', err);
-        }
-      } finally {
-        isFetchingRelated = false;
-      }
+  // La radio de cada canción se comparte entre Similares y el autoplay.
+  const recommendationCache = new Map();
+  const searchSongAlternatives = new WeakMap();
+  let pendingRecommendedTail = null;
+
+  const normalizeRecommendationText = (value) => String(value || '').normalize('NFD')
+    .replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  function recommendationArtists(track) {
+    const names = Array.isArray(track.artists) && track.artists.length
+      ? track.artists : String(track.artist || '').split(/,|\s+(?:y|&|feat\.?|ft\.?)\s+/i);
+    return names.map(normalizeRecommendationText)
+      .filter((name) => name && !['artista', 'varios artistas', 'audius'].includes(name));
+  }
+
+  function isSameArtistOrAlbum(seed, track) {
+    const artists = recommendationArtists(seed);
+    const album = normalizeRecommendationText(seed.album);
+    return (album && album === normalizeRecommendationText(track.album))
+      || recommendationArtists(track).some((name) => artists.includes(name));
+  }
+
+  function uniqueRecommendationTracks(seed, list, existing = []) {
+    const ids = new Set([seed.id, ...existing.map((track) => track?.id)]);
+    const titles = new Map();
+    const normalizeTitle = (track) => normalizeRecommendationText(track.title).replace(
+      /(?: (?:\d{4} )?(?:remaster(?:ed|izado|izada)?(?: version)?|official (?:video|audio)|audio oficial|video oficial|radio edit)(?: \d{4})?)+$/,
+      ''
+    );
+    for (const track of [seed, ...existing]) {
+      if (!track) continue;
+      const title = normalizeTitle(track);
+      titles.set(title, [...(titles.get(title) || []), ...recommendationArtists(track)]);
+    }
+    return list.filter((track) => {
+      if (!track?.id || !track.title || ids.has(track.id)) return false;
+      const title = normalizeTitle(track);
+      const artists = recommendationArtists(track);
+      const previous = titles.get(title) || [];
+      if (title && artists.some((name) => previous.includes(name))) return false;
+      ids.add(track.id);
+      titles.set(title, [...previous, ...artists]);
+      return true;
+    });
+  }
+
+  async function fetchRecommendationData(url, timeout) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error('No se pudieron cargar las recomendaciones');
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  // Añade pistas nuevas a la cola sin duplicar IDs. Devuelve cuántas entraron.
-  function addTracksToQueue(list) {
-    if (!Array.isArray(list) || list.length === 0) return 0;
-    const existing = new Set(S.queue.map((t) => t && t.id));
-    const fresh = list.filter((t) => t && t.id && !existing.has(t.id));
-    if (fresh.length === 0) return 0;
-    S.queue.push(...fresh);
-    renderQueue();
-    return fresh.length;
+  function parseAudiusSearchTracks(data) {
+    return (Array.isArray(data?.data) ? data.data : [])
+      .filter((track) => track?.is_streamable === true && /^[A-Za-z0-9]{1,32}$/.test(track.id || ''))
+      .map((track) => {
+        const duration = Number(track.duration) || 0;
+        return {
+          id: 'audius:' + track.id,
+          title: track.title,
+          artist: track.user?.name || 'Audius',
+          thumbnail: track.artwork?.['150x150'] || '',
+          duration,
+          durationText: formatTime(duration)
+        };
+      });
   }
 
-  // Al elegir una canción en Buscar, la cola se convierte en una radio de esa
-  // canción (similares de YouTube), no en el resto de resultados. Así "la
-  // siguiente" tiene que ver con lo que está sonando, como en Spotify.
-  let queueSeedToken = 0;
-
-  async function seedSimilarQueue(track, fallback = []) {
-    if (!track || !S.autoplayInfinite) return;
-    const token = ++queueSeedToken;
-    // Evita que ensureUpcomingTracks haga la misma petición por duplicado.
-    isFetchingRelated = true;
-
-    let related = [];
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const res = await fetch(`/api/queue?id=${encodeURIComponent(track.id)}`, { signal: controller.signal });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.tracks)) related = data.tracks;
+  function getTrackRecommendations(track) {
+    const cached = recommendationCache.get(track.id);
+    if (cached && cached.expires > Date.now()) return cached.promise;
+    const entry = { expires: Date.now() + 5 * 60_000 };
+    entry.promise = (async () => {
+      if (!isAudiusTrack(track)) {
+        const radio = await fetchRecommendationData(
+          `/api/queue?id=${encodeURIComponent(track.id)}`, 5000
+        ).catch(() => null);
+        const tracks = uniqueRecommendationTracks(track, Array.isArray(radio?.tracks) ? radio.tracks : []);
+        if (tracks.length) return tracks.slice(0, 30);
       }
-    } catch {}
-    clearTimeout(timer);
-    if (token === queueSeedToken) isFetchingRelated = false;
-    if (token !== queueSeedToken) return;
 
-    // La cola pudo cambiar mientras se resolvía: no mezclar recomendaciones
-    // de una canción que ya no está sonando.
-    const current = S.queue[S.currentIndex];
-    if (!current || current.id !== track.id) return;
+      if (!recommendationArtists(track).length) return [];
+      const artist = (Array.isArray(track.artists) && track.artists[0]) || track.artist;
+      const search = isAudiusTrack(track)
+        ? 'https://api.audius.co/v1/tracks/search?' + new URLSearchParams({ query: artist, app_name: 'FreeSong', limit: '15' })
+        : `/api/search?type=songs&q=${encodeURIComponent(artist)}`;
+      const data = await fetchRecommendationData(search, 3500);
+      const candidates = isAudiusTrack(track)
+        ? parseAudiusSearchTracks(data)
+        : (Array.isArray(data?.tracks) ? data.tracks : []);
+      return uniqueRecommendationTracks(track, candidates.filter((candidate) => candidate && isSameArtistOrAlbum(track, candidate)));
+    })().then((tracks) => {
+      if (!tracks.length && recommendationCache.get(track.id) === entry) recommendationCache.delete(track.id);
+      return tracks;
+    }, (error) => {
+      if (recommendationCache.get(track.id) === entry) recommendationCache.delete(track.id);
+      throw error;
+    });
+    recommendationCache.set(track.id, entry);
+    if (recommendationCache.size > 40) recommendationCache.delete(recommendationCache.keys().next().value);
+    return entry.promise;
+  }
 
-    addTracksToQueue(related);
+  function canAppendRecommendations() {
+    return S.autoplayInfinite && (!queueMix?.active || (queueMix.nativeLaunch && queueMix.part > 0));
+  }
 
-    // Si las recomendaciones no llenan la cola, completa con el resto de la
-    // búsqueda para que la reproducción no se detenga.
-    const remaining = S.queue.length - 1 - S.currentIndex;
-    if (remaining < 4) addTracksToQueue(fallback);
+  async function ensureUpcomingTracks(track, signal) {
+    if (!track || !canAppendRecommendations() || S.queue.length - 1 - S.currentIndex >= 4) return;
+    const queue = S.queue;
+    if (pendingRecommendedTail?.queue === queue && pendingRecommendedTail.track === track) return;
+    const pending = { queue, track };
+    pendingRecommendedTail = pending;
+    try {
+      const related = await getTrackRecommendations(track).catch(() => []);
+      if (signal?.aborted || S.queue !== queue || S.queue[S.currentIndex]?.id !== track.id
+          || !canAppendRecommendations()) return;
+      const fresh = uniqueRecommendationTracks(track, related, queue).slice(0, 6);
+      if (S.queue.length - 1 - S.currentIndex + fresh.length < 4) {
+        const local = [...(searchSongAlternatives.get(track) || []), ...S.favorites, ...S.history]
+          .filter((candidate) => candidate && isAudiusTrack(track) === isAudiusTrack(candidate)
+            && isSameArtistOrAlbum(track, candidate));
+        fresh.push(...uniqueRecommendationTracks(track, local, [...queue, ...fresh]).slice(0, 6 - fresh.length));
+      }
+      if (!fresh.length) return;
+      queue.push(...fresh);
+      renderQueue();
+      saveSession(true);
+      if (!queueMix?.active) {
+        prefetchNextTrack();
+        requestAutomaticMix(getActivePlayer());
+      }
+    } finally {
+      if (pendingRecommendedTail === pending) pendingRecommendedTail = null;
+    }
   }
 
   // --- Motor de Descargas Offline Reales (Cache API + Modo Avión en iPhone) ---
@@ -3096,7 +3161,7 @@
     saveHistory(track);
     recordPlayStat(track);
     loadLyrics(track, signal);
-    loadSimilarTracks(track, signal);
+    if (S.activePlayerSubTab === 'similar') loadSimilarTracks(track, signal);
     updateMediaSession(track);
     ensureUpcomingTracks(track, signal);
     enrichTrackDuration(track, signal);
@@ -3148,6 +3213,7 @@
   const mixDuration = track => Number(track.durationSeconds || track.duration);
   const mixOffsets = (durations, fade) => durations.map((_, i) =>
     durations.slice(0, i).reduce((sum, duration) => sum + duration - fade, 0));
+  const mixFade = () => Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
 
   function mixTrackDurations(tracks, reported, fade, previous) {
     return tracks.map((track, index) => {
@@ -3230,6 +3296,7 @@
 
   function seekQueueMix(seconds) {
     if (!queueMix?.active) return false;
+    if (queueMix.starting) return true;
     const { part, offsets, durations } = queueMix;
     let target = offsets[part] + Math.max(0, Math.min(seconds, durations[part] - 0.1));
     if (queueMix.editable && queueMixAudio.seekable.length) {
@@ -3250,6 +3317,114 @@
   function canUseAutomaticMix() {
     return isIOSDevice && !nativeAudio && S.crossfade && navigator.onLine !== false &&
       S.playbackRate === 1 && S.shuffleMode === 0 && S.repeat !== 'one' && !S.sleepTimerEndTrack;
+  }
+
+  function canLaunchNativeMix() {
+    return canUseAutomaticMix() && !isBackground() &&
+      (navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
+  }
+
+  function warmNativeMixLauncher() {
+    if (!canLaunchNativeMix() || Date.now() - mixerWarmAt < 12 * 60_000) return;
+    // Warm only on normal use. No periodic requests or background wakeups.
+    mixerWarmAt = Date.now();
+    queueMixRequest('GET', null).then(({ configured, nativeStart, wakeUrl }) => {
+      nativeMixLauncher = nativeStart === true;
+      if (configured && wakeUrl) return fetch(wakeUrl, { cache: 'no-store', keepalive: true }).then(response => response.body?.cancel());
+    }).catch(() => {});
+  }
+
+  function playNativeQueueMix(index) {
+    if (!nativeMixLauncher || !canLaunchNativeMix() ||
+        navigator.userActivation?.isActive !== true || !crypto.getRandomValues ||
+        !queueMixAudio.canPlayType('application/vnd.apple.mpegurl')) return false;
+
+    const track = S.queue[index];
+    if (S.pendingResume?.id === track.id && S.pendingResume.seconds > 1) return false;
+    const tracks = S.queue.slice(index, index + 3);
+    const radio = tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
+    const fade = mixFade();
+    const durations = tracks.map(mixDuration);
+    if ((tracks.length < 2 && !radio) || tracks.some(({ id }, i) => isDownloaded(id) ||
+        !/^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/.test(id) ||
+        !Number.isFinite(durations[i]) || durations[i] <= fade || durations[i] > 600)) return false;
+
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
+    const query = new URLSearchParams({ session: id, ids: tracks.map(track => track.id).join(','), fade });
+    if (radio) query.set('radio', '1');
+    const mix = { id, tracks, durations, offsets: mixOffsets(durations, fade), fade, part: 0,
+      active: true, editable: true, nativeLaunch: true, starting: true };
+    queueMix = mix;
+    S.pendingResume = null;
+    S.isPlaying = true;
+    audioDecks.forEach(deck => deck.pause());
+    pauseAudioKeepAlive();
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = null;
+    const ordinaryPlayer = audioDecks[activeDeckIdx];
+    // Let the ordinary player reuse the gesture if the server is unavailable.
+    if (!ordinaryPlayer.getAttribute('src')) ordinaryPlayer.load();
+    queueMixAudio.preload = 'auto';
+    queueMixAudio.muted = false;
+    queueMixAudio.playbackRate = 1;
+    queueMixAudio.volume = getTargetVolume();
+    queueMixAudio.src = '/api/mixer-start.m3u8?' + query;
+    // Start the *audible* HLS request in the actual click. Its network load and
+    // crossfade may continue without this document running callbacks after lock.
+    const started = performance.now();
+    queueMixAudio.play().then(() => {
+      if (queueMix !== mix || userIntentionalPause) return;
+      Diag.recordStart(Math.round(performance.now() - started));
+    }).catch(error => {
+      if (queueMix !== mix || userIntentionalPause || error.name === 'AbortError') return;
+      recoverFromNativeMix(mix, error.name);
+    });
+    $('queueMixBtn').textContent = 'Salir de la mezcla';
+    queueMixStatus('Iniciando audio con crossfade…');
+    updatePlayPauseIcons(true, true);
+    return true;
+  }
+
+  function recoverFromNativeMix(mix, reason) {
+    const position = queueMixPosition();
+    const index = S.currentIndex;
+    const track = S.queue[index];
+    const resume = !userIntentionalPause;
+    Diag.log('mixer-native-fallback', { reason, part: mix.part });
+    stopQueueMix('La mezcla se interrumpió. Continuando con el audio de la canción.');
+    if (!track) return;
+    if (position > 1) S.pendingResume = { id: track.id, seconds: position };
+    if (mix.pendingNext) queueTrackNext(mix.pendingNext, true);
+    if (resume) playTrack(index, true, isBackground(), true);
+    else syncMediaSessionPlayback();
+  }
+
+  async function readNativeMixTracks(mix) {
+    if (mix.readingTracks) return;
+    mix.readingTracks = true;
+    try {
+      const state = await queueMixRequest('GET', mix.id);
+      if (queueMix !== mix) return;
+      if (mix.tracks.length === 1 && Array.isArray(state.tracks)) {
+        const found = validTracks(state.tracks.slice(1, 3));
+        S.queue.push(...found);
+        mix.tracks.push(...found);
+        renderQueue();
+      }
+      mix.durations = mixTrackDurations(mix.tracks, state.trackDurations, mix.fade, mix);
+      mix.offsets = mixOffsets(mix.durations, mix.fade);
+      updateQueueMixPosition();
+    } catch {
+      // The audio and the server-side transition continue when metadata is delayed.
+    } finally {
+      mix.readingTracks = false;
+      mix.trackListReady = mix.tracks.length > 1;
+      if (queueMix === mix && mix.trackListReady && mix.pendingNext) {
+        const pending = mix.pendingNext;
+        mix.pendingNext = null;
+        queueTrackNext(pending);
+      }
+    }
   }
 
   function requestAutomaticMix(player, previousRelease) {
@@ -3370,7 +3545,7 @@
 
   async function buildQueueMix(previousRelease, autoPlayer = null) {
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
-    const fade = Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
+    const fade = mixFade();
     const durations = tracks.map(mixDuration);
     if (S.currentIndex < 0 || tracks.length < 2 || durations.some(d => !Number.isFinite(d) || d <= fade || d > 600)) {
       queueMixStatus('Selecciona al menos dos pistas seguidas con duración conocida, entre el fundido y 10 minutos.');
@@ -3521,8 +3696,18 @@
   queueMixAudio.addEventListener('play', () => {
     if (!queueMix?.active) return;
     S.isPlaying = true;
-    updatePlayPauseIcons(true, false);
+    updatePlayPauseIcons(true, queueMix.starting === true);
     syncMediaSessionPlayback();
+  });
+  queueMixAudio.addEventListener('playing', () => {
+    const mix = queueMix;
+    if (!mix?.starting) return;
+    mix.starting = false;
+    updatePlayPauseIcons(true, false);
+    queueMixStatus('Crossfade activo.');
+    syncMediaSessionPlayback();
+    Diag.log('mixer-native-start', { tracks: mix.tracks.length });
+    void readNativeMixTracks(mix);
   });
   queueMixAudio.addEventListener('pause', () => {
     if (!queueMix?.active || !queueMixAudio.paused) return;
@@ -3546,6 +3731,8 @@
         updateMediaSession(track);
         renderQueue();
         saveHistory(track);
+        if (S.activePlayerSubTab === 'similar') void loadSimilarTracks(track);
+        if (mix.nativeLaunch && part > 0) void ensureUpcomingTracks(track);
       }
     }
     const duration = mix.durations[part], position = Math.min(duration, queueMixPosition());
@@ -3568,6 +3755,10 @@
   queueMixAudio.addEventListener('error', () => {
     if (queueMix?.active) {
       Diag.log('mixer-audio-error', { code: queueMixAudio.error?.code, part: queueMix.part });
+      if (queueMix.nativeLaunch) {
+        recoverFromNativeMix(queueMix, queueMixAudio.error?.code);
+        return;
+      }
       const message = 'Se interrumpió el flujo de la mezcla. Prepara otra para continuar.';
       stopQueueMix(message);
       showToast(message);
@@ -3678,11 +3869,13 @@
     saveSession();
   }
 
-  function playTrack(index, immediate = false, fromEnded = false) {
+  function playTrack(index, immediate = false, fromEnded = false, bypassNativeMix = false) {
     if (index < 0 || index >= S.queue.length) return;
+    const hadActiveMix = queueMix?.active;
     if (queueMix) {
       const part = queueMix.tracks.indexOf(S.queue[index]);
-      if (queueMix.active && part >= 0 && (!queueMix.autoPlayer || !immediate || queueMixCanSeek(queueMix.offsets[part]))) {
+      const canSeekMix = (!queueMix.nativeLaunch && !queueMix.autoPlayer) || !immediate || queueMixCanSeek(queueMix.offsets[part]);
+      if (queueMix.active && !queueMix.starting && part >= 0 && canSeekMix) {
         queueMixAudio.currentTime = queueMix.offsets[part];
         resumePlayback();
         return;
@@ -3736,7 +3929,6 @@
     isYtMode = false;
     stopYtProgressTimer();
     clearYtStartWatchdog();
-    keepAudioAlive();
 
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
     if (window.activeStreamAbort) {
@@ -3753,6 +3945,12 @@
       // La pista que estaba entrando se abandona: no hay que pintarla luego.
       pendingTrackCommit = null;
     }
+
+    if (!hadActiveMix && !fromEnded && !bypassNativeMix && playNativeQueueMix(index)) {
+      commitTrackUI(track, abortSignal, { resetProgress: true });
+      return;
+    }
+    keepAudioAlive();
 
     // 2. Comprobación 100% síncrona en memoria (0ms, NUNCA await antes de play)
     // La copia offline tiene prioridad: si está descargada debe sonar sin red,
@@ -3939,7 +4137,7 @@
       // la URL está muerta y se reintenta de inmediato. Si ya hay metadatos
       // pero sigue en 0:00, se le dan unos segundos más antes de intervenir.
       armStreamWatchdog(track);
-      requestAutomaticMix(inPlayer);
+      if (!bypassNativeMix) requestAutomaticMix(inPlayer);
 
     } catch (err) {
       console.error('Error al reproducir pista:', err);
@@ -5259,28 +5457,26 @@
     }
   }
 
-  // --- Subpestaña "Similares" Robusta ---
+  // --- Subpestaña "Similares" ---
+  let similarTrackId = '';
   async function loadSimilarTracks(track, signal) {
     const container = $('similarList');
     if (!container) return;
     const targetTrack = track || S.queue[S.currentIndex];
     if (!targetTrack) return;
 
+    similarTrackId = targetTrack.id;
     container.innerHTML = '<p class="text-zinc-500 text-xs py-8 text-center animate-pulse">Buscando canciones similares...</p>';
 
     try {
-      const q = targetTrack.artist && targetTrack.artist !== 'Artista'
-        ? `${targetTrack.artist} exitos`
-        : `${targetTrack.title} mix`;
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal });
-      const data = await res.json();
+      const filtered = (await getTrackRecommendations(targetTrack)).slice(0, 15);
+      if (signal?.aborted || S.queue[S.currentIndex]?.id !== targetTrack.id) return;
 
-      if (!data.tracks || data.tracks.length === 0) {
+      if (!filtered.length) {
         container.innerHTML = '<p class="text-zinc-500 text-xs py-8 text-center">No se encontraron recomendaciones similares.</p>';
         return;
       }
 
-      const filtered = data.tracks.filter((t) => t.id !== targetTrack.id).slice(0, 15);
       container.innerHTML = filtered.map((t, idx) => `
         <div class="flex items-center justify-between p-2 rounded-2xl hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition cursor-pointer press" data-similar-idx="${idx}">
           <div class="flex items-center gap-3 min-w-0 flex-1">
@@ -5332,8 +5528,8 @@
           }
         });
       });
-    } catch (err) {
-      if (err.name === 'AbortError') return;
+    } catch {
+      if (signal?.aborted || S.queue[S.currentIndex]?.id !== targetTrack.id) return;
       container.innerHTML = `
         <div class="text-center py-6 space-y-2">
           <p class="text-zinc-500 text-xs">Error al cargar recomendaciones</p>
@@ -5385,12 +5581,7 @@
     }
     if (tab === 'similar') {
       const cur = S.queue[S.currentIndex];
-      if (cur) {
-        const list = $('similarList');
-        if (!list || list.children.length <= 1 || list.innerText.includes('Cargando')) {
-          loadSimilarTracks(cur);
-        }
-      }
+      if (cur && similarTrackId !== cur.id) loadSimilarTracks(cur);
     }
   }
 
@@ -6094,6 +6285,11 @@
       return;
     }
     const activeMix = queueMix?.active ? queueMix : null;
+    if (activeMix?.nativeLaunch && !activeMix.trackListReady && !afterBlockOnly) {
+      activeMix.pendingNext = track;
+      showToast('La canción quedará de siguiente cuando se abra el flujo');
+      return;
+    }
     const lastMixedTrack = activeMix?.tracks.at(-1);
     const lastMixedIndex = lastMixedTrack ? S.queue.indexOf(lastMixedTrack) : -1;
     const afterBlock = lastMixedIndex > S.currentIndex;
@@ -7309,6 +7505,23 @@
     .filter((s) => s && Array.isArray(s.items))
     .map((s) => ({ title: String(s.title || ''), items: validTracks(s.items).slice(0, 12) })) : [];
   let homeLoadToken = 0;
+  let pendingDefaultHome = null;
+
+  function requestHomeData(category = 'todo', force = false) {
+    const shareRequest = category === 'todo' && !force;
+    if (shareRequest && pendingDefaultHome) return pendingDefaultHome;
+
+    const url = category === 'todo' ? '/api/home' : `/api/home?category=${encodeURIComponent(category)}`;
+    const request = fetch(url, force ? { cache: 'reload' } : undefined).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    });
+    if (!shareRequest) return request;
+
+    pendingDefaultHome = request.finally(() => { pendingDefaultHome = null; });
+    return pendingDefaultHome;
+  }
+
   async function loadHomeContent(category = 'todo') {
     const token = ++homeLoadToken;
     const container = $('homeShelves');
@@ -7317,12 +7530,9 @@
     else container.innerHTML = '<div class="flex items-center justify-center py-12 text-zinc-500 text-sm animate-pulse">Cargando música...</div>';
 
     try {
-      const url = category === 'todo' ? '/api/home' : `/api/home?category=${encodeURIComponent(category)}`;
       if (cached.length) await new Promise((resolve) => setTimeout(resolve, 1500));
       if (token !== homeLoadToken || navigator.onLine === false) return;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await requestHomeData(category);
       if (token !== homeLoadToken) return;
 
       if (!data.shelves || data.shelves.length === 0) {
@@ -7716,9 +7926,7 @@
     renderSearchDiscover();
 
     try {
-      const res = await fetch('/api/home', force ? { cache: 'reload' } : undefined);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await requestHomeData('todo', force);
       if (token !== searchDiscoverToken) return;
       if (Array.isArray(data.shelves) && data.shelves.length) homeShelvesCache = data.shelves;
     } catch {}
@@ -8139,10 +8347,7 @@
       const data = await res.json();
       if (searchType === 'audius') {
         if (!res.ok || !Array.isArray(data.data)) throw new Error('Audius no respondió a la búsqueda');
-        data.items = data.data.filter(t => t.is_streamable === true && /^[A-Za-z0-9]{1,32}$/.test(t.id || ''))
-          .map(t => ({ id: 'audius:' + t.id, title: t.title, artist: t.user?.name || 'Audius',
-            thumbnail: t.artwork?.['150x150'] || '', duration: Number(t.duration) || 0,
-            durationText: formatTime(Number(t.duration) || 0) }));
+        data.items = parseAudiusSearchTracks(data);
       }
 
       // Una respuesta de una búsqueda anterior (incluida una continuación) no
@@ -8310,12 +8515,11 @@
             const idx = parseInt(el.getAttribute('data-search-idx'), 10);
             const chosen = currentSearchResults[idx];
             if (!chosen) return;
-            if (S.autoplayInfinite && !isAudiusTrack(chosen)) {
-              // Radio de la canción elegida: la siguiente será similar, no el
-              // resultado que venía debajo en la búsqueda.
+            if (S.autoplayInfinite) {
+              // Los resultados de búsqueda solo se usan como respaldo si
+              // coinciden con el artista o álbum de la canción elegida.
               S.queue = [chosen];
-              S.currentIndex = 0;
-              seedSimilarQueue(chosen, currentSearchResults.filter((t) => t && t.id !== chosen.id));
+              searchSongAlternatives.set(chosen, currentSearchResults.slice());
               playTrack(0, true);
             } else {
               S.queue = [...currentSearchResults];
@@ -9073,7 +9277,7 @@
     }
     if ($('crossfadeAvailability')) $('crossfadeAvailability').textContent = nativeAudio
       ? 'Fundido nativo entre canciones, también con el iPhone bloqueado.'
-      : isIOSDevice ? 'Prepara y activa automáticamente el fundido al reproducir una cola compatible.'
+      : isIOSDevice ? 'Prepara y activa automáticamente el fundido al tocar Reproducir en una cola compatible.'
         : webCrossfadeAvailable ? 'Fundido entre canciones mientras la app está visible.'
           : 'Este navegador no permite ajustar el volumen de cada pista.';
 
@@ -9082,8 +9286,10 @@
       configureNativeAudio();
       Store.writeRaw('fs_crossfade', S.crossfade.toString());
       xfWrap.classList.toggle('hidden', !S.crossfade);
-      if (S.crossfade) requestAutomaticMix(getActivePlayer());
-      else if (queueMix?.autoPlayer) {
+      if (S.crossfade) {
+        warmNativeMixLauncher();
+        requestAutomaticMix(getActivePlayer());
+      } else if (queueMix?.autoPlayer || queueMix?.nativeLaunch) {
         const continuePlaying = queueMix.active && S.isPlaying;
         if (queueMix.active && S.currentTrack) S.pendingResume = { id: S.currentTrack.id, seconds: queueMixPosition() };
         stopQueueMix();
@@ -9165,6 +9371,7 @@
     $('settingAutoplayToggle').addEventListener('change', (e) => {
       S.autoplayInfinite = e.target.checked;
       Store.writeRaw('fs_autoplay', S.autoplayInfinite.toString());
+      if (S.autoplayInfinite && S.currentTrack) void ensureUpcomingTracks(S.currentTrack);
       showToast(S.autoplayInfinite ? 'Autoplay infinito activado' : 'Autoplay desactivado');
     });
 
@@ -9383,6 +9590,7 @@
       engine: nativeAudio ? 'avplayer' : queueMix?.active ? 'hls-mixer' : 'html',
       mixer: queueMix ? {
         active: queueMix.active, editable: queueMix.editable === true, editing: queueMix.editing === true,
+        nativeStart: queueMix.nativeLaunch === true, starting: queueMix.starting === true,
         part: queueMix.part, tracks: queueMix.tracks.length,
         position: queueMix.active ? queueMixPosition() : 0,
         audio: describeAudioSource(queueMixAudio.currentSrc || queueMixAudio.src)
@@ -9460,6 +9668,7 @@
     }
 
     initOfflineBlobs();
+    warmNativeMixLauncher();
 
     if (nativeAudio) nativeAudio.restore().then((value) => {
       if (!value?.trackId || nativeStartToken > 0 || !Array.isArray(value.queue)) return;

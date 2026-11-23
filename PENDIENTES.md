@@ -1,6 +1,6 @@
 # Pendientes y mejoras de FreeSong
 
-Auditoría del 22 de noviembre de 2026 para la versión web **3.9.47**.
+Auditoría actualizada el 23 de noviembre de 2026 para la versión web **3.9.48**.
 La auditoría original partió del commit `35db606`.
 
 Este documento reúne lo que falta por hacer, lo que se revisó en el proyecto
@@ -34,6 +34,16 @@ cómo se comprueba.
 - La PWA espera a que Render responda antes de crear una sesión de mezcla. Las
   pruebas cubren una respuesta temporal `503`, cancelar durante el arranque y
   crear una sola sesión cuando el servidor ya está listo.
+- Con Crossfade activo en la PWA instalada en iPhone, el primer toque puede
+  abrir directamente el flujo HLS. El arranque de Render y la codificación
+  ya no necesitan una llamada posterior a `play()` desde la página. Si el
+  flujo no arranca, se vuelve al audio normal de la canción.
+- Radio y Similares comparten las recomendaciones de la pista en reproducción.
+  La cola automática evita añadir versiones repetidas y favorece afinidades de
+  artistas y álbumes sin cambiar el orden elegido por el usuario.
+- Inicio y Buscar comparten la consulta predeterminada en curso. El shell de
+  la PWA usa una sola copia del HTML y las portadas provisionales reutilizan
+  el icono que ya está cargado.
 
 ---
 
@@ -43,8 +53,9 @@ cómo se comprueba.
 
 Pruebas pendientes para la PWA instalada y Safari:
 
-- Completar el fundido exacto de «Stereo Love» a «Fanática Sensual» con el iPhone
-  bloqueado y comprobar el título, la portada y los controles antes y después.
+- Tocar «Stereo Love» y bloquear inmediatamente, antes del primer segmento.
+  Con «Fanática Sensual» de siguiente, comprobar el fundido, el título, la
+  portada y los controles en la pantalla bloqueada.
 - Repetir en Wi-Fi y datos móviles. Probar una mezcla después de un periodo de
   inactividad de Render y al deslizar una pista para ponerla de siguiente.
 - Verificar la Isla Dinámica, la barra inferior, el teclado al buscar y el

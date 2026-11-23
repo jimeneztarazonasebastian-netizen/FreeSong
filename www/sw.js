@@ -1,9 +1,8 @@
-// Service worker de FreeSong v3.9.47: App Shell local con actualizaciones de fondo
+// Service worker de FreeSong v3.9.48: App Shell local con actualizaciones de fondo
 // Las pistas de audio offline viven en 'freesong-offline-audio-v1' y NUNCA se eliminan.
-const VERSION = 'freesong-v3.9.47';
+const VERSION = 'freesong-v3.9.48';
 const SHELL = [
   './',
-  'index.html',
   'app.css',
   'util.js',
   'storage.js',
@@ -100,12 +99,12 @@ self.addEventListener('fetch', (event) => {
   }
   if (req.method !== 'GET') return;
 
-  // El HTML pide app.js?v=...; install precarga app.js sin query. Ambas
-  // peticiones deben encontrar la misma copia al arrancar sin conexión.
+  // El HTML pide archivos versionados. La instalación guarda los mismos
+  // archivos sin query para que se puedan cargar también sin conexión.
   const cachedShell = async () => {
     const cache = await caches.open(VERSION);
     return (await cache.match(req, { ignoreSearch: true })) ||
-      (req.mode === 'navigate' ? cache.match('index.html') : undefined);
+      (req.mode === 'navigate' ? cache.match('./') : undefined);
   };
   const remember = (res) => {
     if (res && res.status === 200 && res.type !== 'opaque') {

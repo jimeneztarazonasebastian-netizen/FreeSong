@@ -55,6 +55,12 @@ try {
   assert.ok(keys.includes('another-app-cache'), 'No debe borrar cachés ajenas');
   assert.ok(keys.includes('freesong-offline-audio-v1'), 'Debe conservar audio offline');
   assert.ok(!keys.includes('freesong-v0.0.1'), 'Debe borrar solo shells antiguos');
+  const shellPaths = await page.evaluate(async () => {
+    const key = (await caches.keys()).find(name => /^freesong-v\d/.test(name));
+    return (await (await caches.open(key)).keys()).map(request => new URL(request.url).pathname);
+  });
+  assert.ok(shellPaths.includes('/'), 'Debe guardar la página inicial en su ruta canónica');
+  assert.ok(!shellPaths.includes('/index.html'), 'No debe duplicar la página inicial en la caché');
 
   // Biblioteca grande: abrir no debe leer todos sus archivos de audio.
   await page.evaluate(async () => {
@@ -102,6 +108,8 @@ try {
   assert.deepEqual(ranges, { status: 206, text: 'RIFF', length: '4', bad: 416, head: '128044', headBytes: 0 });
   await page.locator('[data-nav="library"]').first().click();
   assert.equal(await page.locator('#viewLibrary').isVisible(), true);
+  await page.goto(base + '/index.html?offline=old-entry', { waitUntil: 'load' });
+  assert.equal(await page.locator('[data-trend-idx]').count(), 3, 'El enlace de versiones anteriores debe funcionar sin conexión');
   assert.deepEqual(errors, [], 'El shell debe arrancar offline con scripts versionados');
   // La red existe pero tarda ocho segundos: abrir desde caché no debe esperarla.
   await context.setOffline(false);
@@ -470,6 +478,128 @@ try {
   }
   await autoContext.close();
   console.log('  fundido automático sin reiniciar la pista, respetando las pausas y saltos');
+
+  const nativeContext = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
+  const nativeTracks = [
+    { id: 'TestAudio01', title: 'Pista nativa inicial', artist: 'Prueba', duration: 8 },
+    { id: 'TestAudio02', title: 'Pista nativa siguiente', artist: 'Prueba', duration: 8 }
+  ];
+  for (const mode of ['cola', 'radio', 'fallo']) {
+    const nativePage = await nativeContext.newPage();
+    const queue = mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
+    const sessionRequests = [];
+    const errors = [];
+    let releaseMedia;
+    const mediaReady = new Promise(resolve => { releaseMedia = resolve; });
+    nativePage.on('pageerror', error => errors.push(error.message));
+    try {
+      await nativePage.addInitScript(({ queue, radio }) => {
+        Object.defineProperty(navigator, 'standalone', { value: true });
+        localStorage.setItem('fs_crossfade', 'true');
+        localStorage.setItem('fs_session_v2', JSON.stringify({
+          queue, currentIndex: 0, repeat: 'off', autoplay: radio, crossfade: true,
+          crossfadeDuration: 2, savedAt: Date.now()
+        }));
+        const canPlayType = HTMLMediaElement.prototype.canPlayType;
+        HTMLMediaElement.prototype.canPlayType = function (type) {
+          if (type === 'application/vnd.apple.mpegurl') return 'maybe';
+          return canPlayType.call(this, type);
+        };
+        const play = HTMLMediaElement.prototype.play;
+        let trustedClick = false;
+        window.addEventListener('click', event => {
+          if (!event.target.closest?.('#miniPlayBtn')) return;
+          trustedClick = event.isTrusted;
+          setTimeout(() => { trustedClick = false; }, 0);
+        }, true);
+        window.nativePlayCalls = [];
+        HTMLMediaElement.prototype.play = function () {
+          window.nativePlayCalls.push({
+            id: this.id, src: this.src, muted: this.muted, trustedClick,
+            activated: navigator.userActivation.isActive
+          });
+          return play.call(this);
+        };
+      }, { queue, radio: mode === 'radio' });
+      await nativePage.route('https://**/*', route => route.abort());
+      await nativePage.route(wakeUrl, route =>
+        route.fulfill({ headers: { 'Access-Control-Allow-Origin': '*' }, json: { ok: true } }));
+      await nativePage.route('**/api/**', route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.pathname === '/api/stream') return serveSeekableWave(route);
+        if (url.searchParams.get('mixer') !== '1') {
+          return route.fulfill({ json: { tracks: [], shelves: [], queries: [] } });
+        }
+        if (!url.searchParams.has('session') && request.method() === 'GET') {
+          return route.fulfill({ json: { configured: true, nativeStart: true, wakeUrl } });
+        }
+        sessionRequests.push([request.method(), url.searchParams.get('session')]);
+        return route.fulfill({ json: { status: 'complete', tracks: nativeTracks, trackDurations: [8, 8] } });
+      });
+      await nativePage.route('**/api/mixer-start.m3u8?**', async route => {
+        await mediaReady;
+        if (mode === 'fallo') return route.fulfill({ status: 503, body: 'Audio no disponible' });
+        return route.fulfill({ status: 307, headers: { Location: base + '/mixer-demo/index.m3u8' } });
+      });
+      const warmRequest = nativePage.waitForRequest(wakeUrl);
+      await nativePage.goto(base, { waitUntil: 'domcontentloaded' });
+      await warmRequest;
+      const startRequest = nativePage.waitForRequest('**/api/mixer-start.m3u8?**');
+      await nativePage.locator('#miniPlayBtn').click();
+      const request = await startRequest;
+      const url = new URL(request.url());
+      const id = url.searchParams.get('session');
+      assert.match(id, /^[a-f0-9]{48}$/);
+      assert.equal(request.resourceType(), 'media', 'El elemento de audio debe solicitar el HLS directamente');
+      assert.equal(url.searchParams.get('ids'), queue.map(track => track.id).join(','));
+      assert.equal(url.searchParams.get('fade'), '2');
+      assert.equal(url.searchParams.get('radio'), mode === 'radio' ? '1' : null);
+      const expectedPlay = { id: 'queueMixAudio', src: request.url(), muted: false, trustedClick: true, activated: true };
+      assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay],
+        'El toque real inicia el HLS audible sin esperar al servidor ni reproducir una pista aparte');
+      assert.deepEqual(sessionRequests, [], 'No se necesita un POST ni obtener la sesión para iniciar el elemento de audio');
+
+      if (mode === 'fallo') {
+        releaseMedia();
+        await nativePage.waitForFunction(id => {
+          const state = window.FreeSongDiag.report().playback;
+          return state.engine === 'html' && state.track?.id === id && [...document.querySelectorAll('audio')].some(audio =>
+            audio.src.includes('/api/stream') && !audio.paused && audio.currentTime > 0.1);
+        }, queue[0].id);
+        assert.deepEqual(sessionRequests, [['DELETE', id]]);
+      } else {
+        await nativePage.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        releaseMedia();
+        await nativePage.waitForFunction(id => {
+          const report = window.FreeSongDiag.report();
+          const audio = document.getElementById('queueMixAudio');
+          return report.visibility === 'hidden' && report.playback.track?.id === id &&
+            report.playback.mixer?.nativeStart && !report.playback.mixer.starting &&
+            report.playback.mixer.tracks === 2 && !audio.paused && audio.currentTime > 0.1;
+        }, queue[0].id);
+        await nativePage.evaluate(() => { document.getElementById('queueMixAudio').currentTime = 6.2; });
+        await nativePage.waitForFunction(id => {
+          const report = window.FreeSongDiag.report();
+          return report.visibility === 'hidden' && report.playback.track?.id === id &&
+            report.playback.engine === 'hls-mixer' && report.playback.isPlaying;
+        }, nativeTracks[1].id);
+        assert.equal(await nativePage.locator('#queueMixAudio').evaluate(audio => audio.src), expectedPlay.src);
+        assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay]);
+        assert.deepEqual(sessionRequests, [['GET', id]]);
+      }
+      assert.equal(await nativePage.evaluate(() => window.FreeSongDiag.report().playback.offline.downloads), 0);
+      assert.deepEqual(errors, []);
+    } finally {
+      releaseMedia();
+      await nativePage.close();
+    }
+  }
+  await nativeContext.close();
+  console.log('  fundido iniciado con el toque real, transición en segundo plano y recuperación sin mezcla');
 
   const blocked = await browser.newContext({ serviceWorkers: 'block' });
   await blocked.addInitScript(() => {

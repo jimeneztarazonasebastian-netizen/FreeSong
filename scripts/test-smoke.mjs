@@ -25,6 +25,9 @@ const TRACKS = Array.from({ length: TRACK_COUNT }, (_, i) => ({
   thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
 }));
 
+const RADIO_SEED = { ...TRACKS[0], id: 'radio-seed', title: 'Semilla de radio' };
+const RADIO_SEARCH = [RADIO_SEED, { ...TRACKS[1], id: 'unrelated-search', artist: 'Otro artista' }];
+
 // Pistas de las recomendaciones de Inicio (portadas + géneros de la landing
 // de Buscar). Los títulos incluyen palabras de género para probar el arte de
 // las tarjetas de "Explorar todo".
@@ -164,15 +167,30 @@ async function run() {
   const failures = [];
   const pageErrors = [];
   const consoleErrors = [];
+  let releaseHome;
+  const firstHomeResponse = new Promise(resolve => { releaseHome = resolve; });
   // Similares que devolverá /api/queue. Se rellena en la prueba de radio.
   let queueTracks = [];
+  let radioRequests = 0;
 
   try {
     const context = await browser.newContext({
       viewport: { width: 390, height: 844 },
       serviceWorkers: 'block'
     });
+    await context.addInitScript(() => {
+      const request = window.fetch;
+      window.homeRequestModes = [];
+      window.fetch = (url, options) => {
+        if (url === '/api/home') window.homeRequestModes.push(options?.cache || 'default');
+        return request(url, options);
+      };
+    });
     const page = await context.newPage();
+    let fetchedPlayerCover = false;
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/icons/icon-512.png') fetchedPlayerCover = true;
+    });
 
     page.on('pageerror', (err) => pageErrors.push(String(err && err.message ? err.message : err)));
     page.on('console', (msg) => {
@@ -188,7 +206,10 @@ async function run() {
       const host = url.host.toLowerCase();
 
       if (url.origin === BASE) {
-        if (url.pathname === '/api/search') return json(route, { tracks: TRACKS, items: TRACKS, continuation: null });
+        if (url.pathname === '/api/search') {
+          const tracks = url.searchParams.get('q') === 'sutra' ? RADIO_SEARCH : TRACKS;
+          return json(route, { tracks, items: tracks, continuation: null });
+        }
         if (url.pathname === '/api/stream') return streamAudio(route, request);
         if (url.pathname === '/api/relay-info') return json(route, { instances: [] });
         if (url.pathname === '/api/suggestions') return json(route, { queries: [] });
@@ -196,11 +217,16 @@ async function run() {
           syncedLyrics: '[00:00.00]Línea de prueba\n[00:05.00]Segunda línea de prueba',
           plainLyrics: 'Línea de prueba\nSegunda línea de prueba'
         });
-        if (url.pathname === '/api/queue') return json(route, { tracks: queueTracks });
+        if (url.pathname === '/api/queue') {
+          const isRadioSeed = url.searchParams.get('id') === RADIO_SEED.id;
+          if (isRadioSeed) radioRequests++;
+          return json(route, { tracks: isRadioSeed ? queueTracks : [] });
+        }
         if (url.pathname === '/api/health') return json(route, { ok: true, version: 'test' });
-        if (url.pathname === '/api/home') return json(route, {
-          shelves: [{ title: 'Mezcla de prueba', items: HOME_TRACKS }]
-        });
+        if (url.pathname === '/api/home') {
+          await firstHomeResponse;
+          return json(route, { shelves: [{ title: 'Mezcla de prueba', items: HOME_TRACKS }] });
+        }
         if (url.pathname === '/api/artist') return json(route, {});
         if (url.pathname === '/api/album' || url.pathname === '/api/playlist') return json(route, {});
         return route.continue();
@@ -221,9 +247,16 @@ async function run() {
     });
 
     await page.goto(`${BASE}/?v=smoke`, { waitUntil: 'load' });
+    assert.equal(fetchedPlayerCover, false, 'Las portadas provisionales de Inicio deben usar el icono ligero');
     await page.waitForSelector('[data-nav="search"]');
     await page.evaluate(() => document.querySelector('[data-nav="search"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await page.waitForSelector('#searchInput');
+    assert.deepEqual(await page.evaluate(() => window.homeRequestModes), ['default'], 'Inicio y Buscar deben compartir la petición en curso');
+    releaseHome();
+    await page.waitForSelector('[data-discover-idx]');
+    await page.locator('#searchDiscoverRefreshBtn').click();
+    await page.waitForFunction(() => window.homeRequestModes.length === 2);
+    assert.deepEqual(await page.evaluate(() => window.homeRequestModes), ['default', 'reload'], 'Al actualizar se debe consultar de nuevo');
     await page.fill('#searchInput', 'prueba');
     await page.waitForSelector('#searchResultsList [data-search-idx]', { timeout: 8000 });
 
@@ -364,13 +397,16 @@ async function run() {
       durationText: '0:30',
       thumbnail: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y0n1ZcAAAAASUVORK5CYII='
     }));
+    queueTracks.unshift(RADIO_SEED, { ...RADIO_SEED, id: 'repeat-seed', title: 'Semilla de radio (Remastered)' });
+    queueTracks.push({ ...queueTracks[2] });
     await page.fill('#searchInput', 'sutra');
     await page.waitForSelector('#searchResultsList [data-search-idx]', { timeout: 8000 });
+    await page.getByText(RADIO_SEED.title, { exact: true }).first().waitFor();
     await page.evaluate(() =>
       document.querySelector('#searchResultsList [data-search-idx]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     );
     await page.waitForFunction(
-      () => /Canción de prueba 1/.test(document.getElementById('playerTitle')?.textContent || ''),
+      () => /Semilla de radio/.test(document.getElementById('playerTitle')?.textContent || ''),
       null,
       { timeout: 12000 }
     );
@@ -385,14 +421,16 @@ async function run() {
     const upcoming = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#queueList [data-queue-idx]')).map((el) => el.textContent || '')
     );
-    assert.ok(
-      upcoming.some((txt) => /Similar de prueba 1/.test(txt)),
-      `La cola no arrancó con similares: ${upcoming[0] || 'vacía'}`
-    );
+    assert.match(upcoming[0] || '', /Similar de prueba 1/, 'La primera recomendación debe respetar la radio');
+    assert.equal(upcoming.length, 4, 'No debe haber variantes de la semilla ni candidatos repetidos');
     assert.ok(
       !upcoming.some((txt) => /Canción de prueba 2/.test(txt)),
       `La cola sigue con resultados de búsqueda: ${upcoming[0] || ''}`
     );
+    await page.evaluate(() => document.getElementById('tabSimilarBtn')?.click());
+    await page.waitForSelector('#similarList [data-similar-idx]');
+    assert.match(await page.locator('#similarList [data-similar-idx]').first().textContent(), /Similar de prueba 1/);
+    assert.equal(radioRequests, 1, 'Cola y Similares deben compartir la misma consulta');
 
     // Datos locales corruptos: la app debe arrancar igual, sin perder la calma.
     await page.evaluate(() => {

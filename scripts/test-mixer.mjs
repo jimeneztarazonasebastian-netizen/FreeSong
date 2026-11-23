@@ -68,6 +68,9 @@ assert.equal(sessionExpired({ created: 0 }, idleSessionMs), true);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 38 * 60_000), false);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 31 * 60_000 }, 51 * 60_000), true);
 assert.equal(sessionExpired({ created: 0, lastSegmentAt: 59 * 60_000 }, 60 * 60_000), true);
+assert.equal(sessionExpired({ created: 0, launchKey: 'native' }, 89_999), false);
+assert.equal(sessionExpired({ created: 0, launchKey: 'native' }, 90_000), true);
+assert.equal(sessionExpired({ created: 0, launchKey: 'native', lastSegmentAt: 10_000 }, 90_000), false);
 const entries = Array.from({ length: 30 }, (_, index) => ({
   line: '#EXTINF:4.0,', duration: 4, file: `segment-${String(index).padStart(5, '0')}.ts`
 }));
@@ -197,6 +200,35 @@ try {
   assert.deepEqual(await segment('segment-00007.ts'), advertisedOverlap);
   assert.equal((await fetch(base + editable.status, { method: 'DELETE', headers })).status, 200);
   console.log('MIXER EDIT OK: reemplazo real bajo la misma URL, segmentos previos intactos y transición publicada protegida');
+
+  const nativeId = 'a'.repeat(48);
+  const nativeRequest = (ids, options = {}) => fetch(base + '/sessions', {
+    method: 'POST', headers,
+    body: JSON.stringify({ id: nativeId, tracks: tracks(ids), crossfade: 2, editable: true, radio: true, ...options })
+  });
+  const nativeResponses = await Promise.all([
+    nativeRequest(['one', 'two']),
+    nativeRequest(['one', 'three'])
+  ]);
+  assert.ok(nativeResponses.every(response => response.status === 202));
+  const [native, duplicate] = await Promise.all(nativeResponses.map(response => response.json()));
+  assert.deepEqual(native, duplicate);
+  assert.equal(native.id, nativeId);
+  const health = await (await fetch(base + '/health')).json();
+  assert.equal(health.nativeStart, true);
+  assert.equal(health.sessions, 1);
+  assert.equal((await nativeRequest(['two', 'one'])).status, 409);
+  assert.equal((await nativeRequest(['one', 'two'], { radio: false })).status, 409);
+  const nativeState = await (await fetch(base + native.status)).json();
+  assert.equal(nativeState.tracks[0].id, 'one');
+  assert.ok(['two', 'three'].includes(nativeState.tracks[1].id));
+  const initial = await waitFor(async () => (await fetch(base + native.playlist)).text(), text => text.includes('segment-00000.ts'));
+  assert.match(initial, /^#EXTM3U/);
+  const nativeSegment = await fetch(new URL('segment-00000.ts', base + native.playlist));
+  assert.equal(nativeSegment.status, 200);
+  assert.ok((await nativeSegment.arrayBuffer()).byteLength > 0);
+  assert.equal((await fetch(base + native.status, { method: 'DELETE', headers })).status, 200);
+  console.log('MIXER INICIO NATIVO OK: GET válido de HLS, creación concurrente idempotente y cola original conservada');
 } finally {
   child.kill('SIGTERM');
   upstream.close();

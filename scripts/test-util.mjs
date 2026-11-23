@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
+import { rankRadioTracks } from '../api/queue.js';
 
 const source = readFileSync(new URL('../www/util.js', import.meta.url), 'utf8');
 const sandbox = {
@@ -58,5 +59,20 @@ const mixed = util.shuffled(original);
 assert.notEqual(mixed, original);
 assert.deepEqual([...mixed].sort((a, b) => a - b), original);
 assert.deepEqual(original, [1, 2, 3, 4, 5]);
+
+const seed = { id: 'seed', title: 'La Fórmula', artist: 'Arcángel', album: 'La Fórmula' };
+const providerOrder = [
+  seed,
+  { id: 'different', title: 'Me gusta', artist: 'Don Omar' },
+  { id: 'duplicate', title: 'La Formula (Remastered 2022)', artist: 'Arcangel' },
+  { id: 'artist', title: 'Pa’ Que La Pases Bien', artist: 'Arcangel' },
+  { id: 'album', title: 'Otra canción', artist: 'Zion', album: 'La Formula' },
+  { id: 'different', title: 'Me gusta', artist: 'Don Omar' },
+  { id: 'same-title', title: 'Me gusta', artist: 'Otro artista' }
+];
+assert.deepEqual(rankRadioTracks(providerOrder, seed.id).map(track => track.id),
+  ['seed', 'artist', 'album', 'different', 'same-title']);
+assert.deepEqual(rankRadioTracks(providerOrder.slice(1, 5), 'missing').map(track => track.id),
+  ['different', 'duplicate', 'artist', 'album']);
 
 console.log('UTIL OK');

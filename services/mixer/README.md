@@ -1,7 +1,10 @@
 # Mezclador HLS experimental
 
-Con Crossfade activado, la PWA en iPhone prepara este servicio al reproducir
-una cola compatible. **Siguiente** conserva la opción de preparación manual.
+Con Crossfade activado, la PWA instalada en iPhone puede abrir el audio HLS
+desde el toque de reproducción de una cola compatible. Vercel despierta Render,
+crea la sesión y redirige el audio al manifiesto solo cuando hay un segmento
+publicado. La aplicación puede quedar oculta mientras se prepara el audio.
+**Siguiente** conserva la opción de preparación manual.
 La prueba de dos pistas de Audius
 funcionó con el iPhone bloqueado. El comportamiento de la edición durante la
 reproducción se prueba con FFmpeg y requiere confirmación en el iPhone.

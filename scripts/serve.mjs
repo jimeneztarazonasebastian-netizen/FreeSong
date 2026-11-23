@@ -23,6 +23,11 @@ createServer(async (req, res) => {
       // Imita los helpers que Vercel agrega a req/res en las funciones /api
       const parsed = new URL(req.url, 'http://x');
       let apiName = urlPath.replace('/api/', '').split('?')[0];
+      if (apiName === 'mixer-start.m3u8') {
+        apiName = 'health';
+        parsed.searchParams.set('mixer', '1');
+        parsed.searchParams.set('nativeStart', '1');
+      }
       if (!/^[a-z][a-z-]*$/.test(apiName)) {
         res.writeHead(404);
         return res.end('404');

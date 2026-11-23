@@ -5,9 +5,11 @@ const mediaFile = /^segment-\d{5}\.ts$/;
 const lookahead = 20;
 export const idleSessionMs = 20 * 60_000;
 const maxSessionMs = 60 * 60_000;
+const nativeStartIdleMs = 90_000;
 
 export function sessionExpired(session, now = Date.now()) {
-  return now - (session.lastSegmentAt ?? session.created) >= idleSessionMs ||
+  const idle = session.launchKey && session.lastSegmentAt == null ? nativeStartIdleMs : idleSessionMs;
+  return now - (session.lastSegmentAt ?? session.created) >= idle ||
     now - session.created >= maxSessionMs;
 }
 

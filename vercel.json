@@ -4,12 +4,19 @@
   "cleanUrls": true,
   "regions": ["gru1"],
   "functions": {
+    "api/health.js": {
+      "maxDuration": 60
+    },
     "api/stream.js": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
   "rewrites": [
+    {
+      "source": "/api/mixer-start.m3u8",
+      "destination": "/api/health?mixer=1&nativeStart=1"
+    },
     {
       "source": "/api/relay-info",
       "destination": "/api/health?relay=1"

@@ -24,6 +24,9 @@ const json = (res, code, body) => {
     'Access-Control-Allow-Origin': 'https://freesong-pied.vercel.app' });
   res.end(JSON.stringify(body));
 };
+const createdSession = (res, id, editable) => json(res, 202, {
+  id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: idleSessionMs / 1000, editable
+});
 async function dispose(id) {
   const session = sessions.get(id);
   if (!session) return;
@@ -224,21 +227,31 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, experimental: true, sessions: sessions.size,
-      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 4, audius: true, editableMix: true });
+      revision: String(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 12), diagnosticsVersion: 4, audius: true, editableMix: true, nativeStart: true });
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
-      if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
       const data = await requestBody(req);
       const tracks = data?.tracks;
       if (!validTracks(tracks)) return json(res, 400, { error: 'Se requieren 2–3 pistas válidas' });
-      if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
       const seconds = Number(data.crossfade ?? 6);
       if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10) return json(res, 400, { error: 'Crossfade entre 1 y 10 segundos' });
-      const id = randomBytes(24).toString('hex');
+      const editable = data.editable === true;
+      const startAt = editable && Number.isFinite(data.startAt) ? Math.max(0, Math.min(180, data.startAt)) : 0;
+      const requestedId = data.id;
+      if (requestedId !== undefined && (typeof requestedId !== 'string' || !/^[a-f0-9]{48}$/.test(requestedId) || !editable)) {
+        return json(res, 400, { error: 'Identificador de inicio inválido' });
+      }
+      const id = requestedId ?? randomBytes(24).toString('hex');
+      const launchKey = requestedId ? JSON.stringify([data.radio === true ? tracks[0].id : tracks.map(track => track.id), seconds, startAt]) : null;
+      const existing = requestedId && sessions.get(id);
+      if (existing) {
+        if (existing.launchKey !== launchKey) return json(res, 409, { error: 'La sesión ya existe con otra mezcla' });
+        return createdSession(res, id, existing.editable);
+      }
+      if (sessions.size >= 2) return json(res, 429, { error: 'Límite de sesiones' });
+
       // Reservar antes de esperar I/O para respetar el límite bajo concurrencia.
-      const startAt = data.editable === true && Number.isFinite(data.startAt)
-        ? Math.max(0, Math.min(180, data.startAt)) : 0;
-      const session = { created: Date.now(), editable: data.editable === true, seconds, tracks, startAt,
+      const session = { created: Date.now(), editable, seconds, tracks, startAt, launchKey,
         published: 0, startedAt: null, endPublished: false, render: null, revision: 0, edit: null };
       sessions.set(id, session);
       try {
@@ -251,7 +264,7 @@ const server = http.createServer(async (req, res) => {
         sessions.delete(id);
         return json(res, 502, { error: 'El proveedor no entregó audio reproducible para una de las pistas.' });
       }
-      return json(res, 202, { id, playlist: `/sessions/${id}/index.m3u8`, status: `/sessions/${id}`, expiresIn: idleSessionMs / 1000, editable: session.editable });
+      return createdSession(res, id, editable);
     }
     const match = /^\/sessions\/([a-f0-9]{48})(?:\/(index\.m3u8|segment-\d{5}\.ts))?$/.exec(url.pathname);
     if (match) {
@@ -284,7 +297,7 @@ const server = http.createServer(async (req, res) => {
       if (!match[2]) {
         const { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal } = session.render || { status: 'preparing' };
         return json(res, 200, { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal,
-          revision: session.revision, edit: session.edit });
+          revision: session.revision, edit: session.edit, ...(session.launchKey ? { tracks: session.tracks } : {}) });
       }
       let bytes;
       try {
