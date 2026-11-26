@@ -335,6 +335,7 @@ try {
     const autoPage = await autoContext.newPage();
     const creations = [];
     const crashes = [];
+    let throttledAt = 0;
     const automaticId = 'b'.repeat(48);
     const playlist = `${base}/mixer-demo/sessions/${automaticId}/autoplay.wav`;
     let openManifest;
@@ -375,6 +376,10 @@ try {
           return route.fulfill({ json: { tracks: [], shelves: [], queries: [] } });
         }
         if (request.method() === 'POST') {
+          if (action === 'continuar' && !throttledAt) {
+            throttledAt = Date.now();
+            return route.fulfill({ status: 429, headers: { 'Retry-After': '1' }, json: { error: 'Espera un segundo' } });
+          }
           creations.push(request.postDataJSON());
           return route.fulfill({ json: { id: automaticId, playlist, editable: true } });
         }
@@ -428,6 +433,8 @@ try {
       await manifestSettled;
 
       if (action === 'continuar') {
+        assert.ok(throttledAt && Date.now() - throttledAt < 5000,
+          'La mezcla reintenta según Retry-After sin esperar otros quince segundos');
         assert.ok(creations[0].startAt >= 2, 'La mezcla pide la posición vigente después de despertar el servidor');
         const switched = await autoPage.waitForFunction(() => {
           const state = window.FreeSongDiag.report().playback;
@@ -514,6 +521,18 @@ try {
           setTimeout(() => { trustedClick = false; }, 0);
         }, true);
         window.nativePlayCalls = [];
+        window.mixerMediaActions = {};
+        const mediaSession = navigator.mediaSession;
+        const setActionHandler = mediaSession.setActionHandler.bind(mediaSession);
+        const setPositionState = mediaSession.setPositionState.bind(mediaSession);
+        mediaSession.setActionHandler = (action, handler) => {
+          window.mixerMediaActions[action] = handler;
+          setActionHandler(action, handler);
+        };
+        mediaSession.setPositionState = position => {
+          window.mixerMediaPosition = position;
+          setPositionState(position);
+        };
         HTMLMediaElement.prototype.play = function () {
           window.nativePlayCalls.push({
             id: this.id, src: this.src, muted: this.muted, trustedClick,
@@ -615,6 +634,71 @@ try {
         assert.equal(await nativePage.locator('#queueMixAudio').evaluate(audio => audio.src), expectedPlay.src);
         assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay]);
         assert.deepEqual(sessionRequests, [['GET', id]]);
+        if (mode === 'cola') {
+          const beforePause = await nativePage.evaluate(() => {
+            const audio = document.getElementById('queueMixAudio');
+            delete document.visibilityState;
+            document.dispatchEvent(new Event('visibilitychange'));
+            Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+            document.dispatchEvent(new Event('visibilitychange'));
+            audio.pause();
+            return { src: audio.src, time: audio.currentTime };
+          });
+          await nativePage.waitForFunction(({ src, time }) => {
+            const report = window.FreeSongDiag.report();
+            const audio = document.getElementById('queueMixAudio');
+            return report.visibility === 'hidden' && report.playback.engine === 'hls-mixer' &&
+              report.playback.isPlaying && navigator.mediaSession.playbackState === 'playing' &&
+              audio.src === src && !audio.paused && audio.currentTime > time + 0.1;
+          }, beforePause, { timeout: 4000 });
+          const playCalls = await nativePage.evaluate(() => window.nativePlayCalls);
+          assert.ok(playCalls.length > 1 && playCalls.every(call =>
+            call.id === 'queueMixAudio' && call.src === beforePause.src && !call.muted),
+          'La pausa del sistema debe recuperarse en el HLS activo sin abrir otro audio');
+          assert.deepEqual(sessionRequests, [['GET', id]]);
+
+          const pausedByListener = await nativePage.evaluate(() => {
+            const audio = document.getElementById('queueMixAudio');
+            window.mixerMediaActions.pause();
+            audio.dispatchEvent(new Event('playing'));
+            document.dispatchEvent(new Event('visibilitychange'));
+            return audio.paused;
+          });
+          assert.equal(pausedByListener, true, 'El control de bloqueo debe pausar el HLS inmediatamente');
+          await nativePage.evaluate(() => new Promise(resolve => setTimeout(resolve, 150)));
+          assert.deepEqual(await nativePage.evaluate(() => {
+            const state = window.FreeSongDiag.report().playback;
+            return {
+              paused: document.getElementById('queueMixAudio').paused,
+              intentionallyPaused: state.userIntentionalPause,
+              playing: state.isPlaying,
+              mediaSession: navigator.mediaSession.playbackState
+            };
+          }), { paused: true, intentionallyPaused: true, playing: false, mediaSession: 'paused' });
+        } else {
+          // La pantalla de bloqueo puede perder la ficha o mostrar una pausa antigua.
+          await nativePage.evaluate(() => {
+            delete document.visibilityState;
+            document.dispatchEvent(new Event('visibilitychange'));
+            navigator.mediaSession.metadata = null;
+            navigator.mediaSession.setPositionState();
+            Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+            document.dispatchEvent(new Event('visibilitychange'));
+            navigator.mediaSession.playbackState = 'paused';
+          });
+          await nativePage.waitForFunction(({ title, artist }) => {
+            const audio = document.getElementById('queueMixAudio');
+            const { metadata, playbackState } = navigator.mediaSession;
+            const position = window.mixerMediaPosition;
+            return document.visibilityState === 'hidden' && !audio.paused && playbackState === 'playing' &&
+              metadata?.title === title && metadata.artist === artist && metadata.artwork.some(art => art.src.includes('/icons/')) &&
+              position?.duration === 8 &&
+              position.position > 0.1 && Math.abs(position.position - (audio.currentTime - 6)) < 0.5 &&
+              position.playbackRate === audio.playbackRate;
+          }, nativeTracks[1], { timeout: 3000 });
+          assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay],
+            'Reparar los controles no debe reiniciar el HLS');
+        }
       }
       assert.equal(await nativePage.evaluate(() => window.FreeSongDiag.report().playback.offline.downloads), 0);
       assert.deepEqual(errors, []);

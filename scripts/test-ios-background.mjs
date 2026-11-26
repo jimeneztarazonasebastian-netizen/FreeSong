@@ -184,12 +184,20 @@ async function run() {
       { timeout: 12000 }
     );
 
-    // --- Pasa a segundo plano (pantalla bloqueada) ---
-    await page.evaluate(() => {
+    // Safari puede emitir la pausa antes de que la página cambie de visibilidad.
+    await page.evaluate(async () => {
+      const deck = [...document.querySelectorAll('audio')].find((a) => a.dataset.trackId === 'bg-1');
+      const paused = new Promise(resolve => deck.addEventListener('pause', resolve, { once: true }));
+      deck.pause();
+      await paused;
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
       document.dispatchEvent(new Event('visibilitychange'));
     });
+    await page.waitForFunction(() => {
+      const deck = [...document.querySelectorAll('audio')].find((a) => a.dataset.trackId === 'bg-1');
+      return !deck.paused && deck.currentTime > 1.5 && navigator.mediaSession.playbackState === 'playing';
+    }, null, { timeout: 3000 });
 
     // Un pause atrasado de la fuente anterior no puede cambiar a pausado
     // los controles de una canción que sigue sonando.

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.53 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.54 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.53';
+  const APP_VERSION = '3.9.54';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -325,6 +325,8 @@
   window.crossfadeInterval = null;
   window.activeStreamAbort = null;
   let userIntentionalPause = false;
+  let recentDeckPause = null;
+  let lockedResumeDeck = null;
   let isScrubbing = false;
   let streamWatchdogTimer = null;
   let lastSkipTimestamp = 0;
@@ -720,6 +722,8 @@
     if (queueMix?.active) return;
     if (nativeAudio) return;
     if (!isIOSDevice || !S.isPlaying || userIntentionalPause) return;
+    // En Safari con AudioSession, el propio reproductor debe conservar el foco.
+    if (navigator.audioSession?.type === 'playback') return;
     // Si el deck principal ya está sonando, la sesión de audio está activa:
     // arrancar otro elemento (aunque sea mudo) podría robarle el foco.
     const main = getActivePlayer();
@@ -741,7 +745,7 @@
     try {
       if (navigator.audioSession) navigator.audioSession.type = 'playback';
     } catch {}
-    audioDecks.forEach((deck) => {
+    [...audioDecks, queueMixAudio].forEach((deck) => {
       try {
         deck.setAttribute('x-webkit-airplay', 'allow');
         deck.disableRemotePlayback = false;
@@ -752,7 +756,12 @@
   // Si iOS pausó el audio por pasar a segundo plano (sin que el usuario pausara),
   // retómalo en cuanto vuelve a haber oportunidad.
   function ensurePlaybackAlive() {
-    if (nativeAudio || queueMix?.active) return;
+    if (nativeAudio) return;
+    if (queueMix?.active) {
+      if (!queueMixAudio.paused) syncMediaSessionPlayback();
+      else resumeInterruptedMix(queueMix);
+      return;
+    }
     const hasPendingRecovery = !!pendingStreamRecovery || !!pendingYtStart;
     if ((!S.isPlaying && !autoPlayBlocked && !hasPendingRecovery) || userIntentionalPause) return;
     // Un arranque/recuperación pendiente no puede ejecutarse con la pantalla
@@ -839,7 +848,10 @@
 
   // Despertar la sesión de audio al primer toque físico en la pantalla
   window.addEventListener('touchstart', () => { setupAudioSession(); keepAudioAlive(); }, { passive: true });
-  window.addEventListener('click', () => { setupAudioSession(); keepAudioAlive(); });
+  window.addEventListener('click', () => { setupAudioSession(); keepAudioAlive(); warmNativeMixLauncher(); });
+  navigator.audioSession?.addEventListener?.('statechange', () => {
+    if (queueMix?.needsResume && navigator.audioSession.state === 'active') resumeInterruptedMix(queueMix);
+  });
 
   // --- Motor de Audio YouTube Web (Respaldo Infalible sin Errores 502) ---
   let isYtMode = false;
@@ -1534,18 +1546,21 @@
       if (!isBackground()) nativeAudio.restore().catch((e) => Diag.log('native-state-error', { e }));
       return;
     }
-    syncMediaSessionPlayback();
     if (queueMix?.active) {
       // HLS ya contiene la mezcla. La recuperación del deck normal podría
       // abrir otra fuente si iOS bloquea la página durante el primer búfer.
+      setupAudioSession();
       if (!isBackground()) {
-        setupAudioSession();
+        if (!queueMixAudio.paused) queueMix.resumeAttempt = null;
         if (queueMix.nativeLaunch && !queueMix.starting && !queueMix.trackListReady) void readNativeMixTracks(queueMix);
-        updateQueueMixPosition();
       }
+      if (queueMixAudio.paused) resumeInterruptedMix(queueMix);
+      else if (S.currentTrack && !userIntentionalPause) updateMediaSession(S.currentTrack);
+      updateQueueMixPosition();
       saveSession(true);
       return;
     }
+    syncMediaSessionPlayback();
     if (document.visibilityState === 'hidden') {
       if (queueMix?.handoff) {
         queueMix.handoff = null;
@@ -1564,6 +1579,12 @@
       // pipeline y devolver currentTime = 0.
       const ap = getActivePlayer();
       const curTrack = S.queue[S.currentIndex];
+      // Safari puede notificar la pausa justo antes del cambio de visibilidad.
+      if (!userIntentionalPause && recentDeckPause?.deck === ap && recentDeckPause.track === curTrack &&
+          recentDeckPause.source === ap.src && performance.now() - recentDeckPause.at < 750) {
+        S.isPlaying = true;
+      }
+      recentDeckPause = null;
       if (ap && curTrack && isFinite(ap.currentTime) && ap.currentTime > 0.5) {
         rememberPosition(curTrack.id, ap.currentTime);
       }
@@ -1581,6 +1602,8 @@
       saveSession(true);
       ensurePlaybackAlive();
     } else {
+      lockedResumeDeck = null;
+      recentDeckPause = null;
       setupAudioSession();
       warmNativeMixLauncher();
       ensurePlaybackAlive();
@@ -1703,13 +1726,16 @@
           return;
         }
 
-        if (document.visibilityState === 'hidden' && S.isPlaying && !userIntentionalPause) {
-          setTimeout(() => {
-            if (S.isPlaying && !userIntentionalPause && deck.paused && !isTransitioningTrack) {
+        if (isIOSDevice && S.isPlaying && !userIntentionalPause && !deck.ended) {
+          if (isBackground()) {
+            if (lockedResumeDeck !== deck && navigator.audioSession?.state !== 'interrupted') {
+              lockedResumeDeck = deck;
+              setupAudioSession();
               deck.play().catch(() => {});
             }
-          }, 30);
-          return;
+            return;
+          }
+          recentDeckPause = { deck, track: currentTrack, source: deck.src, at: performance.now() };
         }
         S.isPlaying = false;
         updatePlayPauseIcons(false, false);
@@ -1926,23 +1952,24 @@
     // Publica el estado del audio real. La intención de reproducir (S.isPlaying)
     // puede seguir activa mientras se carga/recupera un stream pausado.
     try {
-      navigator.mediaSession.playbackState = !player.paused && !player.ended && !userIntentionalPause
+      const state = !player.paused && !player.ended && !userIntentionalPause
         ? 'playing' : 'paused';
+      if (navigator.mediaSession.playbackState !== state) navigator.mediaSession.playbackState = state;
     } catch {}
   }
 
   function updateMediaSession(track) {
     if (nativeAudio) return;
     if (!('mediaSession' in navigator) || !track) return;
-    const artwork = [512, 256, 128].flatMap((size) => {
-      const src = thumbAt(track.thumbnail, size);
+    const artwork = [...new Set([track.thumbnail, thumbAt(track.thumbnail, 256)])].flatMap((src) => {
       if (!src) return [];
       try {
         const url = new URL(src, location.href);
         if (!['https:', 'http:'].includes(url.protocol) && !/^data:image\//i.test(src)) return [];
-        return [{ src: url.href, sizes: `${size}x${size}` }];
+        return [{ src: url.href }];
       } catch { return []; }
     });
+    artwork.push({ src: new URL('/icons/icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' });
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: track.title,
@@ -1955,8 +1982,9 @@
     const handlers = {
       play: () => resumePlayback(),
       pause: () => pausePlayback(),
+      stop: () => pausePlayback(),
       previoustrack: () => playPrev(),
-      nexttrack: () => playNext(true, true),
+      nexttrack: () => playNext(true),
       seekto: (details) => {
         if (details.seekTime != null) {
           if (seekQueueMix(details.seekTime)) return;
@@ -2513,7 +2541,7 @@
     if (!track || !source || !source.url) return;
     // También con una sesión anterior en pausa: el deck activo no se toca y al
     // elegir una canción nueva se reutiliza este deck ya cargado.
-    if (S.isPlaying || isBackground() || isDownloaded(track.id)) return;
+    if (S.isPlaying || queueMix?.active || isBackground() || isDownloaded(track.id)) return;
     const inact = getInactivePlayer();
     if (!inact || !inact.paused || inact.dataset.prefetchedId === track.id) return;
     try {
@@ -2558,11 +2586,18 @@
   }
 
   function prefetchNextTrack() {
-    if (nativeAudio || queueMix?.active) return;
+    if (nativeAudio) return;
     const nextIdx = getNextIndex();
     if (nextIdx < 0 || nextIdx >= S.queue.length || nextIdx === S.currentIndex) return;
     const nextTrack = S.queue[nextIdx];
     if (!nextTrack || isAudiusTrack(nextTrack)) return;
+
+    // Si se pulsa Siguiente antes de que HLS permita saltar, el deck normal
+    // necesita una URL lista. Resuelve el enlace sin abrir otro reproductor.
+    if (queueMix?.active) {
+      if (!isBackground()) prewarmTracks([nextTrack]);
+      return;
+    }
 
     // La letra de la siguiente pista se pide ya: al cambiar de canción aparece
     // al instante en vez de mostrar el esqueleto de carga.
@@ -3285,7 +3320,9 @@
     });
     const data = await response.json();
     if (!response.ok) {
-      throw Object.assign(new Error(data.error || 'No se pudo preparar el crossfade.'), { status: response.status });
+      const seconds = Number(response.headers.get('Retry-After'));
+      const retryAfterMs = Number.isInteger(seconds) && seconds >= 1 && seconds <= 15 ? seconds * 1000 : 15_000;
+      throw Object.assign(new Error(data.error || 'No se pudo preparar el crossfade.'), { status: response.status, retryAfterMs });
     }
     return data;
   }
@@ -3378,13 +3415,22 @@
   }
 
   function warmNativeMixLauncher() {
-    if (!canLaunchNativeMix() || Date.now() - mixerWarmAt < 12 * 60_000) return;
+    const warmInterval = 12 * 60_000;
+    if (!canLaunchNativeMix() || Date.now() - mixerWarmAt < warmInterval) return;
     // Warm only on normal use. No periodic requests or background wakeups.
     mixerWarmAt = Date.now();
     queueMixRequest('GET', null).then(({ configured, nativeStart, wakeUrl }) => {
       nativeMixLauncher = nativeStart === true;
-      if (configured && wakeUrl) return fetch(wakeUrl, { cache: 'no-store', keepalive: true }).then(response => response.body?.cancel());
-    }).catch(() => {});
+      if (configured && wakeUrl) {
+        return fetch(wakeUrl, { cache: 'no-store', keepalive: true, signal: AbortSignal.timeout(60_000) }).then(response => {
+          void response.body?.cancel().catch(() => {});
+          if (!response.ok) throw new Error('Render no está listo');
+        });
+      }
+    }).catch(() => {
+      // Un calentamiento fallido permite otro intento con el siguiente uso.
+      mixerWarmAt = Date.now() - warmInterval + 30_000;
+    });
   }
 
   function playNativeQueueMix(index) {
@@ -3410,6 +3456,7 @@
     queueMix = mix;
     S.pendingResume = null;
     S.isPlaying = true;
+    setupAudioSession();
     audioDecks.forEach(deck => deck.pause());
     pauseAudioKeepAlive();
     clearTimeout(streamWatchdogTimer);
@@ -3539,9 +3586,11 @@
       window.activeStreamAbort?.abort();
       if (streamWatchdogTimer) { clearTimeout(streamWatchdogTimer); streamWatchdogTimer = null; }
       queueMixAudio.muted = false;
+      setupAudioSession();
+      if (S.currentTrack) updateMediaSession(S.currentTrack);
       updatePlayPauseIcons(true, false);
-      syncMediaSessionPlayback();
       updateQueueMixPosition();
+      prefetchNextTrack();
       $('queueMixBtn').textContent = 'Salir de la mezcla';
       queueMixStatus('Crossfade activo. Puedes bloquear el iPhone.');
       showToast('Crossfade activo');
@@ -3578,6 +3627,7 @@
       mix.active = true;
       Diag.log('mixer-start', { editable: mix.editable, tracks: mix.tracks.length });
       userIntentionalPause = false;
+      setupAudioSession();
       queueMixAudio.src = mix.playlist;
       queueMixAudio.playbackRate = mix.editable ? 1 : S.playbackRate;
       queueMixAudio.play().catch(() => {
@@ -3633,7 +3683,7 @@
       catch (error) {
         if (error.status !== 429 || !(mix.replacement || autoPlayer) || queueMix !== mix) throw error;
         queueMixStatus('Esperando un espacio en el servidor de audio…');
-        await new Promise(resolve => setTimeout(resolve, 15_000));
+        await new Promise(resolve => setTimeout(resolve, error.retryAfterMs));
         if (queueMix !== mix) return;
         result = await createMix();
       }
@@ -3693,6 +3743,7 @@
       return;
     }
     mix.editing = true;
+    if (!isBackground() && !isAudiusTrack(selected)) prewarmTracks([selected]);
     Diag.log('mixer-edit-start', { part, seconds: queueMixPosition() });
     queueMixStatus('Preparando la nueva siguiente sin interrumpir el audio…');
     try {
@@ -3746,24 +3797,52 @@
     }
   }
 
+  function resumeInterruptedMix(mix) {
+    if (!isIOSDevice || queueMix !== mix || !mix?.active || userIntentionalPause ||
+        (!mix.needsResume && !S.isPlaying) || !queueMixAudio.paused || queueMixAudio.ended ||
+        queueMixAudio.error || navigator.audioSession?.state === 'interrupted' ||
+        mix.resumeAttempt === document.visibilityState) return false;
+    mix.resumeAttempt = document.visibilityState;
+    setupAudioSession();
+    queueMixAudio.play().catch((error) => {
+      if (queueMix !== mix || userIntentionalPause || !queueMixAudio.paused) return;
+      mix.needsResume = true;
+      S.isPlaying = false;
+      updatePlayPauseIcons(false, false);
+      syncMediaSessionPlayback();
+      Diag.log('mixer-resume-rejected', { bg: isBackground(), reason: error.name });
+    });
+    return true;
+  }
+
   queueMixAudio.addEventListener('play', () => {
-    if (!queueMix?.active) return;
+    if (!queueMix?.active || queueMixAudio.paused || userIntentionalPause) return;
     S.isPlaying = true;
     updatePlayPauseIcons(true, queueMix.starting === true);
     syncMediaSessionPlayback();
   });
   queueMixAudio.addEventListener('playing', () => {
     const mix = queueMix;
-    if (!mix?.starting) return;
+    if (!mix?.active || queueMixAudio.paused || queueMixAudio.ended || userIntentionalPause) return;
+    mix.needsResume = false;
+    S.isPlaying = true;
+    if (S.currentTrack) updateMediaSession(S.currentTrack);
+    updateQueueMixPosition();
+    if (!mix.starting) return;
     mix.starting = false;
     updatePlayPauseIcons(true, false);
     queueMixStatus('Crossfade activo.');
-    syncMediaSessionPlayback();
     Diag.log('mixer-native-start', { tracks: mix.tracks.length });
     void readNativeMixTracks(mix);
+    prefetchNextTrack();
   });
   queueMixAudio.addEventListener('pause', () => {
-    if (!queueMix?.active || !queueMixAudio.paused) return;
+    const mix = queueMix;
+    if (!mix?.active || !queueMixAudio.paused) return;
+    if (isIOSDevice && !userIntentionalPause && !queueMixAudio.ended && S.isPlaying) {
+      mix.needsResume = true;
+      if (isBackground() && resumeInterruptedMix(mix)) return;
+    }
     S.isPlaying = false;
     updatePlayPauseIcons(false, false);
     syncMediaSessionPlayback();
@@ -3771,6 +3850,7 @@
   function updateQueueMixPosition() {
     const mix = queueMix;
     if (!mix?.active) return;
+    syncMediaSessionPlayback();
     // La transición ya está codificada en HLS. Este evento solo sincroniza la interfaz.
     const part = mix.offsets.reduce((found, offset, i) => queueMixAudio.currentTime >= offset ? i : found, 0);
     if (part !== mix.part) {
@@ -3784,6 +3864,7 @@
         updateMediaSession(track);
         renderQueue();
         saveHistory(track);
+        prefetchNextTrack();
         if (S.activePlayerSubTab === 'similar') void loadSimilarTracks(track);
         if (mix.nativeLaunch && part > 0) void ensureUpcomingTracks(track);
       }

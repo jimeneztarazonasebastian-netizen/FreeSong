@@ -13,11 +13,16 @@ const reply = (res, code, body) => {
   return res.status(code).json(body);
 };
 
-function allowStart(req, id) {
+function allowStart(req, res, id) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
   const previous = recent.get(ip);
   const now = Date.now();
-  if (previous && now - previous.at < 15_000) return !!id && previous.id === id;
+  const remaining = previous ? 15_000 - (now - previous.at) : 0;
+  if (remaining > 0) {
+    if (id && previous.id === id) return true;
+    res.setHeader('Retry-After', String(Math.ceil(remaining / 1000)));
+    return false;
+  }
   if (recent.size > 500) recent.clear();
   recent.set(ip, { at: now, id });
   return true;
@@ -84,7 +89,7 @@ async function nativeMixerStart(req, res, url, key, id) {
     return res.status(200).end();
   }
   if (req.aborted || res.destroyed) return;
-  if (!allowStart(req, id)) return reply(res, 429, { error: 'Espera unos segundos antes de crear otra mezcla.' });
+  if (!allowStart(req, res, id)) return reply(res, 429, { error: 'Espera unos segundos antes de crear otra mezcla.' });
   const disconnected = new AbortController();
   const onClose = () => { if (!res.writableEnded) disconnected.abort(); };
   res.once?.('close', onClose);
@@ -163,7 +168,7 @@ export async function mixerControl(req, res, url) {
   }
   let body;
   if (req.method === 'POST') {
-    if (!allowStart(req)) return reply(res, 429, { error: 'Espera unos segundos antes de crear otra mezcla.' });
+    if (!allowStart(req, res)) return reply(res, 429, { error: 'Espera unos segundos antes de crear otra mezcla.' });
   }
   if (req.method === 'POST' || req.method === 'PATCH') {
     let raw = req.body;

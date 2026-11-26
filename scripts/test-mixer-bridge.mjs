@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mock } from 'node:test';
 import { mixerControl } from '../api/_mixer.js';
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.MIXER_API_KEY;
@@ -77,18 +78,39 @@ try {
   assert.equal((await call('GET', null, null, id, { ...native, ids: 'bfl76Sr-Rsk,https://unsafe.example' })).code, 400);
   assert.equal((await call('GET', null, null, id, { ...native, ids: 'bfl76Sr-Rsk' })).code, 400);
   assert.equal(addresses.length, 0);
-  const manifest = await call('GET', null, null, id, native, sameListener);
-  assert.equal(manifest.code, 307);
-  assert.equal(manifest.headers.Location, `https://freesong-mixer.onrender.com/sessions/${id}/index.m3u8`);
-  assert.equal(manifest.headers['Cache-Control'], 'no-store');
-  assert.equal(manifest.headers['Referrer-Policy'], 'no-referrer');
-  assert.equal(JSON.stringify(manifest).includes('server-only-test-secret'), false);
-  assert.deepEqual(addresses, ['/health', '/sessions', `/sessions/${id}/index.m3u8`, `/sessions/${id}/index.m3u8`]);
-  assert.equal(creations, 1);
-  assert.equal((await call('GET', null, null, id, native, sameListener)).code, 307);
-  assert.equal((await call('GET', null, null, 'f'.repeat(48), native, sameListener)).code, 429);
   const prod = 'https://freesong-pied.vercel.app';
-  assert.equal((await call('POST', prod, { tracks: [] }, null, {}, sameListener)).code, 429);
+  let now = Date.now();
+  const clock = mock.method(Date, 'now', () => now);
+  try {
+    const manifest = await call('GET', null, null, id, native, sameListener);
+    assert.equal(manifest.code, 307);
+    assert.equal(manifest.headers.Location, `https://freesong-mixer.onrender.com/sessions/${id}/index.m3u8`);
+    assert.equal(manifest.headers['Cache-Control'], 'no-store');
+    assert.equal(manifest.headers['Referrer-Policy'], 'no-referrer');
+    assert.equal(JSON.stringify(manifest).includes('server-only-test-secret'), false);
+    assert.deepEqual(addresses, ['/health', '/sessions', `/sessions/${id}/index.m3u8`, `/sessions/${id}/index.m3u8`]);
+    assert.equal(creations, 1);
+    const limitedNative = await call('GET', null, null, 'f'.repeat(48), native, sameListener);
+    assert.equal(limitedNative.code, 429);
+    assert.equal(limitedNative.headers['Retry-After'], '15');
+
+    now += 10_250;
+    const repeated = await call('GET', null, null, id, native, sameListener);
+    assert.equal(repeated.code, 307);
+    assert.equal(repeated.headers['Retry-After'], undefined);
+    const limitedPost = await call('POST', prod, { tracks: [] }, null, {}, sameListener);
+    assert.equal(limitedPost.code, 429);
+    assert.equal(limitedPost.headers['Retry-After'], '5');
+    assert.equal(creations, 2);
+
+    now += 4750;
+    globalThis.fetch = async () => Response.json({ id }, { status: 202 });
+    const allowedPost = await call('POST', prod, { tracks: [] }, null, {}, sameListener);
+    assert.equal(allowedPost.code, 202);
+    assert.equal(allowedPost.headers['Retry-After'], undefined);
+  } finally {
+    clock.mock.restore();
+  }
   assert.equal((await call('POST', prod, { id, tracks: [] })).code, 400);
   globalThis.fetch = async url => {
     assert.equal(new URL(url).pathname, '/health', 'No debe crearse una sesión en un Render antiguo');
