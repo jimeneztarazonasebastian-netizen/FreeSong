@@ -11,6 +11,8 @@ const URL_TTL_MS = 30 * 60 * 1000; // 30 minutos de caché en memoria serverless
 const RESOLVE_TIMEOUT_MS = 4000;
 const UPSTREAM_TIMEOUT_MS = 8000; // solo para esperar cabeceras; el cuerpo no se aborta
 const NEGATIVE_TTL_MS = 5 * 60 * 1000; // no repetir fallos de cookies/visitorData en cada petición
+let ytBotBlockedUntil = 0;
+const isBotBlockError = (err) => /no eres un bot|not a bot|LOGIN_REQUIRED/i.test(String(err?.message || err || ''));
 
 // Clientes móviles reales con mayor tasa de éxito (SimpMusic Engine)
 const CLIENTS = [
@@ -574,7 +576,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
     ? (async () => {
         // En el precalentamiento no hay usuario esperando; aun así damos una
         // pequeña ventaja al vídeo original por si el relay responde rápido.
-        await delay(prewarm ? 700 : 1200);
+        await delay(prewarm ? 700 : 600);
         if (state.done) return { ok: false };
         const altIds = await findInvidiousAlternatives(videoId, title, artist, duration);
         if (!altIds.length) {
@@ -594,30 +596,44 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
   // 3. MWEB directo: funciona cuando la IP del servidor no está bloqueada
   // (por ejemplo en local o en un host con IP residencial).
   if (process.env.YOUTUBE_COOKIE && getCookie()) {
-    try {
-      const target = await resolveMweb(videoId, itag);
-      const resp = await openUpstream(target, range);
-      cacheTarget(cacheKey, target);
-      return { upstream: resp, errors };
-    } catch (e) {
-      errors.push(`mweb: ${e.message}`);
-      console.warn(`[stream] MWEB falló para ${videoId}: ${e.message}`);
-    }
+    if (Date.now() < ytBotBlockedUntil) {
+      errors.push('mweb: cooldown anti-bot');
+    } else {
+      try {
+        const target = await resolveMweb(videoId, itag);
+        const resp = await openUpstream(target, range);
+        cacheTarget(cacheKey, target);
+        return { upstream: resp, errors };
+      } catch (e) {
+        if (isBotBlockError(e)) ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
+        errors.push(`mweb: ${e.message}`);
+        console.warn(`[stream] MWEB falló para ${videoId}: ${e.message}`);
+      }
 
-    // 4. HLS armado en memoria (respaldo histórico, también sujeto al bloqueo).
-    try {
-      const buffer = await getAudioBuffer(videoId);
-      return { buffer, errors };
-    } catch (e) {
-      errors.push(`hls: ${e.message}`);
-      console.warn(`[stream] HLS falló para ${videoId}: ${e.message}`);
+      // 4. HLS armado en memoria (respaldo histórico, también sujeto al bloqueo).
+      if (Date.now() >= ytBotBlockedUntil) {
+        try {
+          const buffer = await getAudioBuffer(videoId);
+          return { buffer, errors };
+        } catch (e) {
+          if (isBotBlockError(e)) ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
+          errors.push(`hls: ${e.message}`);
+          console.warn(`[stream] HLS falló para ${videoId}: ${e.message}`);
+        }
+      }
     }
   }
 
   // 5. Otra publicación de la misma canción (el vídeo original puede estar caído).
   //    Va antes que los clientes nativos: desde Vercel esos clientes suelen
   //    responder LOGIN_REQUIRED y solo añaden varios segundos de espera.
-  if (title || artist) {
+  //    Si todos los relays fallaron por 403 y YouTube ya bloquea esta IP, otro ID dará igual.
+  const relayErr = errors.find((e) => e.startsWith('relay: ')) || '';
+  const relayParts = relayErr.replace(/^relay:\s*/, '').split('|').map((s) => s.trim()).filter(Boolean);
+  const allRelaysBlocked = relayInstances().length > 0 && relayParts.length >= relayInstances().length && relayParts.every((p) => /403/.test(p));
+  const skipAltBecauseBlocked = allRelaysBlocked && Date.now() < ytBotBlockedUntil;
+
+  if ((title || artist) && !skipAltBecauseBlocked) {
     try {
       const altVideoId = await findAlternativeVideoId(title, artist, videoId, duration);
       if (!altVideoId || altVideoId === videoId) {
@@ -635,7 +651,7 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
           errors.push(`alt relay: ${e.message}`);
         }
 
-        if (process.env.YOUTUBE_COOKIE && getCookie()) {
+        if (process.env.YOUTUBE_COOKIE && getCookie() && Date.now() >= ytBotBlockedUntil) {
           try {
             const target = await resolveMweb(altVideoId, itag);
             const resp = await openUpstream(target, range);
@@ -643,43 +659,63 @@ async function getUpstream(videoId, itag, range, backupIndex, title = '', artist
             cacheTarget(cacheKey, target);
             return { upstream: resp, errors };
           } catch (e) {
+            if (isBotBlockError(e)) ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
             errors.push(`alt mweb: ${e.message}`);
           }
-          try {
-            const buffer = await getAudioBuffer(altVideoId);
-            return { buffer, errors };
-          } catch (e) {
-            errors.push(`alt hls: ${e.message}`);
+          if (Date.now() >= ytBotBlockedUntil) {
+            try {
+              const buffer = await getAudioBuffer(altVideoId);
+              return { buffer, errors };
+            } catch (e) {
+              if (isBotBlockError(e)) ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
+              errors.push(`alt hls: ${e.message}`);
+            }
           }
         }
 
-        for (const client of CLIENTS) {
-          try {
-            const target = await resolveWithClient(client, altVideoId, itag, audioOnly);
-            const resp = await openUpstream(target, range);
-            cacheTarget(altKey, target);
-            cacheTarget(cacheKey, target);
-            return { upstream: resp, errors };
-          } catch (e) {
-            errors.push(`alt ${client.name}: ${e.message}`);
+        if (Date.now() >= ytBotBlockedUntil) {
+          for (const client of CLIENTS) {
+            try {
+              const target = await resolveWithClient(client, altVideoId, itag, audioOnly);
+              const resp = await openUpstream(target, range);
+              cacheTarget(altKey, target);
+              cacheTarget(cacheKey, target);
+              return { upstream: resp, errors };
+            } catch (e) {
+              errors.push(`alt ${client.name}: ${e.message}`);
+              if (isBotBlockError(e)) {
+                ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
+                break;
+              }
+            }
           }
         }
       }
     } catch (e) {
       errors.push(`alt search error: ${e.message}`);
     }
+  } else if (skipAltBecauseBlocked) {
+    errors.push('alt skipped: relays 403 + cooldown anti-bot');
   }
 
   // 6. Clientes nativos (respaldo final; desde Vercel suelen fallar).
-  for (const client of CLIENTS) {
-    try {
-      const target = await resolveWithClient(client, videoId, itag, audioOnly);
-      const resp = await openUpstream(target, range);
-      cacheTarget(cacheKey, target);
-      return { upstream: resp, errors };
-    } catch (e) {
-      errors.push(`${client.name}: ${e.message}`);
-      console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
+  if (Date.now() < ytBotBlockedUntil) {
+    errors.push('yt clients: cooldown anti-bot');
+  } else {
+    for (const client of CLIENTS) {
+      try {
+        const target = await resolveWithClient(client, videoId, itag, audioOnly);
+        const resp = await openUpstream(target, range);
+        cacheTarget(cacheKey, target);
+        return { upstream: resp, errors };
+      } catch (e) {
+        errors.push(`${client.name}: ${e.message}`);
+        console.warn(`[stream] ${client.name} falló para ${videoId}: ${e.message}`);
+        if (isBotBlockError(e)) {
+          ytBotBlockedUntil = Date.now() + NEGATIVE_TTL_MS;
+          break;
+        }
+      }
     }
   }
 

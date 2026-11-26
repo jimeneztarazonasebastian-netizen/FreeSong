@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.50 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.51 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.50';
+  const APP_VERSION = '3.9.51';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -773,7 +773,7 @@
     }
     if (isYtMode) {
       try {
-        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
+        if (!ytNeedsDirectTap && ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
           ytPlayer.playVideo();
         }
       } catch {}
@@ -847,6 +847,12 @@
   let isYtReady = false;
   let ytProgressTimer = null;
   let ytStartWatchdog = null;
+  let ytTapWatchdog = null;
+  let ytInitWatchdog = null;
+  let pendingYtRequest = null;
+  let ytFallbackCircuitUntil = 0;
+  let proxyUnavailableUntil = 0;
+  let ytNeedsDirectTap = false;
 
   function clearYtStartWatchdog() {
     if (ytStartWatchdog) {
@@ -855,8 +861,116 @@
     }
   }
 
-  function initYouTubeEngine() {
-    if (isIOSDevice) return;
+  function clearYtTapWatchdog() {
+    if (ytTapWatchdog) {
+      clearTimeout(ytTapWatchdog);
+      ytTapWatchdog = null;
+    }
+  }
+
+  function clearYtInitWatchdog() {
+    if (ytInitWatchdog) {
+      clearTimeout(ytInitWatchdog);
+      ytInitWatchdog = null;
+    }
+  }
+
+  function configureYtIframeElement(frame) {
+    if (!frame || frame.tagName !== 'IFRAME') return;
+    frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+    frame.setAttribute('playsinline', '');
+  }
+
+  // Posiciona el iframe sobre la portada cuando iOS Safari requiere un toque
+  // directo en YouTube, sin mover el nodo del DOM (repadrear recargaría el iframe).
+  function syncYtDeckPlacement() {
+    const wrapper = $('deckWrapper');
+    const deck = $('ytDeck');
+    if (!wrapper) return;
+    const sheetOpen = !$('fullPlayerSheet')?.classList.contains('translate-y-full');
+    const trackViewOpen = !$('sheetTrackView')?.classList.contains('hidden');
+    if (ytNeedsDirectTap && isYtMode && sheetOpen && trackViewOpen) {
+      const art = $('sheetTrackView')?.querySelector('.player-artwork');
+      const rect = art ? art.getBoundingClientRect() : null;
+      if (rect && rect.width > 40 && rect.height > 40) {
+        Object.assign(wrapper.style, {
+          position: 'fixed',
+          left: `${Math.round(rect.left)}px`,
+          top: `${Math.round(rect.top)}px`,
+          bottom: 'auto',
+          width: `${Math.round(rect.width)}px`,
+          height: `${Math.round(rect.height)}px`,
+          opacity: '1',
+          pointerEvents: 'auto',
+          zIndex: '60',
+          borderRadius: '24px',
+          overflow: 'hidden'
+        });
+        if (deck) {
+          deck.style.width = '100%';
+          deck.style.height = '100%';
+        }
+        return;
+      }
+    }
+    Object.assign(wrapper.style, {
+      position: 'fixed',
+      left: '0px',
+      top: 'auto',
+      bottom: '0px',
+      width: '200px',
+      height: '200px',
+      opacity: '0.001',
+      pointerEvents: 'none',
+      zIndex: '-1',
+      borderRadius: '0px',
+      overflow: 'hidden'
+    });
+    if (deck) {
+      deck.style.width = '200px';
+      deck.style.height = '200px';
+    }
+  }
+
+  function triggerYtLoad(track, start = 0) {
+    if (!track || !ytPlayer || typeof ytPlayer.loadVideoById !== 'function') return false;
+    try {
+      const request = { videoId: track.id, suggestedQuality: 'small' };
+      if (start > 0) request.startSeconds = start;
+      ytPlayer.loadVideoById(request);
+      ytPlayer.playVideo();
+      return true;
+    } catch (err) {
+      console.warn('Error al llamar loadVideoById:', err);
+      return false;
+    }
+  }
+
+  function armYtTapUnlock(targetTrack) {
+    clearYtTapWatchdog();
+    if (!isIOSDevice || isBackground()) return;
+    ytTapWatchdog = setTimeout(() => {
+      ytTapWatchdog = null;
+      if (!isYtMode || S.currentTrack !== targetTrack || userIntentionalPause || !isYtReady) return;
+      let state = -1;
+      try {
+        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function') state = ytPlayer.getPlayerState();
+      } catch {}
+      if (state === 1 || state === 3) return;
+      clearYtStartWatchdog();
+      ytNeedsDirectTap = true;
+      S.isPlaying = false;
+      updatePlayPauseIcons(false, false);
+      openFullPlayer();
+      if (S.activePlayerSubTab !== 'track') switchPlayerSubTab('track');
+      syncYtDeckPlacement();
+      setTimeout(syncYtDeckPlacement, 350);
+      showToast('Toca la portada una vez para activar el audio en iPhone', 4000);
+    }, 2800);
+  }
+
+  function initYouTubeEngine(initialVideoId = '', initialStart = 0) {
+    if (nativeAudio || navigator.onLine === false) return;
     if (!window.YT || !window.YT.Player) {
       if (!document.getElementById('youtube-api')) {
         const script = document.createElement('script');
@@ -868,37 +982,49 @@
       return;
     }
     if (ytPlayer) return;
+    const videoId = initialVideoId || pendingYtRequest?.track?.id || '';
+    const startSec = initialStart > 0 ? initialStart : (pendingYtRequest?.start || 0);
     try {
+      const playerVars = {
+        autoplay: videoId ? 1 : 0,
+        controls: 1,
+        disablekb: 1,
+        fs: 0,
+        rel: 0,
+        playsinline: 1,
+        enablejsapi: 1,
+        modestbranding: 1,
+        origin: window.location.origin
+      };
+      if (startSec > 0) playerVars.start = startSec;
       ytPlayer = new YT.Player('ytDeck', {
         height: '200',
         width: '200',
-        videoId: '',
-        playerVars: {
-          autoplay: 0,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          rel: 0,
-          playsinline: 1,
-          enablejsapi: 1,
-          modestbranding: 1,
-          origin: window.location.origin
-        },
+        videoId,
+        playerVars,
         events: {
-          onReady: () => {
+          onReady: (event) => {
+            clearYtInitWatchdog();
             isYtReady = true;
+            configureYtIframeElement(event?.target?.getIframe?.() || $('ytDeck'));
+            if (isYtMode && pendingYtRequest && S.currentTrack && pendingYtRequest.track.id === S.currentTrack.id) {
+              const req = pendingYtRequest;
+              pendingYtRequest = null;
+              if (triggerYtLoad(req.track, req.start)) armYtTapUnlock(req.track);
+            }
           },
           onStateChange: onYtStateChange,
           onError: onYtError
         }
       });
+      configureYtIframeElement($('ytDeck'));
     } catch (e) {
       console.warn('Error inicializando YouTube Engine:', e);
     }
   }
 
   window.onYouTubeIframeAPIReady = () => {
-    initYouTubeEngine();
+    initYouTubeEngine(pendingYtRequest?.track?.id || '', pendingYtRequest?.start || 0);
   };
 
 
@@ -906,28 +1032,64 @@
     if (!isYtMode) return;
     if (event.data === 1) { // PLAYING
       clearYtStartWatchdog();
+      clearYtTapWatchdog();
+      clearYtInitWatchdog();
+      if (ytNeedsDirectTap) {
+        ytNeedsDirectTap = false;
+        syncYtDeckPlacement();
+      }
+      ytFallbackCircuitUntil = Date.now() + 3 * 60 * 1000;
       S.isPlaying = true;
       userIntentionalPause = false;
       consecutiveStreamFailures = 0;
+      consecutiveSkippedTracks = 0;
+      if (pendingStartId && S.currentTrack && pendingStartId === S.currentTrack.id) {
+        Diag.recordStart(Date.now() - pendingStartMark);
+        Diag.inc('yt');
+        pendingStartId = '';
+      }
+      try {
+        ytPlayer?.setVolume?.(S.audioNormalize ? 88 : 100);
+        ytPlayer?.setPlaybackRate?.(S.playbackRate || 1);
+      } catch {}
       pauseAudioKeepAlive();
       updatePlayPauseIcons(true, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
       startYtProgressTimer();
+      const nextIdx = getNextIndex();
+      if (nextIdx >= 0 && S.queue[nextIdx]) prefetchLyrics(S.queue[nextIdx]);
     } else if (event.data === 2) { // PAUSED
-      // Si la pausa NO fue iniciada intencionalmente por el usuario (ej: pantalla bloqueada o pestaña en segundo plano en iOS)
-      if (!userIntentionalPause && S.isPlaying) {
-        keepAudioAlive();
-        try {
-          if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
-            ytPlayer.playVideo();
-          }
-        } catch {}
+      let cur = 0;
+      let dur = 0;
+      try {
+        if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') cur = ytPlayer.getCurrentTime() || 0;
+        if (ytPlayer && typeof ytPlayer.getDuration === 'function') dur = ytPlayer.getDuration() || 0;
+      } catch {}
+      if (!dur && S.currentTrack) dur = S.currentTrack.duration || 0;
+      if (cur > 0.5 && S.currentTrack) rememberPosition(S.currentTrack.id, cur);
+      if (dur > 0 && cur >= dur - 1 && !userIntentionalPause) {
+        stopYtProgressTimer();
+        handleTrackFinished();
+        return;
+      }
+      if (isBackground() && !userIntentionalPause && S.currentTrack) {
+        pendingYtStart = {
+          trackId: S.currentTrack.id,
+          seconds: cur > 1 ? cur : lastKnownSecondsFor(S.currentTrack.id),
+          at: Date.now()
+        };
+        S.isPlaying = false;
+        updatePlayPauseIcons(false, false);
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        stopYtProgressTimer();
+        saveSession(true);
         return;
       }
       S.isPlaying = false;
       updatePlayPauseIcons(false, false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
       stopYtProgressTimer();
+      saveSession(true);
     } else if (event.data === 3) { // BUFFERING
       updatePlayPauseIcons(true, true);
     } else if (event.data === 0) { // ENDED
@@ -941,6 +1103,9 @@
     Diag.log('yt-error', { code: event && event.data, id: S.currentTrack ? S.currentTrack.id : '' });
     stopYtProgressTimer();
     clearYtStartWatchdog();
+    clearYtTapWatchdog();
+    ytNeedsDirectTap = false;
+    syncYtDeckPlacement();
     // Con la pantalla bloqueada el iframe no puede arrancar. Se reintenta al
     // volver en vez de saltar canciones a ciegas y perder la posición.
     if (isIOSDevice && isBackground()) {
@@ -964,6 +1129,10 @@
       try {
         const cur = ytPlayer.getCurrentTime() || 0;
         const dur = ytPlayer.getDuration() || (S.currentTrack && S.currentTrack.duration) || 0;
+        if (cur > 0.5 && S.currentTrack) {
+          rememberPosition(S.currentTrack.id, cur);
+          saveSession();
+        }
         if (dur > 0) {
           const clampedCur = Math.min(cur, dur);
           $('playerCurTime').textContent = formatTime(clampedCur);
@@ -977,7 +1146,7 @@
             try {
               navigator.mediaSession.setPositionState({
                 duration: dur,
-                playbackRate: 1,
+                playbackRate: S.playbackRate || 1,
                 position: clampedCur
               });
             } catch {}
@@ -998,7 +1167,12 @@
   }
 
   function playWithYouTubeEngine(track, startAt = 0) {
-    if (!track) return;
+    if (!track || nativeAudio) return;
+    clearYtStartWatchdog();
+    clearYtTapWatchdog();
+    clearYtInitWatchdog();
+    ytNeedsDirectTap = false;
+    syncYtDeckPlacement();
     pendingYtStart = null;
     isYtMode = true;
     S.isPlaying = true;
@@ -1009,7 +1183,7 @@
     }
     keepAudioAlive();
     updatePlayPauseIcons(true, true);
-    const start = isFinite(startAt) && startAt > 3 ? Math.floor(startAt) : 0;
+    const start = isFinite(startAt) && startAt > 2 ? Math.floor(startAt) : 0;
 
     // Detener cualquier deck HTML5 para evitar interferencias
     audioDecks.forEach((deck) => {
@@ -1020,41 +1194,24 @@
       } catch {}
     });
 
-    const triggerPlay = () => {
-      if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-        try {
-          const request = { videoId: track.id, suggestedQuality: 'small' };
-          if (start > 0) request.startSeconds = start;
-          ytPlayer.loadVideoById(request);
-          ytPlayer.playVideo();
-        } catch (err) {
-          console.warn('Error al llamar loadVideoById:', err);
-          return false;
-        }
-        return true;
-      }
-      return false;
-    };
-
-    if (isYtReady && ytPlayer) {
-      triggerPlay();
+    if (isYtReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+      pendingYtRequest = null;
+      if (triggerYtLoad(track, start)) armYtTapUnlock(track);
     } else {
-      initYouTubeEngine();
-      const attempt = (final = false) => {
-        if (triggerPlay()) return;
-        if (final) {
-          console.warn('[FreeSong] La API de YouTube no está disponible para el respaldo.');
-          stopAfterStreamFailures();
-        }
-      };
-      setTimeout(() => attempt(), 400);
-      setTimeout(() => attempt(), 1200);
-      setTimeout(() => attempt(true), 3000);
+      pendingYtRequest = { track, start };
+      initYouTubeEngine(track.id, start);
+      ytInitWatchdog = setTimeout(() => {
+        ytInitWatchdog = null;
+        if (!isYtMode || S.currentTrack !== track || userIntentionalPause) return;
+        if (isYtReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') return;
+        pendingYtRequest = null;
+        console.warn('[FreeSong] La API de YouTube no está disponible para el respaldo.');
+        stopAfterStreamFailures();
+      }, 3800);
     }
 
     // Si YouTube no logra arrancar (embed bloqueado o buffering eterno), no
     // dejes la cola colgada: pasa a la siguiente pista.
-    clearYtStartWatchdog();
     ytStartWatchdog = setTimeout(() => {
       ytStartWatchdog = null;
       if (!isYtMode || !S.isPlaying || userIntentionalPause) return;
@@ -1139,8 +1296,13 @@
       try { ytPlayer.stopVideo(); } catch {}
     }
     isYtMode = false;
+    ytNeedsDirectTap = false;
+    pendingYtRequest = null;
     stopYtProgressTimer();
     clearYtStartWatchdog();
+    clearYtTapWatchdog();
+    clearYtInitWatchdog();
+    syncYtDeckPlacement();
     if (streamWatchdogTimer) {
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
@@ -1398,52 +1560,10 @@
             }
           }
         }
-        // En iPhone, YouTube Web no puede sonar con la pantalla bloqueada.
-        // Antes de caer en él, guarda la canción como audio local (blob): la
-        // reproducción desde memoria sigue funcionando al bloquear el teléfono
-        // y queda disponible offline para las próximas veces.
-        if (isIOSDevice && resumeAt > 1 && !track._blobTried && !isDownloaded(track.id) && navigator.onLine !== false) {
-          track._blobTried = true;
-          Diag.log('blob-prepare', { id: track.id });
-          const blobStarted = Date.now();
-          let prepared = false;
-          try {
-            prepared = await Promise.race([
-              downloadTrack(track, { forPlayback: true }),
-              new Promise((resolve) => setTimeout(() => resolve(false), 30000))
-            ]);
-          } catch {}
-          if (!canRecover()) return;
-          const blobUrl = S.offlineBlobUrls.get(track.id);
-          if (prepared && blobUrl) {
-            if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
-            track._fallbackStep = 0;
-            Diag.log('blob-playback', { id: track.id, at: Math.round(resumeAt), ms: Date.now() - blobStarted });
-            if (switchPlayerSource(player, blobUrl, resumeAt, retryIfRejected)) {
-              armStreamWatchdog(track, 7000);
-              return;
-            }
-          }
-        }
-        // En iPhone no se usa YouTube Web: suena mientras la pantalla está
-        // encendida, pero iOS lo pausa al bloquear el teléfono (el fallo que
-        // reporta el usuario). Si el audio local tampoco se pudo preparar,
-        // pasa a la siguiente en vez de dejar una sesión que se cortará.
-        if (isIOSDevice) {
-          if (manuallySelectedTrack === track) {
-            stopAfterStreamFailures();
-            return;
-          }
-          Diag.log('yt-skip-ios', { id: track.id });
-          showToast('Esta canción no se pudo preparar; pasando a la siguiente…', 3200);
-          noteStreamFailure();
-          skipFailedTrack(track);
-          return;
-        }
         // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
         // la última vía que entrega audio (vídeos que la instancia solo ofrece
         // como segmentos SABR). Mejor eso que un spinner infinito.
-        if (!isIOSDevice && !track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
+        if (!track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
           track._ytFallback = true;
           track._ytFallbackAt = Date.now();
           Diag.log('yt-fallback', { id: track.id, at: Math.round(resumeAt) });
@@ -1456,11 +1576,14 @@
         return;
       }
 
-      const failedOnRelay = isDirectRelayUrl(player.src);
+      const failedOnRelay = isDirectRelayUrl(failedSource);
+      if (!failedOnRelay && resumeAt <= 1) {
+        proxyUnavailableUntil = Date.now() + 3 * 60 * 1000;
+      }
       if (navigator.onLine !== false) {
         const direct = await Promise.race([
           resolveRelaySource(track.id, S.audioQuality, failedOnRelay ? failedSource : '').catch(() => null),
-          new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+          new Promise((resolve) => setTimeout(() => resolve(null), 2500))
         ]);
         if (!canRecover()) return;
         if (direct?.url && direct.url !== failedSource) {
@@ -1473,6 +1596,32 @@
             return;
           }
         }
+      }
+
+      if (!failedOnRelay && resumeAt <= 1 && !isDownloaded(track.id) && navigator.onLine !== false) {
+        if (!track._altTried) {
+          track._altTried = true;
+          const alt = await Promise.race([
+            resolveRelayAlternative(track).catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve(null), 2500))
+          ]);
+          if (!canRecover()) return;
+          if (alt && alt.url) {
+            if (S.queue[S.currentIndex] !== track || userIntentionalPause || isYtMode) return;
+            rememberRelaySource(track, alt);
+            track._fallbackStep = 0;
+            Diag.log('relay-alt', { id: track.id, videoId: alt.videoId || '' });
+            if (switchPlayerSource(player, alt.url, resumeAt, retryIfRejected)) {
+              armStreamWatchdog(track, 7000);
+              return;
+            }
+          }
+        }
+        track._ytFallback = true;
+        track._ytFallbackAt = Date.now();
+        Diag.log('yt-fallback', { id: track.id, at: Math.round(resumeAt) });
+        playWithYouTubeEngine(track, resumeAt);
+        return;
       }
 
       track._fallbackStep = step + 1;
@@ -1623,13 +1772,19 @@
       clearEndOfTrackTimer();
       if (idx === activeDeckIdx) clearAutoPlayRetry();
       if (idx === activeDeckIdx && S.queue[S.currentIndex]) {
+        const playingTrack = S.queue[S.currentIndex];
+        const playingSrc = deck.currentSrc || deck.src || '';
+        if (!isDownloaded(playingTrack.id) && !isAudiusTrack(playingTrack) && !playingSrc.startsWith('blob:')) {
+          ytFallbackCircuitUntil = 0;
+          if (!isDirectRelayUrl(playingSrc)) proxyUnavailableUntil = 0;
+        }
         // Un arranque desde 0 sí es una reproducción limpia; una reanudación a
         // mitad de canción conserva el nivel de fallback para no reintentar sin fin.
         if (!deck.currentTime || deck.currentTime < 2) {
-          S.queue[S.currentIndex]._fallbackStep = 0;
-          if (pendingStartId && pendingStartId === S.queue[S.currentIndex].id) {
+          playingTrack._fallbackStep = 0;
+          if (pendingStartId && pendingStartId === playingTrack.id) {
             Diag.recordStart(Date.now() - pendingStartMark);
-            Diag.inc(isDirectRelayUrl(deck.currentSrc || deck.src) ? 'relay' : 'proxy');
+            Diag.inc(isDirectRelayUrl(playingSrc) ? 'relay' : 'proxy');
             pendingStartId = '';
           }
         }
@@ -1927,6 +2082,11 @@
       seekto: (details) => {
         if (details.seekTime != null) {
           if (seekQueueMix(details.seekTime)) return;
+          if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+            try { ytPlayer.seekTo(details.seekTime, true); } catch {}
+            rememberPosition(track.id, details.seekTime);
+            return;
+          }
           const p = getActivePlayer();
           if (p) {
             p.currentTime = details.seekTime;
@@ -2429,6 +2589,7 @@
   const proxyPrewarmStarted = new Set();
   function prewarmProxyStream(track) {
     if (!track || !track.id || proxyPrewarmStarted.has(track.id) || isDownloaded(track.id)) return;
+    if (Date.now() < proxyUnavailableUntil || Date.now() < ytFallbackCircuitUntil) return;
     if (navigator.onLine === false) return;
     const conn = navigator.connection;
     if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ''))) return;
@@ -2451,6 +2612,7 @@
       cache: 'no-store',
       signal: ctrl.signal
     }).then((res) => {
+      if (res && res.status >= 500) proxyUnavailableUntil = Date.now() + 3 * 60 * 1000;
       // Si el precalentamiento falló, permite reintentarlo más tarde.
       if (!res || !res.ok) proxyPrewarmStarted.delete(track.id);
     }).catch(() => {
@@ -3048,8 +3210,13 @@
       console.error('Error al descargar:', err);
       Diag.log('download-error', { id: track.id, ms: Date.now() - downloadStarted, e: err, forPlayback });
       if (forPlayback) return false;
-      const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
-      showToast(`Error al descargar "${track.title}"${detail}`, 5000);
+      const msg = String(err?.message || '');
+      if (/502|403|unavailable|fragmento/i.test(msg)) {
+        showToast('La fuente bloqueó la descarga directa; la canción sigue disponible en streaming.', 5000);
+      } else {
+        const detail = (err && err.message ? `: ${err.message}` : '').slice(0, 90);
+        showToast(`Error al descargar "${track.title}"${detail}`, 5000);
+      }
       return false;
     } finally {
       delete S.isDownloadingMap[track.id];
@@ -3342,6 +3509,8 @@
     const track = S.queue[index];
     if (S.pendingResume?.id === track.id && S.pendingResume.seconds > 1) return false;
     const tracks = S.queue.slice(index, index + 3);
+    if ((Date.now() < ytFallbackCircuitUntil || Date.now() < proxyUnavailableUntil) &&
+        tracks.some(item => !isAudiusTrack(item))) return false;
     const radio = tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
     const fade = mixFade();
     const durations = tracks.map(mixDuration);
@@ -3432,6 +3601,8 @@
     if (!player || !S.currentTrack || player.dataset.trackId !== S.currentTrack.id) return;
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
     if (tracks.length < 2 || tracks.some(track => isDownloaded(track.id))) return;
+    if ((Date.now() < ytFallbackCircuitUntil || Date.now() < proxyUnavailableUntil) &&
+        tracks.some(track => !isAudiusTrack(track))) return;
     if (!queueMixPrimed) {
       if (navigator.userActivation?.isActive === false) return;
       // WebKit grants media permission per element during the original Play gesture.
@@ -3900,12 +4071,12 @@
     const track = S.queue[index];
     manuallySelectedTrack = !fromEnded && (immediate || !S.isPlaying) ? track : null;
     // Pistas que ya agotaron relay y proxy: YouTube Web las entrega sin pasar
-    // por Invidious. Solo se recuerda unos minutos: al reintentar más tarde se
-    // vuelve a probar HTML5 (YouTube Web no funciona en segundo plano en iOS).
-    const ytFresh = !!track._ytFallback && Date.now() - (Number(track._ytFallbackAt) || 0) < 3 * 60 * 1000;
-    // En iPhone el iframe de YouTube no puede sonar con la pantalla bloqueada:
-    // si se usa, la música se detiene al bloquear. Mejor relay/audio local.
-    const preferYt = !isIOSDevice && !isDownloaded(track.id) && ytFresh && navigator.onLine !== false;
+    // por Invidious. La marca global acelera el resto de la sesión si todo falla.
+    const hasCachedRelay = (relaySources.get(`${track.id}:${S.audioQuality || ''}`)?.expires || 0) > Date.now();
+    const ytFresh = (!!track._ytFallback && Date.now() - (Number(track._ytFallbackAt) || 0) < 3 * 60 * 1000) ||
+      Date.now() < ytFallbackCircuitUntil;
+    const preferYt = !nativeAudio && !isAudiusTrack(track) && !isDownloaded(track.id) &&
+      !hasCachedRelay && ytFresh && navigator.onLine !== false;
     const wasYtMode = isYtMode;
     // Crossfade elegante SOLO de forma automática al final natural (!immediate).
     // Si la pista anterior sonaba por YouTube Web no hay deck que fundir.
@@ -3927,8 +4098,13 @@
       try { ytPlayer.pauseVideo(); } catch {}
     }
     isYtMode = false;
+    ytNeedsDirectTap = false;
+    pendingYtRequest = null;
     stopYtProgressTimer();
     clearYtStartWatchdog();
+    clearYtTapWatchdog();
+    clearYtInitWatchdog();
+    syncYtDeckPlacement();
 
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
     if (window.activeStreamAbort) {
@@ -4269,6 +4445,9 @@
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
     }
+    clearYtTapWatchdog();
+    ytNeedsDirectTap = false;
+    syncYtDeckPlacement();
     if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
       try { ytPlayer.pauseVideo(); } catch {}
     }
@@ -4321,6 +4500,8 @@
       return;
     }
     if (isYtMode) {
+      ytNeedsDirectTap = false;
+      syncYtDeckPlacement();
       if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
         try { ytPlayer.playVideo(); } catch {}
         S.isPlaying = true;
@@ -4402,6 +4583,16 @@
       isTransitioningTrack = false;
       userIntentionalPause = true;
       S.isPlaying = false;
+      if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+        try { ytPlayer.pauseVideo(); } catch {}
+      }
+      isYtMode = false;
+      ytNeedsDirectTap = false;
+      stopYtProgressTimer();
+      clearYtStartWatchdog();
+      clearYtTapWatchdog();
+      clearYtInitWatchdog();
+      syncYtDeckPlacement();
       try { getActivePlayer().pause(); } catch {}
       pauseAudioKeepAlive();
       updatePlayPauseIcons(false, false);
@@ -4422,9 +4613,21 @@
       seekQueueMix(0);
       return;
     }
+    if (isYtMode && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+      let cur = 0;
+      try { cur = ytPlayer.getCurrentTime() || 0; } catch {}
+      if (cur > 3) {
+        try {
+          ytPlayer.seekTo(0, true);
+          ytPlayer.playVideo();
+        } catch {}
+        if (S.currentTrack) lastKnownPosition = { id: S.currentTrack.id, seconds: 0, at: Date.now() };
+        return;
+      }
+    }
     if (isCrossfading && pendingTrackCommit) finishCrossfadeNow();
     const p = getActivePlayer();
-    if (!queueMix?.active && p && p.currentTime > 3) {
+    if (!queueMix?.active && !isYtMode && p && p.currentTime > 3) {
       p.currentTime = 0;
       if (S.currentTrack) lastKnownPosition = { id: S.currentTrack.id, seconds: 0, at: Date.now() };
       return;
@@ -4897,6 +5100,7 @@
 
     window.addEventListener('resize', () => {
       if (isLyricsVisible()) scrollLyricsTo(Math.max(0, S.currentLyricIdx), true);
+      syncYtDeckPlacement();
     });
   }
 
@@ -5583,6 +5787,7 @@
       const cur = S.queue[S.currentIndex];
       if (cur && similarTrackId !== cur.id) loadSimilarTracks(cur);
     }
+    syncYtDeckPlacement();
   }
 
   // --- Menú de Canción Completo ••• (Spotify Bottom Sheet) ---
@@ -5632,6 +5837,9 @@
     }
     S.playbackRate = rate;
     configureNativeAudio();
+    if (isYtMode && ytPlayer && typeof ytPlayer.setPlaybackRate === 'function') {
+      try { ytPlayer.setPlaybackRate(rate); } catch {}
+    }
     audioDecks.forEach((a) => {
       a.playbackRate = rate;
       a.preservesPitch = true;
@@ -6110,6 +6318,8 @@
         scrollLyricsTo(Math.max(0, S.currentLyricIdx), true);
       }, 340);
     }
+    syncYtDeckPlacement();
+    if (ytNeedsDirectTap) setTimeout(syncYtDeckPlacement, 350);
   }
 
   function closeFullPlayer() {
@@ -6122,6 +6332,7 @@
     }
     sheet.style.transition = '';
     sheet.style.transform = '';
+    syncYtDeckPlacement();
     const cur = S.queue[S.currentIndex] || S.currentTrack;
     if (cur) {
       showAndSyncMiniPlayer(cur, false);
@@ -9449,6 +9660,9 @@
       S.audioNormalize = e.target.checked;
       configureNativeAudio();
       Store.writeRaw('fs_normalize', S.audioNormalize.toString());
+      if (isYtMode && ytPlayer && typeof ytPlayer.setVolume === 'function') {
+        try { ytPlayer.setVolume(S.audioNormalize ? 88 : 100); } catch {}
+      }
       const p = getActivePlayer();
       if (p) p.volume = S.audioNormalize ? 0.88 : 1.0;
       showToast(S.audioNormalize ? 'Normalización activada' : 'Normalización desactivada');
@@ -9624,9 +9838,18 @@
     } else if (e.key === 'ArrowLeft' && e.shiftKey) {
       playPrev();
     } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-      const p = getActivePlayer();
-      if (p && isFinite(p.duration)) {
-        p.currentTime = Math.max(0, Math.min(p.duration, p.currentTime + (e.key === 'ArrowRight' ? 5 : -5)));
+      const delta = e.key === 'ArrowRight' ? 5 : -5;
+      if (isYtMode && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+        const cur = ytPlayer.getCurrentTime?.() || 0;
+        const dur = ytPlayer.getDuration?.() || (S.currentTrack && S.currentTrack.duration) || 0;
+        const target = dur > 0 ? Math.max(0, Math.min(dur, cur + delta)) : Math.max(0, cur + delta);
+        try { ytPlayer.seekTo(target, true); } catch {}
+        if (S.currentTrack) rememberPosition(S.currentTrack.id, target);
+      } else {
+        const p = getActivePlayer();
+        if (p && isFinite(p.duration)) {
+          p.currentTime = Math.max(0, Math.min(p.duration, p.currentTime + delta));
+        }
       }
     }
   });
