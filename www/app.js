@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.51 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.52 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.51';
+  const APP_VERSION = '3.9.52';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -773,7 +773,7 @@
     }
     if (isYtMode) {
       try {
-        if (!ytNeedsDirectTap && ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
+        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() !== 1) {
           ytPlayer.playVideo();
         }
       } catch {}
@@ -847,24 +847,19 @@
   let isYtReady = false;
   let ytProgressTimer = null;
   let ytStartWatchdog = null;
-  let ytTapWatchdog = null;
   let ytInitWatchdog = null;
   let pendingYtRequest = null;
-  let ytFallbackCircuitUntil = 0;
-  let proxyUnavailableUntil = 0;
-  let ytNeedsDirectTap = false;
+
+  function canUseYouTubeFallback(track) {
+    // El iframe no puede sostener una sesión de audio en segundo plano en iOS.
+    return !!track && !isIOSDevice && !nativeAudio && !isAudiusTrack(track) &&
+      !isDownloaded(track.id) && navigator.onLine !== false;
+  }
 
   function clearYtStartWatchdog() {
     if (ytStartWatchdog) {
       clearTimeout(ytStartWatchdog);
       ytStartWatchdog = null;
-    }
-  }
-
-  function clearYtTapWatchdog() {
-    if (ytTapWatchdog) {
-      clearTimeout(ytTapWatchdog);
-      ytTapWatchdog = null;
     }
   }
 
@@ -881,96 +876,20 @@
     frame.setAttribute('playsinline', '');
   }
 
-  // Posiciona el iframe sobre la portada cuando iOS Safari requiere un toque
-  // directo en YouTube, sin mover el nodo del DOM (repadrear recargaría el iframe).
-  function syncYtDeckPlacement() {
-    const wrapper = $('deckWrapper');
-    const deck = $('ytDeck');
-    if (!wrapper) return;
-    const sheetOpen = !$('fullPlayerSheet')?.classList.contains('translate-y-full');
-    const trackViewOpen = !$('sheetTrackView')?.classList.contains('hidden');
-    if (ytNeedsDirectTap && isYtMode && sheetOpen && trackViewOpen) {
-      const art = $('sheetTrackView')?.querySelector('.player-artwork');
-      const rect = art ? art.getBoundingClientRect() : null;
-      if (rect && rect.width > 40 && rect.height > 40) {
-        Object.assign(wrapper.style, {
-          position: 'fixed',
-          left: `${Math.round(rect.left)}px`,
-          top: `${Math.round(rect.top)}px`,
-          bottom: 'auto',
-          width: `${Math.round(rect.width)}px`,
-          height: `${Math.round(rect.height)}px`,
-          opacity: '1',
-          pointerEvents: 'auto',
-          zIndex: '60',
-          borderRadius: '24px',
-          overflow: 'hidden'
-        });
-        if (deck) {
-          deck.style.width = '100%';
-          deck.style.height = '100%';
-        }
-        return;
-      }
-    }
-    Object.assign(wrapper.style, {
-      position: 'fixed',
-      left: '0px',
-      top: 'auto',
-      bottom: '0px',
-      width: '200px',
-      height: '200px',
-      opacity: '0.001',
-      pointerEvents: 'none',
-      zIndex: '-1',
-      borderRadius: '0px',
-      overflow: 'hidden'
-    });
-    if (deck) {
-      deck.style.width = '200px';
-      deck.style.height = '200px';
-    }
-  }
-
   function triggerYtLoad(track, start = 0) {
-    if (!track || !ytPlayer || typeof ytPlayer.loadVideoById !== 'function') return false;
+    if (!track || !ytPlayer || typeof ytPlayer.loadVideoById !== 'function') return;
     try {
       const request = { videoId: track.id, suggestedQuality: 'small' };
       if (start > 0) request.startSeconds = start;
       ytPlayer.loadVideoById(request);
       ytPlayer.playVideo();
-      return true;
     } catch (err) {
       console.warn('Error al llamar loadVideoById:', err);
-      return false;
     }
   }
 
-  function armYtTapUnlock(targetTrack) {
-    clearYtTapWatchdog();
-    if (!isIOSDevice || isBackground()) return;
-    ytTapWatchdog = setTimeout(() => {
-      ytTapWatchdog = null;
-      if (!isYtMode || S.currentTrack !== targetTrack || userIntentionalPause || !isYtReady) return;
-      let state = -1;
-      try {
-        if (ytPlayer && typeof ytPlayer.getPlayerState === 'function') state = ytPlayer.getPlayerState();
-      } catch {}
-      if (state === 1 || state === 3) return;
-      clearYtStartWatchdog();
-      ytNeedsDirectTap = true;
-      S.isPlaying = false;
-      updatePlayPauseIcons(false, false);
-      openFullPlayer();
-      if (S.activePlayerSubTab !== 'track') switchPlayerSubTab('track');
-      syncYtDeckPlacement();
-      setTimeout(syncYtDeckPlacement, 350);
-      showToast('Toca la portada una vez para activar el audio en iPhone', 4000);
-    }, 2800);
-  }
-
   function initYouTubeEngine(initialVideoId = '', initialStart = 0) {
-    if (nativeAudio || navigator.onLine === false) return;
+    if (isIOSDevice || nativeAudio || navigator.onLine === false) return;
     if (!window.YT || !window.YT.Player) {
       if (!document.getElementById('youtube-api')) {
         const script = document.createElement('script');
@@ -1010,7 +929,7 @@
             if (isYtMode && pendingYtRequest && S.currentTrack && pendingYtRequest.track.id === S.currentTrack.id) {
               const req = pendingYtRequest;
               pendingYtRequest = null;
-              if (triggerYtLoad(req.track, req.start)) armYtTapUnlock(req.track);
+              triggerYtLoad(req.track, req.start);
             }
           },
           onStateChange: onYtStateChange,
@@ -1032,13 +951,7 @@
     if (!isYtMode) return;
     if (event.data === 1) { // PLAYING
       clearYtStartWatchdog();
-      clearYtTapWatchdog();
       clearYtInitWatchdog();
-      if (ytNeedsDirectTap) {
-        ytNeedsDirectTap = false;
-        syncYtDeckPlacement();
-      }
-      ytFallbackCircuitUntil = Date.now() + 3 * 60 * 1000;
       S.isPlaying = true;
       userIntentionalPause = false;
       consecutiveStreamFailures = 0;
@@ -1103,21 +1016,6 @@
     Diag.log('yt-error', { code: event && event.data, id: S.currentTrack ? S.currentTrack.id : '' });
     stopYtProgressTimer();
     clearYtStartWatchdog();
-    clearYtTapWatchdog();
-    ytNeedsDirectTap = false;
-    syncYtDeckPlacement();
-    // Con la pantalla bloqueada el iframe no puede arrancar. Se reintenta al
-    // volver en vez de saltar canciones a ciegas y perder la posición.
-    if (isIOSDevice && isBackground()) {
-      let seconds = 0;
-      try {
-        if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') seconds = ytPlayer.getCurrentTime() || 0;
-      } catch {}
-      if (S.currentTrack) {
-        pendingYtStart = { trackId: S.currentTrack.id, seconds: seconds > 1 ? seconds : 0, at: Date.now() };
-      }
-      return;
-    }
     if (!noteStreamFailure()) return;
     playNext(true, true);
   }
@@ -1167,12 +1065,9 @@
   }
 
   function playWithYouTubeEngine(track, startAt = 0) {
-    if (!track || nativeAudio) return;
+    if (!canUseYouTubeFallback(track)) return;
     clearYtStartWatchdog();
-    clearYtTapWatchdog();
     clearYtInitWatchdog();
-    ytNeedsDirectTap = false;
-    syncYtDeckPlacement();
     pendingYtStart = null;
     isYtMode = true;
     S.isPlaying = true;
@@ -1196,7 +1091,7 @@
 
     if (isYtReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
       pendingYtRequest = null;
-      if (triggerYtLoad(track, start)) armYtTapUnlock(track);
+      triggerYtLoad(track, start);
     } else {
       pendingYtRequest = { track, start };
       initYouTubeEngine(track.id, start);
@@ -1218,16 +1113,6 @@
       try {
         if (ytPlayer && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === 1) return;
       } catch {}
-      if (isIOSDevice && isBackground()) {
-        let seconds = 0;
-        try {
-          if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') seconds = ytPlayer.getCurrentTime() || 0;
-        } catch {}
-        if (S.currentTrack) {
-          pendingYtStart = { trackId: S.currentTrack.id, seconds: seconds > 1 ? seconds : 0, at: Date.now() };
-        }
-        return;
-      }
       console.warn('[FreeSong] YouTube Web no arrancó; pasando a la siguiente.');
       if (!noteStreamFailure()) return;
       playNext(true, true);
@@ -1296,13 +1181,10 @@
       try { ytPlayer.stopVideo(); } catch {}
     }
     isYtMode = false;
-    ytNeedsDirectTap = false;
     pendingYtRequest = null;
     stopYtProgressTimer();
     clearYtStartWatchdog();
-    clearYtTapWatchdog();
     clearYtInitWatchdog();
-    syncYtDeckPlacement();
     if (streamWatchdogTimer) {
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
@@ -1540,8 +1422,7 @@
         armAutoPlayRetry(track, player);
       };
       if (step >= 1) {
-        // YouTube Web no puede sonar con la pantalla bloqueada. Antes de caer
-        // en él, prueba otra publicación de la misma canción en el relay.
+        // Prueba otra publicación de la misma canción antes de agotar el audio.
         if (!track._altTried && !isDownloaded(track.id) && navigator.onLine !== false) {
           track._altTried = true;
           const alt = await Promise.race([
@@ -1563,12 +1444,16 @@
         // Sin relay reproducible y con el proxy devolviendo 502, YouTube Web es
         // la última vía que entrega audio (vídeos que la instancia solo ofrece
         // como segmentos SABR). Mejor eso que un spinner infinito.
-        if (!track._ytFallback && !isDownloaded(track.id) && navigator.onLine !== false) {
+        if (!track._ytFallback && canUseYouTubeFallback(track)) {
           track._ytFallback = true;
           track._ytFallbackAt = Date.now();
           Diag.log('yt-fallback', { id: track.id, at: Math.round(resumeAt) });
           showToast('Cambiando a una fuente alternativa de audio…', 2600);
           playWithYouTubeEngine(track, resumeAt);
+          return;
+        }
+        if (isIOSDevice && manuallySelectedTrack === track) {
+          stopAfterStreamFailures();
           return;
         }
         noteStreamFailure();
@@ -1577,9 +1462,6 @@
       }
 
       const failedOnRelay = isDirectRelayUrl(failedSource);
-      if (!failedOnRelay && resumeAt <= 1) {
-        proxyUnavailableUntil = Date.now() + 3 * 60 * 1000;
-      }
       if (navigator.onLine !== false) {
         const direct = await Promise.race([
           resolveRelaySource(track.id, S.audioQuality, failedOnRelay ? failedSource : '').catch(() => null),
@@ -1598,7 +1480,7 @@
         }
       }
 
-      if (!failedOnRelay && resumeAt <= 1 && !isDownloaded(track.id) && navigator.onLine !== false) {
+      if (!failedOnRelay && resumeAt <= 1 && canUseYouTubeFallback(track)) {
         if (!track._altTried) {
           track._altTried = true;
           const alt = await Promise.race([
@@ -1774,10 +1656,6 @@
       if (idx === activeDeckIdx && S.queue[S.currentIndex]) {
         const playingTrack = S.queue[S.currentIndex];
         const playingSrc = deck.currentSrc || deck.src || '';
-        if (!isDownloaded(playingTrack.id) && !isAudiusTrack(playingTrack) && !playingSrc.startsWith('blob:')) {
-          ytFallbackCircuitUntil = 0;
-          if (!isDirectRelayUrl(playingSrc)) proxyUnavailableUntil = 0;
-        }
         // Un arranque desde 0 sí es una reproducción limpia; una reanudación a
         // mitad de canción conserva el nivel de fallback para no reintentar sin fin.
         if (!deck.currentTime || deck.currentTime < 2) {
@@ -2589,7 +2467,6 @@
   const proxyPrewarmStarted = new Set();
   function prewarmProxyStream(track) {
     if (!track || !track.id || proxyPrewarmStarted.has(track.id) || isDownloaded(track.id)) return;
-    if (Date.now() < proxyUnavailableUntil || Date.now() < ytFallbackCircuitUntil) return;
     if (navigator.onLine === false) return;
     const conn = navigator.connection;
     if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ''))) return;
@@ -2612,7 +2489,6 @@
       cache: 'no-store',
       signal: ctrl.signal
     }).then((res) => {
-      if (res && res.status >= 500) proxyUnavailableUntil = Date.now() + 3 * 60 * 1000;
       // Si el precalentamiento falló, permite reintentarlo más tarde.
       if (!res || !res.ok) proxyPrewarmStarted.delete(track.id);
     }).catch(() => {
@@ -3509,8 +3385,6 @@
     const track = S.queue[index];
     if (S.pendingResume?.id === track.id && S.pendingResume.seconds > 1) return false;
     const tracks = S.queue.slice(index, index + 3);
-    if ((Date.now() < ytFallbackCircuitUntil || Date.now() < proxyUnavailableUntil) &&
-        tracks.some(item => !isAudiusTrack(item))) return false;
     const radio = tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
     const fade = mixFade();
     const durations = tracks.map(mixDuration);
@@ -3601,8 +3475,6 @@
     if (!player || !S.currentTrack || player.dataset.trackId !== S.currentTrack.id) return;
     const tracks = S.queue.slice(S.currentIndex, S.currentIndex + 3);
     if (tracks.length < 2 || tracks.some(track => isDownloaded(track.id))) return;
-    if ((Date.now() < ytFallbackCircuitUntil || Date.now() < proxyUnavailableUntil) &&
-        tracks.some(track => !isAudiusTrack(track))) return;
     if (!queueMixPrimed) {
       if (navigator.userActivation?.isActive === false) return;
       // WebKit grants media permission per element during the original Play gesture.
@@ -4070,13 +3942,10 @@
     }
     const track = S.queue[index];
     manuallySelectedTrack = !fromEnded && (immediate || !S.isPlaying) ? track : null;
-    // Pistas que ya agotaron relay y proxy: YouTube Web las entrega sin pasar
-    // por Invidious. La marca global acelera el resto de la sesión si todo falla.
+    // Solo se recuerda el respaldo para la pista que agotó sus fuentes de audio.
     const hasCachedRelay = (relaySources.get(`${track.id}:${S.audioQuality || ''}`)?.expires || 0) > Date.now();
-    const ytFresh = (!!track._ytFallback && Date.now() - (Number(track._ytFallbackAt) || 0) < 3 * 60 * 1000) ||
-      Date.now() < ytFallbackCircuitUntil;
-    const preferYt = !nativeAudio && !isAudiusTrack(track) && !isDownloaded(track.id) &&
-      !hasCachedRelay && ytFresh && navigator.onLine !== false;
+    const ytFresh = !!track._ytFallback && Date.now() - (Number(track._ytFallbackAt) || 0) < 3 * 60 * 1000;
+    const preferYt = !hasCachedRelay && ytFresh && canUseYouTubeFallback(track);
     const wasYtMode = isYtMode;
     // Crossfade elegante SOLO de forma automática al final natural (!immediate).
     // Si la pista anterior sonaba por YouTube Web no hay deck que fundir.
@@ -4098,13 +3967,10 @@
       try { ytPlayer.pauseVideo(); } catch {}
     }
     isYtMode = false;
-    ytNeedsDirectTap = false;
     pendingYtRequest = null;
     stopYtProgressTimer();
     clearYtStartWatchdog();
-    clearYtTapWatchdog();
     clearYtInitWatchdog();
-    syncYtDeckPlacement();
 
     // 0. Cancelar peticiones y cargas de audio anteriores (AbortController global)
     if (window.activeStreamAbort) {
@@ -4147,14 +4013,6 @@
       let resumeAt = S.pendingResume && S.pendingResume.id === track.id ? S.pendingResume.seconds : 0;
       if (resumeAt <= 1) resumeAt = lastKnownSecondsFor(track.id);
       S.pendingResume = null;
-      // El iframe de YouTube no puede sonar con la pantalla bloqueada; lanzarlo
-      // ahí dejaría el reproductor mudo y en 0. Se aplaza a primer plano.
-      if (isIOSDevice && isBackground()) {
-        pendingYtStart = { trackId: track.id, seconds: resumeAt, at: Date.now() };
-        S.isPlaying = true;
-        updatePlayPauseIcons(true, false);
-        return;
-      }
       S.isPlaying = true;
       updatePlayPauseIcons(true, true);
       playWithYouTubeEngine(track, resumeAt);
@@ -4445,9 +4303,6 @@
       clearTimeout(streamWatchdogTimer);
       streamWatchdogTimer = null;
     }
-    clearYtTapWatchdog();
-    ytNeedsDirectTap = false;
-    syncYtDeckPlacement();
     if (isYtMode && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
       try { ytPlayer.pauseVideo(); } catch {}
     }
@@ -4500,8 +4355,6 @@
       return;
     }
     if (isYtMode) {
-      ytNeedsDirectTap = false;
-      syncYtDeckPlacement();
       if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
         try { ytPlayer.playVideo(); } catch {}
         S.isPlaying = true;
@@ -4587,12 +4440,9 @@
         try { ytPlayer.pauseVideo(); } catch {}
       }
       isYtMode = false;
-      ytNeedsDirectTap = false;
       stopYtProgressTimer();
       clearYtStartWatchdog();
-      clearYtTapWatchdog();
       clearYtInitWatchdog();
-      syncYtDeckPlacement();
       try { getActivePlayer().pause(); } catch {}
       pauseAudioKeepAlive();
       updatePlayPauseIcons(false, false);
@@ -5100,7 +4950,6 @@
 
     window.addEventListener('resize', () => {
       if (isLyricsVisible()) scrollLyricsTo(Math.max(0, S.currentLyricIdx), true);
-      syncYtDeckPlacement();
     });
   }
 
@@ -5787,7 +5636,6 @@
       const cur = S.queue[S.currentIndex];
       if (cur && similarTrackId !== cur.id) loadSimilarTracks(cur);
     }
-    syncYtDeckPlacement();
   }
 
   // --- Menú de Canción Completo ••• (Spotify Bottom Sheet) ---
@@ -6318,8 +6166,6 @@
         scrollLyricsTo(Math.max(0, S.currentLyricIdx), true);
       }, 340);
     }
-    syncYtDeckPlacement();
-    if (ytNeedsDirectTap) setTimeout(syncYtDeckPlacement, 350);
   }
 
   function closeFullPlayer() {
@@ -6332,7 +6178,6 @@
     }
     sheet.style.transition = '';
     sheet.style.transform = '';
-    syncYtDeckPlacement();
     const cur = S.queue[S.currentIndex] || S.currentTrack;
     if (cur) {
       showAndSyncMiniPlayer(cur, false);

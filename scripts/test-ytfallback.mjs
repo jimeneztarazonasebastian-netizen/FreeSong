@@ -1,12 +1,11 @@
-// Cuando el relay solo ofrece SABR/403 y el proxy devuelve 502, la app debe caer
-// al reproductor de YouTube Web tanto en escritorio como en iPhone PWA,
-// usar la vía rápida en la sesión y respetar controles y segundo plano.
+// Con relay SABR y proxy 502, el respaldo integrado sigue disponible en
+// escritorio. La PWA de iPhone conserva el motor de audio para la pista siguiente.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
-const PORT = 5221;
+const PORT = Number(process.env.YTFALLBACK_PORT) || 5221;
 const BASE = `http://127.0.0.1:${PORT}`;
 const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 const TRACKS = Array.from({ length: 2 }, (_, i) => ({
@@ -20,6 +19,20 @@ const TRACKS = Array.from({ length: 2 }, (_, i) => ({
 }));
 
 const json = (route, body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+const wav = Buffer.alloc(44 + 60 * 8000 * 2);
+wav.write('RIFF', 0);
+wav.writeUInt32LE(wav.length - 8, 4);
+wav.write('WAVEfmt ', 8);
+wav.writeUInt32LE(16, 16);
+wav.writeUInt16LE(1, 20);
+wav.writeUInt16LE(1, 22);
+wav.writeUInt32LE(8000, 24);
+wav.writeUInt32LE(16000, 28);
+wav.writeUInt16LE(2, 32);
+wav.writeUInt16LE(16, 34);
+wav.write('data', 36);
+wav.writeUInt32LE(wav.length - 44, 40);
 
 // Stub mínimo del IFrame API de YouTube: registra cargas, seeks, pausas y reproducciones.
 const YT_STUB = `
@@ -63,15 +76,16 @@ async function server() {
   child.kill(); throw new Error('no server');
 }
 
-async function setupRoutes(page, onStream) {
+async function setupRoutes(page, { search = () => TRACKS, stream = route =>
+  json(route, { error: 'sin audio', code: 'STREAM_UNAVAILABLE' }, 502) } = {}) {
   await page.route('**/*', async (route, request) => {
     const url = new URL(request.url());
     if (url.origin === BASE) {
-      if (url.pathname === '/api/search') return json(route, { tracks: TRACKS, items: TRACKS, continuation: null });
-      if (url.pathname === '/api/stream') {
-        if (onStream) onStream(url.searchParams.get('id'));
-        return json(route, { error: 'sin audio', code: 'STREAM_UNAVAILABLE' }, 502);
+      if (url.pathname === '/api/search') {
+        const tracks = search(url.searchParams.get('q'));
+        return json(route, { tracks, items: tracks, continuation: null });
       }
+      if (url.pathname === '/api/stream') return stream(route, url.searchParams.get('id'));
       if (url.pathname === '/api/relay-info') return json(route, { instances: [] });
       if (url.pathname === '/api/suggestions' || url.pathname === '/api/queue') return json(route, { queries: [], tracks: [] });
       if (url.pathname === '/api/lyrics') return json(route, { syncedLyrics: '[00:00.00]Letra', plainLyrics: 'Letra' });
@@ -133,7 +147,7 @@ try {
   assert.ok(!state.paused, 'La app quedó en pausa');
   await desktopCtx.close();
 
-  // 2) iPhone PWA: respaldo automático rápido + vía rápida de sesión + controles + segundo plano
+  // 2) iPhone PWA: una fuente caída deja al usuario cambiar de pista sin iframe.
   const iosCtx = await browser.newContext({
     viewport: { width: 393, height: 852 },
     serviceWorkers: 'block',
@@ -145,66 +159,63 @@ try {
   const iosPage = await iosCtx.newPage();
   iosPage.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logs.push(`ios-${m.type()}: ${m.text().slice(0, 140)}`); });
   iosPage.on('pageerror', (e) => logs.push(`ios-pageerror: ${e.message}`));
-  const streamCalls = [];
-  await setupRoutes(iosPage, (id) => streamCalls.push(id));
+  const youtubeRequests = [];
+  const mediaRequests = [];
+  const [failedTrack, healthyTrack] = TRACKS.map((track, i) => ({ ...track, id: `sabrTrack0${i + 1}` }));
+  iosPage.on('request', request => {
+    const { hostname, pathname } = new URL(request.url());
+    if (hostname === 'www.youtube.com' && (/^\/embed\//.test(pathname) || pathname === '/iframe_api')) {
+      youtubeRequests.push(pathname);
+    }
+  });
+  await setupRoutes(iosPage, {
+    search: query => [query === 'audio disponible' ? healthyTrack : failedTrack],
+    stream: (route, id) => {
+      const method = route.request().method();
+      if (method === 'GET') mediaRequests.push(id);
+      if (id === healthyTrack.id) {
+        return route.fulfill({ contentType: 'audio/wav', body: method === 'HEAD' ? '' : wav });
+      }
+      return json(route, { error: 'sin audio', code: 'STREAM_UNAVAILABLE' }, 502);
+    }
+  });
 
   await iosPage.goto(`${BASE}/?v=sabr-ios`, { waitUntil: 'load' });
-  await iosPage.waitForSelector('[data-nav="search"]');
-  await iosPage.evaluate(() => document.querySelector('[data-nav="search"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-  await iosPage.waitForSelector('#searchInput');
-  await iosPage.fill('#searchInput', 'sabr');
-  await iosPage.waitForSelector('#searchResultsList [data-search-idx]', { timeout: 8000 });
-  const tStart = Date.now();
-  await iosPage.evaluate(() => document.querySelector('#searchResultsList [data-search-idx]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-  await iosPage.waitForFunction(() => window.__ytLoaded === 'sabr-1', null, { timeout: 5000 });
-  const elapsed = Date.now() - tStart;
-  assert.ok(elapsed < 5000, `El respaldo en iPhone tardó demasiado (${elapsed} ms)`);
-  assert.equal(await iosPage.locator('#streamFallback').isVisible(), false, 'No debe mostrarse error si YouTube Web arrancó');
+  await iosPage.locator('[data-nav="search"]').first().click();
+  await iosPage.locator('#searchInput').fill('sabr');
+  await iosPage.locator('#searchResultsList [data-search-idx]').filter({ hasText: failedTrack.title }).click();
+  await iosPage.waitForFunction(() => window.FreeSongDiag.report().playback.ytMode ||
+    !document.getElementById('streamFallback').classList.contains('hidden'), null, { timeout: 12000 });
+  assert.equal(await iosPage.evaluate(() => window.FreeSongDiag.report().playback.ytMode), false,
+    'Una fuente caída en iPhone no debe activar el reproductor de YouTube Web');
+  await iosPage.locator('#streamFallbackLink').waitFor({ state: 'visible' });
+  assert.deepEqual(youtubeRequests, []);
+  assert.ok(mediaRequests.includes(failedTrack.id));
+  assert.equal(await iosPage.locator('iframe[src*="youtube"]').count(), 0);
 
-  // Siguiente pista: debe usar la vía rápida sin volver a pedir /api/stream
-  const streamBeforeNext = streamCalls.length;
-  await iosPage.locator('#miniNextBtn').click();
-  await iosPage.waitForFunction(() => window.__ytLoaded === 'sabr-2', null, { timeout: 4000 });
-  assert.equal(streamCalls.length, streamBeforeNext, 'La vía rápida no debe volver a consultar /api/stream');
-  assert.match(await iosPage.locator('#playerTitle').textContent(), /Cancion sabr 2/);
-
-  // Anterior con cur > 3s debe reiniciar a 0s la misma pista (abrir reproductor completo)
-  await iosPage.locator('#miniOpenBtn').click();
-  await iosPage.locator('#playerPrevBtn').waitFor({ state: 'visible', timeout: 4000 });
-  await iosPage.evaluate(() => { window.__ytCurrentTime = 10; });
-  await delay(350);
-  await iosPage.locator('#playerPrevBtn').click();
-  assert.equal(await iosPage.evaluate(() => window.__ytSeeks.at(-1)), 0, 'playPrev (>3 s) debe reiniciar en 0 s');
-  assert.equal(await iosPage.evaluate(() => window.__ytLoaded), 'sabr-2', 'No debe retroceder de pista al reiniciar');
-
-  // Pausa y reanudación en modo YouTube
-  const pausesBefore = await iosPage.evaluate(() => window.__ytPauses);
-  const playsBefore = await iosPage.evaluate(() => window.__ytPlays);
-  await iosPage.locator('#playerPlayBtn').click();
-  await iosPage.waitForFunction((n) => window.__ytPauses > n, pausesBefore);
-  await iosPage.locator('#playerPlayBtn').click();
-  await iosPage.waitForFunction((n) => window.__ytPlays > n, playsBefore);
-
-  // Segundo plano -> iOS pausa -> regreso a primer plano -> retoma reproducción
-  await iosPage.evaluate(() => {
-    window.__ytCurrentTime = 12;
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+  await iosPage.locator('#playerCloseBtn').click();
+  await iosPage.locator('#searchInput').fill('audio disponible');
+  await iosPage.locator('#searchResultsList [data-search-idx]').filter({ hasText: healthyTrack.title }).click();
+  await iosPage.waitForFunction(id => [...document.querySelectorAll('audio')].some(audio =>
+    audio.dataset.trackId === id && !audio.paused && audio.currentTime > 0.1), healthyTrack.id, { timeout: 10000 });
+  const beforeLock = await iosPage.evaluate(id => {
+    const audio = [...document.querySelectorAll('audio')].find(element => element.dataset.trackId === id && !element.paused);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     document.dispatchEvent(new Event('visibilitychange'));
-    window.__ytState(2);
-  });
-  const bgDiag = await iosPage.evaluate(() => window.FreeSongDiag.report().playback);
-  assert.equal(bgDiag.ytBlocked, true, 'En segundo plano debe quedar pendiente para reanudar al volver');
-
-  const playsBeforeFg = await iosPage.evaluate(() => window.__ytPlays);
-  await iosPage.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await iosPage.waitForFunction((n) => window.__ytPlays > n, playsBeforeFg, { timeout: 4000 });
-  assert.equal(await iosPage.evaluate(() => window.__ytLoaded), 'sabr-2');
-  console.log(`iphone pwa: respaldo en ${elapsed} ms, vía rápida sin proxy, prev/pausa/fondo OK`);
+    return { audioId: audio.id, time: audio.currentTime, src: audio.src };
+  }, healthyTrack.id);
+  await iosPage.waitForFunction(({ audioId, time, src }) => {
+    const { visibility, playback } = window.FreeSongDiag.report();
+    const audio = document.getElementById(audioId);
+    return visibility === 'hidden' && playback.engine === 'html' && playback.isPlaying && !playback.ytMode &&
+      audio.src === src && !audio.paused && audio.currentTime > time + 0.2;
+  }, beforeLock, { timeout: 5000 });
+  assert.ok(mediaRequests.includes(healthyTrack.id), 'La siguiente pista debe intentar su propia fuente');
+  assert.deepEqual(youtubeRequests, []);
+  assert.equal(await iosPage.evaluate(() => window.FreeSongDiag.report().playback.offline.downloads), 0);
+  assert.ok(!logs.some(message => message.startsWith('ios-pageerror:')));
+  console.log('iphone pwa: fuente caída sin iframe ni descargas; la siguiente pista suena en segundo plano');
   await iosCtx.close();
 
   console.log('FALLBACK YOUTUBE OK');

@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="app.css?v=3.9.51" />
+  <link rel="stylesheet" href="app.css?v=3.9.52" />
 </head>
 <body data-tab="home" class="font-sans antialiased select-none bg-zinc-950 text-zinc-100 overflow-hidden">
 
@@ -560,7 +560,7 @@
         <div class="rounded-2xl p-4 bg-zinc-900/80 border border-zinc-800 space-y-2 text-xs text-zinc-400">
           <p class="font-bold text-sm text-zinc-200">Acerca de FreeSong</p>
           <p>Reproductor de música para iPhone y la web. Incluye cola editable, letras sincronizadas y estadísticas de escucha.</p>
-          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.51</p>
+          <p class="text-[11px] text-zinc-500 pt-1">Versión 3.9.52</p>
         </div>
 
         <button id="btnClearData" class="w-full py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition press">
@@ -1161,18 +1161,17 @@
   <audio id="audioB" playsinline preload="auto"></audio>
   <audio id="queueMixAudio" playsinline preload="none"></audio>
 
-  <!-- Motor de audio YouTube Web integrado en viewport para respaldo automático continuo sin errores 502.
-       El reproductor necesita 200x200 reales para que YouTube entregue audio; se mantiene fuera de pantalla. -->
+  <!-- Respaldo de YouTube Web. En iOS se usan los elementos de audio y HLS. -->
   <div id="deckWrapper" style="position:fixed;left:0;bottom:0;width:200px;height:200px;opacity:0.001;pointer-events:none;z-index:-1;overflow:hidden;">
     <div id="ytDeck"></div>
   </div>
 
-  <script src="util.js?v=3.9.51"></script>
-  <script src="storage.js?v=3.9.51"></script>
-  <script src="lyrics.js?v=3.9.51"></script>
-  <script src="diag.js?v=3.9.51"></script>
-  <script src="pwa.js?v=3.9.51"></script>
-  <script src="native-audio.js?v=3.9.51"></script>
-  <script src="app.min.js?v=3.9.51"></script>
+  <script src="util.js?v=3.9.52"></script>
+  <script src="storage.js?v=3.9.52"></script>
+  <script src="lyrics.js?v=3.9.52"></script>
+  <script src="diag.js?v=3.9.52"></script>
+  <script src="pwa.js?v=3.9.52"></script>
+  <script src="native-audio.js?v=3.9.52"></script>
+  <script src="app.min.js?v=3.9.52"></script>
 </body>
 </html>

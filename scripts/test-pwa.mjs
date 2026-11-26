@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
-const port = 5228;
+const port = Number(process.env.PWA_TEST_PORT) || 5228;
 const base = `http://127.0.0.1:${port}`;
 const iphone = {
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
@@ -484,6 +484,7 @@ try {
     { id: 'TestAudio01', title: 'Pista nativa inicial', artist: 'Prueba', duration: 8 },
     { id: 'TestAudio02', title: 'Pista nativa siguiente', artist: 'Prueba', duration: 8 }
   ];
+  const failedProbeTrack = { id: 'DeadProbe01', title: 'Pista de precarga caída', artist: 'Prueba', duration: 8 };
   for (const mode of ['cola', 'radio', 'fallo']) {
     const nativePage = await nativeContext.newPage();
     const queue = mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
@@ -527,7 +528,13 @@ try {
       await nativePage.route('**/api/**', route => {
         const request = route.request();
         const url = new URL(request.url());
-        if (url.pathname === '/api/stream') return serveSeekableWave(route);
+        if (url.pathname === '/api/stream') {
+          if (url.searchParams.get('id') === failedProbeTrack.id) return route.fulfill({ status: 503 });
+          return serveSeekableWave(route);
+        }
+        if (url.pathname === '/api/search' && url.searchParams.get('q') === failedProbeTrack.title) {
+          return route.fulfill({ json: { tracks: [failedProbeTrack] } });
+        }
         if (url.searchParams.get('mixer') !== '1') {
           return route.fulfill({ json: { tracks: [], shelves: [], queries: [] } });
         }
@@ -545,9 +552,27 @@ try {
       const warmRequest = nativePage.waitForRequest(wakeUrl);
       await nativePage.goto(base, { waitUntil: 'domcontentloaded' });
       await warmRequest;
-      const startRequest = nativePage.waitForRequest('**/api/mixer-start.m3u8?**');
+      if (mode === 'cola') {
+        const failedProbe = nativePage.waitForResponse(response => {
+          const url = new URL(response.url());
+          return url.pathname === '/api/stream' && url.searchParams.get('id') === failedProbeTrack.id &&
+            response.request().method() === 'HEAD' && response.status() === 503;
+        }, { timeout: 10000 });
+        await nativePage.locator('[data-nav="search"]').first().click();
+        await nativePage.locator('#searchInput').fill(failedProbeTrack.title);
+        await (await failedProbe).finished();
+        await nativePage.locator('#searchResultsList [data-search-idx]').filter({ hasText: failedProbeTrack.title })
+          .waitFor({ state: 'visible' });
+        await nativePage.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+      }
+      const startRequest = nativePage.waitForRequest('**/api/mixer-start.m3u8?**', { timeout: 6000 }).catch(error => error);
       await nativePage.locator('#miniPlayBtn').click();
+      if (mode === 'cola') {
+        assert.equal(await nativePage.evaluate(() => window.nativePlayCalls[0]?.id), 'queueMixAudio',
+          'El HEAD 503 de otra pista no debe bloquear el HLS de la cola actual');
+      }
       const request = await startRequest;
+      if (request instanceof Error) throw request;
       const url = new URL(request.url());
       const id = url.searchParams.get('session');
       assert.match(id, /^[a-f0-9]{48}$/);
