@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.52 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.53 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.52';
+  const APP_VERSION = '3.9.53';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -2131,9 +2131,9 @@
     try { return Number(new URL(f.url).searchParams.get('clen')) || 0; } catch { return 0; }
   }
 
-  async function probeRelayAudio(url) {
+  async function probeRelayAudio(url, timeoutMs) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3500);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let reader;
     try {
       const response = await fetch(url, { headers: { Range: 'bytes=0-31' }, cache: 'no-store', signal: ctrl.signal });
@@ -2197,9 +2197,19 @@
           ].filter(Boolean);
           // Algunos vídeos solo se ofrecen como segmentos SABR (página del
           // companion con captcha): eso no se puede reproducir con <audio>.
-          const fmt = ordered.find((f) => f.url !== rejectedUrl && isPlayableRelayUrl(f.url));
-          if (!fmt) throw new Error('la instancia no entrega un archivo de audio');
-          if (!await probeRelayAudio(fmt.url)) throw new Error('la URL no entregó audio reproducible');
+          const candidates = ordered.filter((f) => f.url !== rejectedUrl && isPlayableRelayUrl(f.url));
+          const [first] = candidates;
+          if (!first) throw new Error('la instancia no entrega un archivo de audio');
+          const second = candidates.find((f) => f.url !== first.url);
+          // Un fallo de AAC 128 no descarta la pista si el mismo relay tiene AAC 48.
+          // Los dos intentos comparten el presupuesto de la antigua prueba única.
+          let fmt = first;
+          if (!await probeRelayAudio(first.url, second ? 2200 : 3500)) {
+            if (!second || !await probeRelayAudio(second.url, 1300)) {
+              throw new Error('la URL no entregó audio reproducible');
+            }
+            fmt = second;
+          }
 
           const signedExpiry = Number(new URL(fmt.url, window.location.href).searchParams.get('expire')) * 1000;
           const source = {

@@ -36,11 +36,32 @@ struct AudioSource {
 // Resolución, formato y caducidad son independientes del reproductor. Las
 // peticiones salen del dispositivo que consumirá el audio, sin CORS del WKWebView.
 actor AudioSourceResolver {
+    private struct PlayerProfile {
+        let name: String
+        let version: String
+        let model: String
+        let osName: String
+        let osVersion: String
+        let userAgent: String
+
+        static let visionOS = PlayerProfile(
+            name: "VISIONOS", version: "1.02", model: "RealityDevice14,1",
+            osName: "visionOS", osVersion: "25.6.0.23O471",
+            userAgent: "com.google.visionos.youtube/1.02(RealityDevice14,1; U; CPU visionOS 25_6_0 like Mac OS X; US)"
+        )
+        static let iOS = PlayerProfile(
+            name: "IOS", version: "20.10.4", model: "iPhone16,2",
+            osName: "iPhone", osVersion: "18.3.2.22D82",
+            userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"
+        )
+    }
+
     static let backend = URL(string: "https://freesong-pied.vercel.app")!
     private let session: URLSession
     private var cache: [String: AudioSource] = [:]
     private var relays = [URL(string: "https://yt.chocolatemoo53.com")!]
     private var loadedRelays = false
+    private var visionVisitor: (value: String, expires: Date)?
 
     init(session providedSession: URLSession? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
@@ -150,16 +171,38 @@ actor AudioSourceResolver {
     // Resolver y consumir desde la misma conexión evita depender de la IP de
     // Vercel. Solo se admiten URLs públicas que entreguen bytes de audio reales.
     private func resolveOnDevice(_ track: AudioTrack, quality: String) async -> AudioSource? {
+        for profile in [PlayerProfile.visionOS, .iOS] {
+            if Task.isCancelled { return nil }
+            if let source = await resolveWithPlayer(track, quality: quality, profile: profile) {
+                return source
+            }
+        }
+        return nil
+    }
+
+    private func resolveWithPlayer(_ track: AudioTrack, quality: String, profile: PlayerProfile) async -> AudioSource? {
         do {
             var request = URLRequest(url: URL(string: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false")!)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)", forHTTPHeaderField: "User-Agent")
+            request.setValue(profile.userAgent, forHTTPHeaderField: "User-Agent")
+            var client = ["clientName": profile.name, "clientVersion": profile.version,
+                          "deviceMake": "Apple", "deviceModel": profile.model,
+                          "osName": profile.osName, "osVersion": profile.osVersion]
+            if profile.name == "VISIONOS" {
+                client["platform"] = "MOBILE"
+                client["clientScreen"] = "WATCH"
+                request.url = URL(string: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false")!
+                request.setValue("2", forHTTPHeaderField: "X-Goog-Api-Format-Version")
+                guard let visitor = try await anonymousVisionVisitor(request, client: client) else { return nil }
+                client["visitorData"] = visitor
+            } else {
+                client["hl"] = "es"
+                client["gl"] = "US"
+            }
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "videoId": track.id,
-                "context": ["client": ["clientName": "IOS", "clientVersion": "20.10.4",
-                                        "deviceMake": "Apple", "deviceModel": "iPhone16,2",
-                                        "osName": "iPhone", "osVersion": "18.3.2.22D82", "hl": "es", "gl": "US"]]
+                "context": ["client": client]
             ])
             let (data, response) = try await session.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
@@ -167,8 +210,12 @@ actor AudioSourceResolver {
                   let status = value["playabilityStatus"] as? [String: Any], status["status"] as? String == "OK",
                   let streaming = value["streamingData"] as? [String: Any] else { return nil }
             let details = value["videoDetails"] as? [String: Any] ?? [:]
+            let returnedId = details["videoId"] as? String
+            if let returnedId, returnedId != track.id { return nil }
             let seconds = Double(String(describing: details["lengthSeconds"] ?? "")) ?? 0
-            if seconds > 0 && track.duration > 0 && abs(seconds - track.duration) > max(12, track.duration * 0.07) { return nil }
+            // La identidad exacta prevalece si la duración de la biblioteca está desactualizada.
+            if returnedId == nil && seconds > 0 && track.duration > 0 &&
+                abs(seconds - track.duration) > max(12, track.duration * 0.07) { return nil }
             let formats = (streaming["adaptiveFormats"] as? [[String: Any]] ?? []) + (streaming["formats"] as? [[String: Any]] ?? [])
             var tried = Set<String>()
             for itag in [quality, "140", "139", "141", "18"] where tried.insert(itag).inserted {
@@ -178,8 +225,54 @@ actor AudioSourceResolver {
                       await playable(url) else { continue }
                 return AudioSource(url: url, videoId: track.id, origin: "youtube", expires: Date().addingTimeInterval(10 * 60))
             }
+            if let raw = streaming["hlsManifestUrl"] as? String, let url = URL(string: raw),
+               let manifest = await probeHLSManifest(url) {
+                return AudioSource(url: manifest, videoId: track.id, origin: "youtube-hls",
+                                   expires: Date().addingTimeInterval(10 * 60))
+            }
         } catch { return nil }
         return nil
+    }
+
+    private func anonymousVisionVisitor(_ playerRequest: URLRequest, client: [String: String]) async throws -> String? {
+        if let visitor = visionVisitor, visitor.expires > Date() { return visitor.value }
+        var request = playerRequest
+        request.url = URL(string: "https://youtubei.googleapis.com/youtubei/v1/visitor_id?prettyPrint=false")!
+        request.timeoutInterval = 2.5
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["context": ["client": client]])
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let context = body["responseContext"] as? [String: Any],
+              let value = context["visitorData"] as? String, !value.isEmpty, value.utf8.count <= 2048 else { return nil }
+        // Identificador anónimo en memoria para resolver siguientes pistas.
+        visionVisitor = (value, Date().addingTimeInterval(10 * 60))
+        return value
+    }
+
+    private func isTrustedManifestURL(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host?.lowercased(),
+              url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return false }
+        return host == "googlevideo.com" || host.hasSuffix(".googlevideo.com")
+    }
+
+    private func probeHLSManifest(_ url: URL) async -> URL? {
+        guard isTrustedManifestURL(url) else { return nil }
+        do {
+            try Task.checkCancellation()
+            let (bytes, response) = try await session.bytes(for: URLRequest(url: url))
+            defer { bytes.task.cancel() }
+            guard let response = response as? HTTPURLResponse, [200, 206].contains(response.statusCode),
+                  let finalURL = response.url, isTrustedManifestURL(finalURL) else { return nil }
+            // Solo hace falta leer la primera línea. AVPlayer se ocupa de variantes y segmentos.
+            var iterator = bytes.makeAsyncIterator()
+            for byte in "#EXTM3U".utf8 {
+                guard try await iterator.next() == byte else { return nil }
+            }
+            var newline = try await iterator.next()
+            if newline == 13 { newline = try await iterator.next() }
+            return newline == 10 ? finalURL : nil
+        } catch { return nil }
     }
 
     private func candidate(_ id: String, base: URL, track: AudioTrack, quality: String) async -> AudioSource? {

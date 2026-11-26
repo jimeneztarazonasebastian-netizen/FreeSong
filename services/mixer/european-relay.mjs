@@ -54,18 +54,25 @@ async function resolveAudio(id, relay, signal) {
     }
     const data = await response.json();
     if (data?.videoId !== id || !Array.isArray(data.adaptiveFormats)) return { issue: 'metadata_format' };
+    let mediaIssue;
+    const attemptedUrls = new Set();
     for (const itag of ['140', '139']) {
       const format = data.adaptiveFormats.find(f => String(f?.itag) === itag);
       const url = mediaUrl(format?.url, relay);
-      if (!url || url.origin !== relay.origin) continue;
+      if (!url || url.origin !== relay.origin || attemptedUrls.has(url.href)) continue;
+      attemptedUrls.add(url.href);
       stage = 'media';
       const issue = await probeAudio(url, relay, signal);
-      if (issue) return { issue };
+      if (issue === 'media_429') return { issue };
+      if (issue) {
+        mediaIssue ??= issue;
+        continue;
+      }
       const seconds = Number(url.searchParams.get('dur'));
       const duration = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 600) : null;
       return { kind: relay.kind, url: url.href, duration };
     }
-    return { issue: 'metadata_no_aac' };
+    return { issue: mediaIssue ?? 'metadata_no_aac' };
   } catch (error) {
     return { issue: `${stage}_${error.name === 'TimeoutError' ? 'timeout' : 'unavailable'}` };
   }

@@ -37,10 +37,15 @@ try {
       if (url.pathname === '/api/v1/search') return json(route, [{ videoId: 'recovery-alias', title: track.title, author: track.artist, lengthSeconds: 20 }]);
       if (url.pathname.startsWith('/api/v1/videos/')) {
         const id = url.pathname.split('/').at(-1);
-        return json(route, { adaptiveFormats: [{ itag: '140', mimeType: 'audio/mp4', url: `${url.origin}/audio/${id}.m4a` }] });
+        const formats = [{ itag: '140', mimeType: 'audio/mp4', url: `${url.origin}/audio/${id}.m4a` }];
+        if (url.origin === primaryRelay && id === track.id) {
+          formats.push({ itag: '139', mimeType: 'audio/mp4', url: `${url.origin}/audio/${id}-aac48.m4a` });
+        }
+        return json(route, { adaptiveFormats: formats });
       }
       if (url.origin === primaryRelay && url.pathname.startsWith('/audio/')) {
-        checkedPrimaryAudio = request.headers().range === 'bytes=0-31';
+        if (url.pathname.endsWith('-aac48.m4a') && !failed) return audio(route);
+        checkedPrimaryAudio ||= request.headers().range === 'bytes=0-31';
         return route.fulfill({ status: 200, contentType: 'text/html', body: '<html>blocked</html>' });
       }
       if (url.pathname.includes('recovery-alias.m4a')) { aliasRequested = true; return audio(route); }
@@ -52,9 +57,8 @@ try {
   await page.locator('[data-nav="search"]').first().click();
   await page.locator('#searchInput').fill('recuperacion');
   await page.locator('#searchResultsList [data-search-idx]').first().click();
-  await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a => !a.paused && a.currentTime > 0.7 && a.src.includes('/audio/recovery-1.m4a')));
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a => !a.paused && a.currentTime > 0.7 && a.src.includes('/audio/recovery-1-aac48.m4a')));
   assert.equal(checkedPrimaryAudio, true, 'Los metadatos válidos no bastan si el relay no entrega audio');
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll('audio')].some(a => !a.paused && a.src.startsWith('https://yt.chocolatemoo53.com/'))), true);
   failed = true;
   await page.evaluate(() => Array.from(document.querySelectorAll('audio')).find(a => !a.paused && a.currentTime > 0.5).dispatchEvent(new Event('error')));
   await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a => !a.paused && a.currentTime > 0.5 && a.src.includes('recovery-alias.m4a')), null, { timeout: 22000 });
@@ -62,5 +66,5 @@ try {
   const report = await page.evaluate(() => window.FreeSongDiag.report());
   assert.ok(report.events.some(event => event.name === 'relay-alt' && event.data.videoId === 'recovery-alias'));
   assert.deepEqual(errors, []);
-  console.log('RECUPERACIÓN RELAY OK: 403 + proxy 502 → otra publicación de la misma canción; sin repetir el URL roto');
+  console.log('RECUPERACIÓN RELAY OK: AAC alternativo de la misma pista; si falla el relay y el proxy, usa otra publicación verificada');
 } finally { await browser?.close(); server.kill(); }

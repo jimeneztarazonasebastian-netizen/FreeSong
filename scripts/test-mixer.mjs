@@ -12,10 +12,15 @@ async function verifyMixerRelays() {
   const relay = 'https://eu.yt.chocolatemoo53.com';
   const usRelay = 'https://yt.chocolatemoo53.com';
   const media = relay + '/videoplayback?dur=321.326&sig=test-only-signature';
+  const alternativeMedia = relay + '/videoplayback?dur=321.327&sig=test-only-alternative';
   const usMedia = usRelay + '/videoplayback?dur=241.5&sig=test-only-signature';
   const companion = 'https://eu.yt-comp5.chocolatemoo53.com/companion/videoplayback?sig=test-only-signature';
   const usCompanion = 'https://yt-comp5.chocolatemoo53.com/companion/videoplayback?sig=test-only-signature';
   const metadata = (videoId, url = media) => Response.json({ videoId, adaptiveFormats: [{ itag: '140', url }] });
+  const metadataWithAlternative = () => Response.json({
+    videoId: trackId,
+    adaptiveFormats: [{ itag: '139', url: alternativeMedia }, { itag: '140', url: media }]
+  });
   const redirect = location => new Response(null, { status: 302, headers: { Location: location } });
   const forbidden = () => new Response('test-only-upstream-message', { status: 403 });
   const mp4 = Buffer.alloc(1024);
@@ -40,7 +45,7 @@ async function verifyMixerRelays() {
   }
 
   try {
-    const result = await resolveFrom(trackId, metadata(trackId), redirect(companion), audio());
+    const result = await resolveFrom(trackId, metadataWithAlternative(), redirect(companion), audio());
     assert.deepEqual(result, { kind: 'relay-eu', url: media, duration: 321.326 });
     assert.deepEqual(requests.map(request => request.url), [relay + '/api/v1/videos/' + trackId + '?local=true', media, companion]);
     assert.equal(requests[0].options.redirect, 'error');
@@ -48,6 +53,17 @@ async function verifyMixerRelays() {
       assert.equal(options.redirect, 'manual');
       assert.deepEqual(options.headers, { 'User-Agent': relayUserAgent, Origin: relayPlaybackOrigin, Range: 'bytes=0-1023' });
     }
+
+    assert.deepEqual(await resolveFrom(trackId, metadataWithAlternative(), forbidden(), audio()),
+      { kind: 'relay-eu', url: alternativeMedia, duration: 321.327 });
+    assert.deepEqual(requests.map(request => request.url), [relay + '/api/v1/videos/' + trackId + '?local=true', media, alternativeMedia]);
+    assert.equal(requests[2].options.signal, requests[1].options.signal);
+    assert.equal(requests[2].options.headers.Range, 'bytes=0-1023');
+    assert.deepEqual(await resolveFrom(trackId, metadataWithAlternative(), new Response(null, { status: 429 }), forbidden()),
+      { issue: 'media_429' });
+    assert.deepEqual(requests.map(request => request.url), [
+      relay + '/api/v1/videos/' + trackId + '?local=true', media, usRelay + '/api/v1/videos/' + trackId + '?local=true'
+    ]);
 
     assert.deepEqual(await resolveFrom(trackId, metadata(fallbackTrackId), forbidden()), { issue: 'metadata_format' });
     assert.equal(requests.length, 2);

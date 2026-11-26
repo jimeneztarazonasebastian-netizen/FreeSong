@@ -131,15 +131,15 @@ Trabajo pendiente, por orden:
 
 ## 3. Prioridad P1 — fiabilidad del IPA y de la PWA
 
-### 3.1 Fallback HLS en el resolver nativo
+### 3.1 Resolución de audio AAC y HLS
 
-`resolveOnDevice` solo acepta `audio/mp4` con `url`. YouTube a veces devuelve
-`hlsManifestUrl` y `AVPlayer` reproduce HLS de forma nativa.
-
-- Cambio: si no hay formato AAC con URL, usar `hlsManifestUrl` como fuente.
-- Verificado: algunos vídeos sí traen HLS; otros no. Es una mejora parcial, no
-  una solución universal.
-- Prueba: canción con HLS + pausa/seek + pantalla bloqueada.
+- El IPA prueba audio AAC y, si la respuesta lo incluye, valida el manifiesto
+  HLS para reproducirlo con `AVPlayer`. La resolución se ejecuta en el
+  dispositivo, como en el [port comunitario de SimpMusic para iOS](https://github.com/maxrave-dev/SimpMusic/issues/2939).
+- La PWA y el mezclador pueden recuperar el audio de la misma canción con
+  otro formato AAC cuando falla el primero.
+- Pendiente en un iPhone físico: probar una pista que arranque por HLS,
+  pausar, buscar dentro de la pista y bloquear la pantalla.
 
 ### 3.2 Sesión de audio y rutas
 
