@@ -491,22 +491,24 @@ try {
     { id: 'TestAudio01', title: 'Pista nativa inicial', artist: 'Prueba', duration: 8 },
     { id: 'TestAudio02', title: 'Pista nativa siguiente', artist: 'Prueba', duration: 8 }
   ];
+  const unsuitableThird = { id: 'ThirdTrack0', title: 'Tercera sin duración', artist: 'Prueba', duration: 0 };
   const failedProbeTrack = { id: 'DeadProbe01', title: 'Pista de precarga caída', artist: 'Prueba', duration: 8 };
   for (const mode of ['cola', 'radio', 'fallo']) {
     const nativePage = await nativeContext.newPage();
-    const queue = mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
+    const mixTracks = mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
+    const queue = mode === 'cola' ? [...mixTracks, unsuitableThird] : mixTracks;
     const sessionRequests = [];
     const errors = [];
     let releaseMedia;
     const mediaReady = new Promise(resolve => { releaseMedia = resolve; });
     nativePage.on('pageerror', error => errors.push(error.message));
     try {
-      await nativePage.addInitScript(({ queue, radio }) => {
+      await nativePage.addInitScript(({ queue, radio, position }) => {
         Object.defineProperty(navigator, 'standalone', { value: true });
         localStorage.setItem('fs_crossfade', 'true');
         localStorage.setItem('fs_session_v2', JSON.stringify({
           queue, currentIndex: 0, repeat: 'off', autoplay: radio, crossfade: true,
-          crossfadeDuration: 2, savedAt: Date.now()
+          crossfadeDuration: 2, position, savedAt: Date.now()
         }));
         const canPlayType = HTMLMediaElement.prototype.canPlayType;
         HTMLMediaElement.prototype.canPlayType = function (type) {
@@ -540,7 +542,7 @@ try {
           });
           return play.call(this);
         };
-      }, { queue, radio: mode === 'radio' });
+      }, { queue, radio: mode === 'radio', position: mode === 'fallo' ? 3 : 0 });
       await nativePage.route('https://**/*', route => route.abort());
       await nativePage.route(wakeUrl, route =>
         route.fulfill({ headers: { 'Access-Control-Allow-Origin': '*' }, json: { ok: true } }));
@@ -588,7 +590,7 @@ try {
       await nativePage.locator('#miniPlayBtn').click();
       if (mode === 'cola') {
         assert.equal(await nativePage.evaluate(() => window.nativePlayCalls[0]?.id), 'queueMixAudio',
-          'El HEAD 503 de otra pista no debe bloquear el HLS de la cola actual');
+          'El HEAD 503 ajeno y una tercera pista sin duración no deben bloquear el HLS de las dos primeras');
       }
       const request = await startRequest;
       if (request instanceof Error) throw request;
@@ -596,9 +598,14 @@ try {
       const id = url.searchParams.get('session');
       assert.match(id, /^[a-f0-9]{48}$/);
       assert.equal(request.resourceType(), 'media', 'El elemento de audio debe solicitar el HLS directamente');
-      assert.equal(url.searchParams.get('ids'), queue.map(track => track.id).join(','));
+      assert.equal(url.searchParams.get('ids'), mixTracks.map(track => track.id).join(','),
+        'Una tercera pista sin duración no debe impedir el fundido entre las dos primeras');
       assert.equal(url.searchParams.get('fade'), '2');
       assert.equal(url.searchParams.get('radio'), mode === 'radio' ? '1' : null);
+      assert.equal(url.searchParams.get('startAt'), mode === 'fallo' ? '3' : null);
+      if (mode !== 'radio') {
+        assert.deepEqual(JSON.parse(url.searchParams.get('metadata')), nativeTracks);
+      }
       const expectedPlay = { id: 'queueMixAudio', src: request.url(), muted: false, trustedClick: true, activated: true };
       assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay],
         'El toque real inicia el HLS audible sin esperar al servidor ni reproducir una pista aparte');
@@ -609,7 +616,7 @@ try {
         await nativePage.waitForFunction(id => {
           const state = window.FreeSongDiag.report().playback;
           return state.engine === 'html' && state.track?.id === id && [...document.querySelectorAll('audio')].some(audio =>
-            audio.src.includes('/api/stream') && !audio.paused && audio.currentTime > 0.1);
+            audio.src.includes('/api/stream') && !audio.paused && audio.currentTime >= 3);
         }, queue[0].id);
         assert.deepEqual(sessionRequests, [['DELETE', id]]);
       } else {

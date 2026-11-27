@@ -105,7 +105,16 @@ async function audioSource(track) {
     } catch { /* El respaldo se valida posteriormente por el decodificador. */ }
   }
   const source = new URL('/api/stream', backend);
-  source.search = new URLSearchParams({ id: track.id, title: track.title, artist: track.artist || '', itag: '140' });
+  source.search = new URLSearchParams({ id: track.id, itag: '140', audio: '1' });
+  // Solo permitimos buscar otra publicación cuando sabemos qué grabación
+  // esperar. Así el proxy puede contrastar título, artista y duración.
+  const seconds = Number(track.duration);
+  const artist = track.artist?.trim();
+  if (track.title.trim() && artist && artist !== 'Artista' && Number.isFinite(seconds) && seconds > 0 && seconds <= 600) {
+    source.searchParams.set('title', track.title);
+    source.searchParams.set('artist', artist);
+    source.searchParams.set('dur', String(Math.round(seconds)));
+  }
   return { kind: 'proxy', url: source.href, relayIssue };
 }
 

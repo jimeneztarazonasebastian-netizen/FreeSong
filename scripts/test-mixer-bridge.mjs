@@ -48,7 +48,13 @@ try {
   assert.equal((await call('GET', null, null, id)).code, 502);
   console.log('MIXER BRIDGE OK: clave privada, origen, rutas, configuración y errores');
 
-  const native = { nativeStart: '1', ids: 'bfl76Sr-Rsk,4oxWnLQZnpk', fade: '6' };
+  const native = {
+    nativeStart: '1', ids: 'bfl76Sr-Rsk,4oxWnLQZnpk', fade: '6',
+    metadata: JSON.stringify([
+      { id: 'bfl76Sr-Rsk', title: 'Stereo Love', artist: 'Edward Maya', duration: 321 },
+      { id: 'mismatch-id', title: 'Ignorar', artist: 'Otro', duration: 240 }
+    ])
+  };
   const addresses = [];
   let checks = 0;
   let creations = 0;
@@ -63,6 +69,8 @@ try {
       const request = JSON.parse(options.body);
       assert.equal(request.id, id);
       assert.deepEqual(request.tracks.map(track => track.id), ['bfl76Sr-Rsk', '4oxWnLQZnpk']);
+      assert.deepEqual(request.tracks.map(({ title, artist, duration }) => [title, artist, duration]),
+        [['Stereo Love', 'Edward Maya', 321], ['', '', null]]);
       assert.equal(request.crossfade, 6);
       assert.equal(request.editable, true);
       return Response.json({ id }, { status: 202 });
@@ -77,6 +85,7 @@ try {
   assert.equal((await call('GET', null, null, id, native, { referer: 'https://another.example/' })).code, 403);
   assert.equal((await call('GET', null, null, id, { ...native, ids: 'bfl76Sr-Rsk,https://unsafe.example' })).code, 400);
   assert.equal((await call('GET', null, null, id, { ...native, ids: 'bfl76Sr-Rsk' })).code, 400);
+  assert.equal((await call('GET', null, null, id, { ...native, startAt: '181' })).code, 400);
   assert.equal(addresses.length, 0);
   const prod = 'https://freesong-pied.vercel.app';
   let now = Date.now();
@@ -111,6 +120,20 @@ try {
   } finally {
     clock.mock.restore();
   }
+  let resumePolls = 0;
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url).pathname;
+    if (path === '/health') return Response.json({ ok: true, nativeStart: true });
+    if (path === '/sessions') {
+      assert.equal(JSON.parse(options.body).startAt, 43);
+      return Response.json({ id }, { status: 202 });
+    }
+    const startAt = ++resumePolls === 1 ? 0 : 43;
+    return new Response(`#EXTM3U\n#EXT-X-START:TIME-OFFSET=${startAt},PRECISE=YES\n#EXTINF:4.0,\nsegment-00000.ts\n`,
+      { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  };
+  assert.equal((await call('GET', null, null, id, { ...native, startAt: '43' })).code, 307);
+  assert.equal(resumePolls, 2, 'No debe empezar desde cero mientras se prepara la posición guardada');
   assert.equal((await call('POST', prod, { id, tracks: [] })).code, 400);
   globalThis.fetch = async url => {
     assert.equal(new URL(url).pathname, '/health', 'No debe crearse una sesión en un Render antiguo');

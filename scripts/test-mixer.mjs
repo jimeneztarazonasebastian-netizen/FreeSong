@@ -13,6 +13,7 @@ async function verifyMixerRelays() {
   const usRelay = 'https://yt.chocolatemoo53.com';
   const media = relay + '/videoplayback?dur=321.326&sig=test-only-signature';
   const alternativeMedia = relay + '/videoplayback?dur=321.327&sig=test-only-alternative';
+  const opusMedia = relay + '/videoplayback?sig=test-only-opus';
   const usMedia = usRelay + '/videoplayback?dur=241.5&sig=test-only-signature';
   const companion = 'https://eu.yt-comp5.chocolatemoo53.com/companion/videoplayback?sig=test-only-signature';
   const usCompanion = 'https://yt-comp5.chocolatemoo53.com/companion/videoplayback?sig=test-only-signature';
@@ -21,12 +22,27 @@ async function verifyMixerRelays() {
     videoId: trackId,
     adaptiveFormats: [{ itag: '139', url: alternativeMedia }, { itag: '140', url: media }]
   });
+  const metadataWithOpus = () => Response.json({
+    videoId: trackId, lengthSeconds: 321,
+    adaptiveFormats: [{ itag: '251', url: opusMedia }, { itag: '140', url: media }]
+  });
   const redirect = location => new Response(null, { status: 302, headers: { Location: location } });
   const forbidden = () => new Response('test-only-upstream-message', { status: 403 });
   const mp4 = Buffer.alloc(1024);
   mp4.write('ftyp', 4);
   const audio = () => new Response(mp4, {
     status: 206, headers: { 'Content-Type': 'audio/mp4', 'Content-Range': 'bytes 0-1023/5202363' }
+  });
+  const opus = () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(Uint8Array.of(0x1a, 0x45));
+      const tail = new Uint8Array(1022);
+      tail.set([0xdf, 0xa3]);
+      controller.enqueue(tail);
+      controller.close();
+    }
+  }), {
+    status: 206, headers: { 'Content-Type': 'audio/webm; codecs=opus', 'Content-Range': 'bytes 0-1023/51234' }
   });
 
   let requests;
@@ -59,6 +75,30 @@ async function verifyMixerRelays() {
     assert.deepEqual(requests.map(request => request.url), [relay + '/api/v1/videos/' + trackId + '?local=true', media, alternativeMedia]);
     assert.equal(requests[2].options.signal, requests[1].options.signal);
     assert.equal(requests[2].options.headers.Range, 'bytes=0-1023');
+    assert.deepEqual(await resolveFrom(trackId, metadataWithOpus(), audio()),
+      { kind: 'relay-eu', url: media, duration: 321.326 });
+    assert.deepEqual(await resolveFrom(trackId, metadataWithOpus(), forbidden(), opus()),
+      { kind: 'relay-eu', url: opusMedia, duration: 321 });
+    assert.deepEqual(requests.map(request => request.url), [
+      relay + '/api/v1/videos/' + trackId + '?local=true', media, opusMedia
+    ]);
+    const singleFormat = (itag, url) => Response.json({
+      videoId: trackId, adaptiveFormats: [{ itag, url }]
+    });
+    assert.deepEqual(await resolveFrom(trackId, singleFormat('141', media), audio()),
+      { kind: 'relay-eu', url: media, duration: 321.326 });
+    assert.deepEqual(await resolveFrom(trackId, singleFormat('250', opusMedia), audio(), forbidden()),
+      { issue: 'media_format' });
+    const disguisedHtml = new Response('<!doctype html><p>Forbidden</p>', {
+      status: 206, headers: { 'Content-Type': 'audio/webm', 'Content-Range': 'bytes 0-1023/51234' }
+    });
+    assert.deepEqual(await resolveFrom(trackId, singleFormat('249', opusMedia), disguisedHtml, forbidden()),
+      { issue: 'media_format' });
+    const impossibleRange = new Response(mp4, {
+      status: 206, headers: { 'Content-Type': 'audio/mp4', 'Content-Range': 'bytes 0-1023/512' }
+    });
+    assert.deepEqual(await resolveFrom(trackId, metadata(trackId), impossibleRange, forbidden()),
+      { issue: 'media_format' });
     assert.deepEqual(await resolveFrom(trackId, metadataWithAlternative(), new Response(null, { status: 429 }), forbidden()),
       { issue: 'media_429' });
     assert.deepEqual(requests.map(request => request.url), [
@@ -90,7 +130,7 @@ async function verifyMixerRelays() {
     fetchStub.mock.restore();
     for (const stub of logStubs) stub.mock.restore();
   }
-  console.log('MIXER RELAY OK: AAC por rango, respaldo del mismo ID y redirecciones validadas sin datos privados');
+  console.log('MIXER RELAY OK: AAC y Opus del mismo ID, cuerpo por rango y redirecciones validadas');
 }
 
 await verifyMixerRelays();
@@ -113,14 +153,17 @@ assert.equal(delayed.published, 21);
 delayed.startedAt = 1000;
 assert.equal(publishManifest(delayed, encoded, 13_000).includes('segment-00023.ts'), true);
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-const tone = (frequency, duration = 5) => execFileSync(ffmpeg,
-  ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', 'wav', 'pipe:1'],
+const tone = (frequency, duration = 5, container = 'wav') => execFileSync(ffmpeg,
+  ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', container, 'pipe:1'],
   { maxBuffer: 4 * 1024 * 1024 });
-const waves = { one: tone(440), two: tone(880), long: tone(440, 30), three: tone(660) };
+const fixtures = { one: tone(440), two: tone(880, 5, 'webm'), long: tone(440, 30), three: tone(660) };
+const upstreamRequests = [];
 const upstream = http.createServer((req, res) => {
-  const id = new URL(req.url, 'http://localhost').searchParams.get('id');
-  res.writeHead(200, { 'Content-Type': 'audio/wav' });
-  res.end(waves[id]);
+  const query = new URL(req.url, 'http://localhost').searchParams;
+  upstreamRequests.push(Object.fromEntries(query));
+  const id = query.get('id');
+  res.writeHead(200, { 'Content-Type': id === 'two' ? 'audio/webm' : 'audio/wav' });
+  res.end(fixtures[id]);
 });
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const base = 'http://127.0.0.1:5249';
@@ -136,7 +179,7 @@ try {
   const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
   assert.equal((await fetch(base + '/sessions', { method: 'POST', headers, body: '{"tracks":[]}' })).status, 400);
   const created = await fetch(base + '/sessions', { method: 'POST', headers,
-    body: JSON.stringify({ tracks: [{ id: 'one', title: 'One' }, { id: 'two', title: 'Two' }], crossfade: 2 }) });
+    body: JSON.stringify({ tracks: [{ id: 'one', title: 'One', artist: 'Singer', duration: 5 }, { id: 'two', title: 'Two' }], crossfade: 2 }) });
   assert.equal(created.status, 202);
   const session = await created.json();
   let state;
@@ -146,6 +189,10 @@ try {
     await delay(100);
   }
   assert.equal(state.status, 'complete');
+  assert.deepEqual(upstreamRequests.slice(0, 2), [
+    { id: 'one', itag: '140', audio: '1', title: 'One', artist: 'Singer', dur: '5' },
+    { id: 'two', itag: '140', audio: '1' }
+  ]);
   const manifest = await (await fetch(base + session.playlist)).text();
   assert.match(manifest, /#EXT-X-ENDLIST/);
   const total = [...manifest.matchAll(/#EXTINF:([0-9.]+)/g)].reduce((n, m) => n + Number(m[1]), 0);

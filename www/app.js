@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.54 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.55 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.54';
+  const APP_VERSION = '3.9.55';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -639,8 +639,8 @@
       .then((r) => r.json())
       .then((data) => {
         if (data.tracks && data.tracks.length > 0) {
-          const match = data.tracks[0];
-          if (match.duration && match.duration > 0) {
+          const match = data.tracks.find((item) => item?.id === track.id);
+          if (match?.duration > 0) {
             track.duration = match.duration;
             track.durationSeconds = match.duration;
             track.durationText = match.durationText;
@@ -2325,63 +2325,56 @@
   const relayAltPending = new Map();
   function resolveRelayAlternative(track) {
     if (!track || !track.id || !track.title) return Promise.resolve(null);
-    const cacheKey = `${track.id}:${S.audioQuality || ''}`;
+    const quality = S.audioQuality;
+    const cacheKey = `${track.id}:${quality || ''}`;
     const existing = relaySources.get(cacheKey);
     if (existing && existing.videoId !== track.id && existing.expires > Date.now()) return Promise.resolve(existing);
     if (relayAltPending.has(cacheKey)) return relayAltPending.get(cacheKey);
 
     const task = (async () => {
       const query = `${track.title} ${track.artist || ''}`.trim();
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4500);
-      let list = [];
-      try {
-        for (const base of loadRelayBases()) {
-          try {
-            const res = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {
-              headers: { Accept: 'application/json' },
-              cache: 'no-store',
-              signal: ctrl.signal
-            });
-            if (!res.ok) continue;
-            const data = await res.json();
-            if (Array.isArray(data) && data.length) {
-              list = data;
-              break;
-            }
-          } catch {}
-        }
-      } finally {
-        clearTimeout(timer);
-      }
-
       const duration = Number(track.durationSeconds || track.duration || 0);
-      const candidates = list
-        .filter((item) => item && item.videoId && item.videoId !== track.id)
-        .map((item) => ({
-          id: item.videoId,
-          title: String(item.title || ''),
-          artist: String(item.author || ''),
-          seconds: Number(item.lengthSeconds) || 0
-        }))
-        .filter((item) => isSameSongRelayCandidate(item.title, item.artist, track.title, track.artist, item.seconds, duration))
-        .sort((a, b) => {
-          const da = duration > 0 ? Math.abs(a.seconds - duration) : 0;
-          const db = duration > 0 ? Math.abs(b.seconds - duration) : 0;
-          return da - db;
-        })
-        .slice(0, 3);
+      const bases = loadRelayBases().slice(0, 2);
+      const attempted = new Set();
+      for (const base of bases) {
+        if (attempted.size >= 3) break;
+        let list;
+        try {
+          const res = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+            signal: AbortSignal.timeout(4500 / bases.length)
+          });
+          if (!res.ok) continue;
+          list = await res.json();
+          if (!Array.isArray(list)) continue;
+        } catch { continue; }
 
-      for (const candidate of candidates) {
-        const source = await resolveRelaySource(candidate.id, S.audioQuality);
-        if (!source) continue;
-        source.videoId = candidate.id;
-        // Guárdala también bajo el id original: los siguientes cambios de pista
-        // la encontrarán sin repetir la búsqueda.
-        relaySources.set(cacheKey, source);
-        saveRelayDiskCacheSoon();
-        Diag.inc('alt');
-        return source;
+        // Una lista de búsqueda no basta: puede contener solo otras versiones.
+        const candidates = list
+          .filter((item) => typeof item?.videoId === 'string' && item.videoId && item.videoId !== track.id)
+          .map((item) => ({
+            id: item.videoId,
+            title: String(item.title || ''),
+            artist: String(item.author || ''),
+            seconds: Number(item.lengthSeconds) || 0
+          }))
+          .filter((item) => isSameSongRelayCandidate(item.title, item.artist, track.title, track.artist, item.seconds, duration))
+          .sort((a, b) => duration > 0 ? Math.abs(a.seconds - duration) - Math.abs(b.seconds - duration) : 0);
+
+        for (const candidate of candidates) {
+          if (attempted.has(candidate.id)) continue;
+          if (attempted.size >= 3) return null;
+          attempted.add(candidate.id);
+          const source = await resolveRelaySource(candidate.id, quality);
+          if (!source) continue;
+          source.videoId = candidate.id;
+          // Guárdala también bajo el id original para los cambios de pista.
+          relaySources.set(cacheKey, source);
+          saveRelayDiskCacheSoon();
+          Diag.inc('alt');
+          return source;
+        }
       }
       return null;
     })().finally(() => relayAltPending.delete(cacheKey));
@@ -3297,8 +3290,13 @@
   const isAudiusTrack = track => /^audius:[A-Za-z0-9]{1,32}$/.test(track?.id || '');
   const audiusStream = track => `https://api.audius.co/v1/tracks/${track.id.slice(7)}/stream?app_name=FreeSong`;
   const queueMixStatus = message => { $('queueMixStatus').textContent = message; };
-  const mixerTrack = ({ id, title, artist }) => ({ id, title, artist });
   const mixDuration = track => Number(track.durationSeconds || track.duration);
+  const mixerTrack = track => ({
+    id: track.id,
+    title: String(track.title || '').slice(0, 120),
+    artist: String(track.artist || '').slice(0, 120),
+    duration: mixDuration(track)
+  });
   const mixOffsets = (durations, fade) => durations.map((_, i) =>
     durations.slice(0, i).reduce((sum, duration) => sum + duration - fade, 0));
   const mixFade = () => Math.min(10, Math.max(1, Number(S.crossfadeDuration) || 6));
@@ -3439,20 +3437,28 @@
         !queueMixAudio.canPlayType('application/vnd.apple.mpegurl')) return false;
 
     const track = S.queue[index];
-    if (S.pendingResume?.id === track.id && S.pendingResume.seconds > 1) return false;
-    const tracks = S.queue.slice(index, index + 3);
-    const radio = tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
     const fade = mixFade();
+    const candidates = S.queue.slice(index, index + 3);
+    const unsuitable = candidates.findIndex((item) => {
+      const duration = mixDuration(item);
+      return isDownloaded(item.id) || !/^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/.test(item.id) ||
+        !Number.isFinite(duration) || duration <= fade || duration > 600;
+    });
+    const tracks = unsuitable === -1 ? candidates : candidates.slice(0, unsuitable);
+    const radio = candidates.length === 1 && tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
+    if (tracks.length < 2 && !radio) return false;
     const durations = tracks.map(mixDuration);
-    if ((tracks.length < 2 && !radio) || tracks.some(({ id }, i) => isDownloaded(id) ||
-        !/^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/.test(id) ||
-        !Number.isFinite(durations[i]) || durations[i] <= fade || durations[i] > 600)) return false;
+    const savedPosition = S.pendingResume?.id === track.id ? S.pendingResume.seconds : 0;
+    const startAt = savedPosition > 1 ? Math.floor(savedPosition) : 0;
+    if (startAt > 180 || (startAt > 0 && startAt >= durations[0] - fade - 1)) return false;
 
     const id = Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, '0')).join('');
     const query = new URLSearchParams({ session: id, ids: tracks.map(track => track.id).join(','), fade });
     if (radio) query.set('radio', '1');
+    else query.set('metadata', JSON.stringify(tracks.map(mixerTrack)));
+    if (startAt) query.set('startAt', String(startAt));
     const mix = { id, tracks, durations, offsets: mixOffsets(durations, fade), fade, part: 0,
-      active: true, editable: true, nativeLaunch: true, starting: true };
+      active: true, editable: true, nativeLaunch: true, starting: true, startAt };
     queueMix = mix;
     S.pendingResume = null;
     S.isPlaying = true;
@@ -3486,7 +3492,7 @@
   }
 
   function recoverFromNativeMix(mix, reason) {
-    const position = queueMixPosition();
+    const position = mix.starting ? Math.max(mix.startAt, queueMixPosition()) : queueMixPosition();
     const index = S.currentIndex;
     const track = S.queue[index];
     const resume = !userIntentionalPause;
@@ -3559,7 +3565,8 @@
       return false;
     };
     try {
-      if (mix.measuredFirst && Number.isFinite(player.duration) && Math.abs(player.duration - mix.durations[0]) > 3) return;
+      if (mix.measuredFirst && Number.isFinite(player.duration) &&
+          Math.abs(getEffectiveDuration(player, mix.tracks[0]) - mix.durations[0]) > 3) return;
       stage = 'seekable';
       queueMixAudio.muted = true;
       queueMixAudio.preload = 'auto';

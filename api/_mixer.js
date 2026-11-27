@@ -50,6 +50,19 @@ function launchTrack(track) {
   };
 }
 
+function nativeQueueTracks(ids, metadata) {
+  let entries = [];
+  if (metadata && metadata.length <= 2400) {
+    try {
+      const parsed = JSON.parse(metadata);
+      if (Array.isArray(parsed) && parsed.length === ids.length) entries = parsed;
+    } catch {}
+  }
+  // Los metadatos solo ayudan a identificar la grabación. Los IDs de la cola
+  // validada conservan el orden y no se sustituyen por los del JSON.
+  return ids.map((id, index) => launchTrack(entries[index]?.id === id ? entries[index] : { id }));
+}
+
 async function nativeRadioQueue(id, fade) {
   try {
     const { tracks } = await getRadioTracks(id, null, { timeoutMs: 3500, retries: 0 });
@@ -75,10 +88,11 @@ async function nativeMixerStart(req, res, url, key, id) {
   if (!nativeStartOriginAllowed(req.headers)) return reply(res, 403, { error: 'Origen no permitido' });
   const ids = (url.searchParams.get('ids') || '').split(',');
   const fade = Number(url.searchParams.get('fade'));
+  const startAt = Number(url.searchParams.get('startAt'));
   const radio = url.searchParams.get('radio') === '1';
   const validIds = radio ? ids.length === 1 && youtubeId.test(ids[0]) :
     ids.length >= 2 && ids.length <= 3 && ids.every(value => trackId.test(value));
-  if (!sessionId.test(id || '') || !validIds ||
+  if (!sessionId.test(id || '') || !validIds || !Number.isInteger(startAt) || startAt < 0 || startAt > 180 ||
       !Number.isFinite(fade) || fade < 1 || fade > 10) {
     return reply(res, 400, { error: 'Mezcla inválida' });
   }
@@ -98,7 +112,7 @@ async function nativeMixerStart(req, res, url, key, id) {
     ...options, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(timeout)])
   });
   const playlistPath = `/sessions/${id}/index.m3u8`;
-  const tracks = radio ? nativeRadioQueue(ids[0], fade) : ids.map(track => launchTrack({ id: track }));
+  const tracks = radio ? nativeRadioQueue(ids[0], fade) : nativeQueueTracks(ids, url.searchParams.get('metadata'));
   try {
     // The backend may be asleep. Wait here instead of relying on page JS after lock.
     for (;;) {
@@ -120,7 +134,7 @@ async function nativeMixerStart(req, res, url, key, id) {
     if (!queue) return reply(res, 502, { error: 'No se encontraron pistas compatibles para el crossfade.' });
     const created = await requestRender('/sessions', {
       method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, tracks: queue, crossfade: fade, editable: true, radio })
+      body: JSON.stringify({ id, tracks: queue, crossfade: fade, editable: true, radio, ...(startAt ? { startAt } : {}) })
     }, 12_000);
     const data = await created.json();
     if (created.status === 429) return reply(res, 429, { error: 'No hay espacio para preparar esta mezcla.' });
@@ -139,7 +153,9 @@ async function nativeMixerStart(req, res, url, key, id) {
         return reply(res, 502, { error: 'No se pudo preparar audio para la mezcla.' });
       }
       const manifest = await response.text();
-      if (manifest.startsWith('#EXTM3U') && /^#EXTINF:.*\r?\nsegment-\d{5}\.ts$/m.test(manifest)) {
+      const offset = /^#EXT-X-START:TIME-OFFSET=(\d+(?:\.\d+)?)(?:,|\r?$)/m.exec(manifest);
+      if (manifest.startsWith('#EXTM3U') && /^#EXTINF:.*\r?\nsegment-\d{5}\.ts$/m.test(manifest) &&
+          (!startAt || Number(offset?.[1]) === startAt)) {
         res.setHeader('Location', origin + playlistPath);
         return res.status(307).end();
       }

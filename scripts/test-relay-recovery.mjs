@@ -20,6 +20,8 @@ try {
   const context = await browser.newContext({ serviceWorkers: 'block', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148' });
   const page = await context.newPage();
   let failed = false, aliasRequested = false, checkedPrimaryAudio = false;
+  const aliasSearches = [];
+  const invalidAliasRequests = [];
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const json = (route, value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
@@ -34,9 +36,20 @@ try {
       return route.continue();
     }
     if (url.origin === primaryRelay || url.origin === relay) {
-      if (url.pathname === '/api/v1/search') return json(route, [{ videoId: 'recovery-alias', title: track.title, author: track.artist, lengthSeconds: 20 }]);
+      if (url.pathname === '/api/v1/search') {
+        aliasSearches.push(url.origin);
+        const alias = { title: track.title, author: track.artist, lengthSeconds: 20 };
+        if (url.origin === primaryRelay) {
+          return json(route, [
+            { ...alias, videoId: 'invalid-remix', title: `${track.title} (Remix)` },
+            { ...alias, videoId: 'invalid-artist', author: 'Otra persona' }
+          ]);
+        }
+        return json(route, [{ ...alias, videoId: 'recovery-alias' }]);
+      }
       if (url.pathname.startsWith('/api/v1/videos/')) {
         const id = url.pathname.split('/').at(-1);
+        if (id.startsWith('invalid-')) invalidAliasRequests.push(id);
         const formats = [{ itag: '140', mimeType: 'audio/mp4', url: `${url.origin}/audio/${id}.m4a` }];
         if (url.origin === primaryRelay && id === track.id) {
           formats.push({ itag: '139', mimeType: 'audio/mp4', url: `${url.origin}/audio/${id}-aac48.m4a` });
@@ -63,6 +76,8 @@ try {
   await page.evaluate(() => Array.from(document.querySelectorAll('audio')).find(a => !a.paused && a.currentTime > 0.5).dispatchEvent(new Event('error')));
   await page.waitForFunction(() => Array.from(document.querySelectorAll('audio')).some(a => !a.paused && a.currentTime > 0.5 && a.src.includes('recovery-alias.m4a')), null, { timeout: 22000 });
   assert.equal(aliasRequested, true);
+  assert.deepEqual([...new Set(aliasSearches)], [primaryRelay, relay], 'Un relay con versiones ajenas no impide buscar en el segundo');
+  assert.deepEqual(invalidAliasRequests, [], 'Solo se prueba audio de una grabación que coincide');
   const report = await page.evaluate(() => window.FreeSongDiag.report());
   assert.ok(report.events.some(event => event.name === 'relay-alt' && event.data.videoId === 'recovery-alias'));
   assert.deepEqual(errors, []);
