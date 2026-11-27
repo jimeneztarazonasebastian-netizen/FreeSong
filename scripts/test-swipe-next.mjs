@@ -201,16 +201,18 @@ async function run() {
       document.getElementById('tabQueueBtn').click();
     });
     const fourth = page.locator('[data-queue-idx]').filter({ hasText: 'Cancion crossfade 4' });
+    await page.waitForFunction(() => Math.abs(document.getElementById('fullPlayerSheet').getBoundingClientRect().top) < 1);
     await fourth.scrollIntoViewIfNeeded();
-    const box = await fourth.boundingBox();
     const input = await context.newCDPSession(page);
+    const box = await fourth.boundingBox();
     const x = Math.round(box.x + box.width * 0.34), y = Math.round(box.y + box.height / 2);
     await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
     for (const dx of [20, 40, 60, 90]) {
       await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx, y }] });
     }
     await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await page.waitForFunction(() => document.querySelector('[data-queue-idx]')?.textContent.includes('Cancion crossfade 4'));
+    await page.waitForFunction(() => document.getElementById('playerTitle')?.textContent.includes('Cancion crossfade 1') &&
+      document.querySelector('[data-queue-idx]')?.textContent.includes('Cancion crossfade 4'));
     assert.equal(await page.locator('[data-queue-idx]').count(), initial);
     assert.match((await state(page)).title, /Cancion crossfade 1/);
     await page.evaluate(() => {
