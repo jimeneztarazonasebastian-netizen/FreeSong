@@ -13,7 +13,9 @@ const key = process.env.MIXER_API_KEY;
 if (!key || key.length < 24) throw new Error('MIXER_API_KEY debe tener al menos 24 caracteres');
 const backend = process.env.AUDIO_BACKEND || 'https://freesong-pied.vercel.app';
 const sessions = new Map();
-let replacementInFlight = false;
+const maxContinuationTracks = 12;
+const maxContinuationSeconds = 45 * 60;
+let replacementInFlight = null;
 const authorized = req => {
   const a = Buffer.from(req.headers.authorization || '');
   const b = Buffer.from(`Bearer ${key}`);
@@ -32,6 +34,7 @@ async function dispose(id) {
   if (!session) return;
   sessions.delete(id);
   session.closed = true;
+  session.abort?.abort();
   await Promise.all([discardRender(session.render), discardRender(session.candidate)]);
 }
 const sweep = setInterval(() => {
@@ -41,11 +44,13 @@ const sweep = setInterval(() => {
 sweep.unref();
 
 const audiusId = /^audius:([A-Za-z0-9]{1,32})$/;
-async function audiusSource(id) {
+const sourceTimeout = (ms, signal) => signal
+  ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+async function audiusSource(id, signal) {
   const url = new URL(`https://api.audius.co/v1/tracks/${id}/stream`);
   url.searchParams.set('app_name', 'FreeSong');
   const response = await fetch(url, {
-    headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(12_000)
+    headers: { Range: 'bytes=0-1023' }, signal: sourceTimeout(12_000, signal)
   });
   try {
     if (![200, 206].includes(response.status) || !/^audio\//i.test(response.headers.get('content-type') || '') ||
@@ -62,15 +67,15 @@ async function audiusSource(id) {
   return url.href;
 }
 
-async function audioSource(track) {
+async function audioSource(track, signal) {
   const audius = audiusId.exec(track.id);
-  if (audius) return { kind: 'audius', url: await audiusSource(audius[1]) };
+  if (audius) return { kind: 'audius', url: await audiusSource(audius[1], signal) };
   let relayIssue;
   // Resolver desde el mismo host que consume el audio. La ruta de Vercel
   // permanece como respaldo, pero no debe ser la única fuente del mezclador.
   if (process.env.RESOLVE_ON_HOST !== '0') {
     // Acotar toda la resolución para dejar margen a la creación de sesión de Vercel.
-    const deadline = AbortSignal.timeout(10_500);
+    const deadline = sourceTimeout(10_500, signal);
     const relay = await resolveMixerRelayAudio(track.id, deadline);
     if (relay.url) return relay;
     relayIssue = relay.issue;
@@ -127,16 +132,63 @@ async function requestBody(req) {
   try { return JSON.parse(body); } catch { return null; }
 }
 
-function validTracks(tracks, max = 3) {
-  return Array.isArray(tracks) && tracks.length >= 2 && tracks.length <= max && tracks.every(t =>
-    t && typeof t.id === 'string' && (/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || audiusId.test(t.id)) &&
+function validTrack(t, idPattern) {
+  return t && typeof t.id === 'string' && (idPattern.test(t.id) || audiusId.test(t.id)) &&
     typeof t.title === 'string' && t.title.length <= 200 &&
-    (t.artist == null || (typeof t.artist === 'string' && t.artist.length <= 200)));
+    (t.artist == null || (typeof t.artist === 'string' && t.artist.length <= 200));
 }
 
-async function startRender(tracks, seconds, retained) {
-  const inputs = await Promise.all(tracks.map((track, i) =>
-    retained?.tracks[i]?.id === track.id && retained.inputs[i] ? retained.inputs[i] : audioSource(track)));
+function validTracks(tracks, max = 3) {
+  return Array.isArray(tracks) && tracks.length >= 2 && tracks.length <= max &&
+    tracks.every(track => validTrack(track, /^[A-Za-z0-9_-]{1,64}$/));
+}
+
+async function verifyContinuationProxy(source, signal) {
+  // El proxy es un respaldo todavía sin verificar. Un rango pequeño detecta
+  // una pista caída sin arriesgar el prefijo que ya se puede mezclar.
+  const response = await fetch(source.url, {
+    headers: { Range: 'bytes=0-1023' }, redirect: 'error', signal: sourceTimeout(6000, signal)
+  });
+  const playable = [200, 206].includes(response.status) && response.body &&
+    /^audio\//i.test(response.headers.get('content-type') || '');
+  void response.body?.cancel().catch(() => {});
+  if (!playable) throw new Error('La pista de continuación no entregó audio');
+}
+
+async function startRender(tracks, seconds, retained, limits) {
+  const resolveSource = async (track, index) => {
+    if (retained?.tracks[index]?.id === track.id && retained.inputs[index]) return retained.inputs[index];
+    const source = await audioSource(track, limits?.signal);
+    if (limits && source.kind === 'proxy') await verifyContinuationProxy(source, limits.signal);
+    return source;
+  };
+  let inputs;
+  if (!limits) {
+    inputs = await Promise.all(tracks.map(resolveSource));
+  } else {
+    inputs = [];
+    let duration = 0;
+    // Two remote lookups at most. Resolve later sources only while there is
+    // room in the session, and keep the same contiguous order as the queue.
+    for (let start = 0; start < tracks.length; start += 2) {
+      if (!limits.active()) return null;
+      const batch = await Promise.allSettled(tracks.slice(start, start + 2)
+        .map((track, offset) => resolveSource(track, start + offset)));
+      for (const [offset, result] of batch.entries()) {
+        if (result.status !== 'fulfilled') break;
+        const source = result.value;
+        const hint = Number(source.duration ?? tracks[start + offset].duration);
+        const length = Number.isFinite(hint) && hint > 0 ? Math.min(hint, 600) : 600;
+        const end = duration + length - (inputs.length ? seconds : 0);
+        if (length <= seconds || end > maxContinuationSeconds) break;
+        inputs.push(source);
+        duration = end;
+      }
+      if (inputs.length < start + batch.length) break;
+    }
+    if (!limits.active() || inputs.length < limits.minimum) return null;
+    tracks = tracks.slice(0, inputs.length);
+  }
   const directory = await mkdtemp(join(tmpdir(), 'freesong-mix-'));
   const render = { directory, tracks, inputs, status: 'preparing',
     sources: inputs.map(source => source.kind), trackDurations: inputs.map(source => source.duration ?? null),
@@ -153,7 +205,9 @@ async function startRender(tracks, seconds, retained) {
     filters.push(`[${previous}][a${i}]acrossfade=d=${seconds}:c1=qsin:c2=qsin[m${i}]`);
     previous = `m${i}`;
   }
-  args.push('-filter_complex', filters.join(';'), '-map', `[${previous}]`, '-vn', '-c:a', 'aac', '-b:a', '128k',
+  args.push('-filter_complex', filters.join(';'), '-map', `[${previous}]`, '-vn', '-c:a', 'aac', '-b:a', '128k');
+  if (limits) args.push('-t', String(maxContinuationSeconds));
+  args.push(
     '-threads', '1', '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event', '-hls_flags', 'temp_file',
     '-hls_segment_filename', join(directory, 'segment-%05d.ts'), join(directory, 'index.m3u8'));
   render.process = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -181,39 +235,48 @@ async function startRender(tracks, seconds, retained) {
 
 async function discardRender(render) {
   if (!render) return;
-  render.process.kill('SIGKILL');
-  await render.exited;
-  await rm(render.directory, { recursive: true, force: true, maxRetries: 2 });
+  if (!render.disposal) {
+    render.disposal = (async () => {
+      render.process.kill('SIGKILL');
+      await render.exited;
+      await rm(render.directory, { recursive: true, force: true, maxRetries: 2 });
+    })();
+  }
+  return render.disposal;
 }
 
-async function replaceRender(session, tracks) {
+async function replaceRender(session, tracks, edit, minimum, automatic) {
   const old = session.render;
-  const edit = session.edit;
+  let deadline = Date.now() + (automatic ? 5 * 60_000 : 35_000);
+  const active = () => !session.closed && !session.endPublished && Date.now() < deadline;
   let candidate;
   let checked = 0;
   try {
-    candidate = await startRender(tracks, session.seconds, old);
+    const limits = session.continuationStatus ? { minimum, active, signal: session.abort.signal } : null;
+    candidate = await startRender(tracks, session.seconds, old, limits);
+    if (!candidate) return;
     session.candidate = candidate;
-    const deadline = Date.now() + 35_000;
-    while (!session.closed && !session.endPublished && Date.now() < deadline) {
+    if (!automatic) deadline = Date.now() + 35_000;
+    while (active()) {
       if (candidate.status === 'failed') break;
       const [current, next] = await Promise.all([
         readManifest(old).catch(() => null), readManifest(candidate).catch(() => null)
       ]);
       const published = session.published;
       // Keep startup headroom in the replacement before retiring the old encoder.
-      const hasHeadroom = next && (next.entries.length >= published + 3 ||
-        (next.ended && next.entries.length > published));
-      if (current && hasHeadroom) {
+      const previousEnd = automatic ? current?.entries.length : published;
+      const hasHeadroom = next && (next.entries.length >= previousEnd + 3 ||
+        (next.ended && next.entries.length > previousEnd));
+      if (current && (!automatic || current.ended) && hasHeadroom) {
         if (!await identicalSegments(old, candidate, current.entries, next.entries, checked, published)) {
           edit.reason = 'published';
           break;
         }
         checked = published;
         // A GET may have added segments while we were comparing the files.
-        if (!session.closed && !session.endPublished && session.published === checked) {
+        if (active() && candidate.status !== 'failed' && session.published === checked) {
           session.render = candidate;
-          session.tracks = tracks;
+          session.tracks = candidate.tracks;
           session.revision++;
           edit.status = 'applied';
           candidate = null;
@@ -235,6 +298,30 @@ async function replaceRender(session, tracks) {
   }
 }
 
+function replaceInBackground(session, tracks, edit, minimum, automatic = false) {
+  const replacement = { session, automatic };
+  replacementInFlight = replacement;
+  void replaceRender(session, tracks, edit, minimum, automatic).finally(() => {
+    if (replacementInFlight === replacement) replacementInFlight = null;
+    if (automatic || (edit.status === 'applied' && session.continuationStatus === 'pending')) {
+      session.continuationStatus = edit.status;
+      session.continuation = null;
+    }
+  });
+}
+
+function continueFromSegment(session) {
+  if (session.continuationStatus !== 'pending' || session.closed) return;
+  if (session.endPublished) {
+    session.continuationStatus = 'rejected';
+    session.continuation = null;
+    return;
+  }
+  if (replacementInFlight) return;
+  const tracks = [...session.tracks, ...session.continuation];
+  replaceInBackground(session, tracks, { status: 'pending' }, session.tracks.length + 1, true);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
@@ -253,8 +340,16 @@ const server = http.createServer(async (req, res) => {
       if (requestedId !== undefined && (typeof requestedId !== 'string' || !/^[a-f0-9]{48}$/.test(requestedId) || !editable)) {
         return json(res, 400, { error: 'Identificador de inicio inválido' });
       }
+      const continuation = data.continuation;
+      if (continuation !== undefined && (!requestedId || data.radio === true ||
+          !Array.isArray(continuation) || continuation.length < 1 || tracks.length + continuation.length > maxContinuationTracks ||
+          !continuation.every(track => validTrack(track, /^[A-Za-z0-9_-]{11}$/)))) {
+        return json(res, 400, { error: 'Cola de continuación inválida' });
+      }
       const id = requestedId ?? randomBytes(24).toString('hex');
-      const launchKey = requestedId ? JSON.stringify([data.radio === true ? tracks[0].id : tracks.map(track => track.id), seconds, startAt]) : null;
+      const launchKey = requestedId ? JSON.stringify([
+        data.radio === true ? tracks[0].id : tracks.map(track => track.id), seconds, startAt, continuation?.map(track => track.id)
+      ]) : null;
       const existing = requestedId && sessions.get(id);
       if (existing) {
         if (existing.launchKey !== launchKey) return json(res, 409, { error: 'La sesión ya existe con otra mezcla' });
@@ -264,6 +359,7 @@ const server = http.createServer(async (req, res) => {
 
       // Reservar antes de esperar I/O para respetar el límite bajo concurrencia.
       const session = { created: Date.now(), editable, seconds, tracks, startAt, launchKey,
+        continuation, continuationStatus: continuation ? 'pending' : null, abort: continuation ? new AbortController() : null,
         published: 0, startedAt: null, endPublished: false, render: null, revision: 0, edit: null };
       sessions.set(id, session);
       try {
@@ -292,23 +388,27 @@ const server = http.createServer(async (req, res) => {
         if (!authorized(req)) return json(res, 401, { error: 'No autorizado' });
         const data = await requestBody(req);
         if (!session.editable || session.endPublished) return json(res, 409, { error: 'La transición ya se envió al reproductor.' });
-        if (replacementInFlight) return json(res, 429, { error: 'Hay otro cambio de mezcla en preparación.' });
+        if (replacementInFlight) {
+          if (replacementInFlight.session === session && replacementInFlight.automatic) res.setHeader('Retry-After', '1');
+          return json(res, 429, { error: 'Hay otro cambio de mezcla en preparación.' });
+        }
+        const maxTracks = session.continuationStatus ? maxContinuationTracks : 4;
         if (!Number.isInteger(data?.part) || data.part < 0 || data.part >= session.tracks.length ||
-            !validTracks(data.tracks, 4) || data.tracks.length <= data.part + 1 ||
+            !validTracks(data.tracks, maxTracks) || data.tracks.length <= data.part + 1 ||
             session.tracks.slice(0, data.part + 1).some((t, i) => t.id !== data.tracks[i]?.id)) {
           return json(res, 400, { error: 'El cambio debe conservar las pistas anteriores y la que está sonando.' });
         }
         const editId = typeof data.editId === 'string' && /^[a-f0-9]{32}$/.test(data.editId)
           ? data.editId : randomBytes(16).toString('hex');
         session.edit = { id: editId, status: 'pending' };
-        replacementInFlight = true;
-        void replaceRender(session, data.tracks).finally(() => { replacementInFlight = false; });
+        replaceInBackground(session, data.tracks, session.edit, data.part + 2);
         return json(res, 202, { edit: session.edit });
       }
       if (req.method !== 'GET') return json(res, 405, { error: 'Método no admitido' });
       if (!match[2]) {
         const { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal } = session.render || { status: 'preparing' };
         return json(res, 200, { status, sources, trackDurations, relayIssues, failure, upstreamStatus, exitCode, exitSignal,
+          ...(session.continuationStatus && authorized(req) ? { continuationStatus: session.continuationStatus } : {}),
           revision: session.revision, edit: session.edit, ...(session.launchKey ? { tracks: session.tracks } : {}) });
       }
       let bytes;
@@ -321,6 +421,7 @@ const server = http.createServer(async (req, res) => {
             manifest = await readManifest(render);
           } while (render !== session.render);
           bytes = session.editable ? publishManifest(session, manifest) : manifest.text;
+          if (session.endPublished) continueFromSegment(session);
         } else {
           if (session.editable && segmentIndex(match[2]) >= session.published) {
             return json(res, 404, { error: 'Segmento aún no publicado' });
@@ -332,6 +433,7 @@ const server = http.createServer(async (req, res) => {
           }
           session.lastSegmentAt = Date.now();
           if (session.editable && session.startedAt == null) session.startedAt = session.lastSegmentAt;
+          continueFromSegment(session);
         }
       } catch { return json(res, session.render?.status === 'failed' ? 502 : 503, { error: 'Audio todavía no disponible' }); }
       res.writeHead(200, { 'Content-Type': match[2].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',

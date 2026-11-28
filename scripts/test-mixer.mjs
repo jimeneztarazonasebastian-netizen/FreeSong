@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { idleSessionMs, publishManifest, sessionExpired } from '../services/mixer/hls.mjs';
 import { mock } from 'node:test';
@@ -153,23 +154,89 @@ assert.equal(delayed.published, 21);
 delayed.startedAt = 1000;
 assert.equal(publishManifest(delayed, encoded, 13_000).includes('segment-00023.ts'), true);
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-const tone = (frequency, duration = 5, container = 'wav') => execFileSync(ffmpeg,
-  ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}`, '-f', container, 'pipe:1'],
+const tone = (frequency, duration = 5, container = 'wav', sampleRate = 44100) => execFileSync(ffmpeg,
+  ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=${duration}:sample_rate=${sampleRate}`, '-f', container, 'pipe:1'],
   { maxBuffer: 4 * 1024 * 1024 });
 const fixtures = { one: tone(440), two: tone(880, 5, 'webm'), long: tone(440, 30), three: tone(660) };
+const queueTrackSeconds = 168;
+const queueFade = 4;
+const queueTracks = Array.from({ length: 11 }, (_, n) => ({
+  id: `longTone${String(n + 1).padStart(3, '0')}`,
+  title: `Pista de prueba ${n + 1}`,
+  duration: queueTrackSeconds,
+  frequency: 320 + n * 80
+}));
+const queueSeconds = queueTracks.length * queueTrackSeconds - (queueTracks.length - 1) * queueFade;
 const upstreamRequests = [];
 const upstream = http.createServer((req, res) => {
   const query = new URL(req.url, 'http://localhost').searchParams;
   upstreamRequests.push(Object.fromEntries(query));
   const id = query.get('id');
+  if (!Object.hasOwn(fixtures, id)) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
   res.writeHead(200, { 'Content-Type': id === 'two' ? 'audio/webm' : 'audio/wav' });
   res.end(fixtures[id]);
 });
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const base = 'http://127.0.0.1:5249';
-const child = spawn(process.execPath, ['services/mixer/server.mjs'], {
-  env: { ...process.env, PORT: '5249', MIXER_API_KEY: key, RESOLVE_ON_HOST: '0', AUDIO_BACKEND: `http://127.0.0.1:${upstream.address().port}` }, stdio: 'inherit'
+// Keep FFmpeg and the test deadlines on real time. Advance only the server's
+// media clock after the continuation has been encoded.
+const clockModule = `data:text/javascript,${encodeURIComponent(`
+  const realNow = Date.now.bind(Date);
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  process.on('message', message => {
+    if (message?.type !== 'clock-offset') return;
+    offset = message.offset;
+    process.send({ offset });
+  });
+`)}`;
+const child = spawn(process.execPath, ['--import', clockModule, 'services/mixer/server.mjs'], {
+  env: { ...process.env, PORT: '5249', MIXER_API_KEY: key, RESOLVE_ON_HOST: '0', AUDIO_BACKEND: `http://127.0.0.1:${upstream.address().port}` },
+  stdio: ['inherit', 'inherit', 'inherit', 'ipc']
 });
+async function seekTestClock(seconds) {
+  const receipt = once(child, 'message');
+  child.send({ type: 'clock-offset', offset: seconds * 1000 });
+  const [message] = await receipt;
+  assert.equal(message.offset, seconds * 1000);
+}
+
+function checkLongQueueAudio(pcm) {
+  const sampleRate = 8000;
+  const sampleCount = pcm.length / 2;
+  assert.ok(Math.abs(sampleCount / sampleRate - queueSeconds) < 0.3, 'Duración de audio real de la cola');
+  const windowSize = sampleRate / 10;
+  for (let start = windowSize; start + 2 * windowSize <= sampleCount; start += windowSize) {
+    let squared = 0;
+    for (let i = 0; i < windowSize; i++) {
+      const sample = pcm.readInt16LE((start + i) * 2);
+      squared += sample * sample;
+    }
+    assert.ok(Math.sqrt(squared / windowSize) > 200, `Corte de audio a los ${start / sampleRate} s`);
+  }
+  function amplitude(seconds, frequency) {
+    const start = Math.round(seconds * sampleRate);
+    const length = sampleRate / 5;
+    let real = 0, imaginary = 0;
+    for (let i = 0; i < length; i++) {
+      const sample = pcm.readInt16LE((start + i) * 2) / 32768;
+      const angle = 2 * Math.PI * frequency * i / sampleRate;
+      real += sample * Math.cos(angle);
+      imaginary += sample * Math.sin(angle);
+    }
+    return 2 * Math.hypot(real, imaginary) / length;
+  }
+  for (let next = 1; next < queueTracks.length; next++) {
+    const middle = next * (queueTrackSeconds - queueFade) + queueFade / 2;
+    assert.ok(amplitude(middle, queueTracks[next - 1].frequency) > 0.025 &&
+      amplitude(middle, queueTracks[next].frequency) > 0.025,
+    `Falta el fundido de pista ${next} a ${next + 1} cerca de ${middle} s`);
+  }
+}
 try {
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(base + '/health')).ok) break; } catch {}
@@ -225,14 +292,15 @@ try {
   assert.equal(editableResponse.status, 202);
   const editable = await editableResponse.json();
   assert.equal(editable.editable, true);
-  async function waitFor(read, predicate, ms = 10_000) {
+  async function waitFor(read, predicate, ms = 10_000, message = 'El flujo de prueba no llegó al estado esperado') {
     const deadline = Date.now() + ms;
+    let value;
     while (Date.now() < deadline) {
-      const value = await read();
+      value = await read();
       if (predicate(value)) return value;
       await delay(100);
     }
-    assert.fail('El flujo de prueba no llegó al estado esperado');
+    assert.fail(`${message}${typeof value === 'object' ? ': ' + JSON.stringify(value) : ''}`);
   }
   const list = async () => (await fetch(base + editable.playlist)).text();
   const status = async () => (await fetch(base + editable.status)).json();
@@ -308,6 +376,116 @@ try {
   assert.ok((await nativeSegment.arrayBuffer()).byteLength > 0);
   assert.equal((await fetch(base + native.status, { method: 'DELETE', headers })).status, 200);
   console.log('MIXER INICIO NATIVO OK: GET válido de HLS, creación concurrente idempotente y cola original conservada');
+
+  for (const { id, frequency } of queueTracks) fixtures[id] = tone(frequency, queueTrackSeconds, 'wav', 8000);
+  const queueId = 'b'.repeat(48);
+  const queueMetadata = queueTracks.map(({ id, title, duration }) => ({ id, title, duration }));
+  const unavailableTrack = { id: 'longTone999', title: 'Pista sin fuente de prueba', duration: queueTrackSeconds };
+  const queueRequest = {
+    id: queueId,
+    tracks: queueMetadata.slice(0, 3),
+    continuation: [...queueMetadata.slice(3), unavailableTrack],
+    crossfade: queueFade,
+    editable: true
+  };
+  const queueResponse = await fetch(base + '/sessions', {
+    method: 'POST', headers, body: JSON.stringify(queueRequest)
+  });
+  assert.equal(queueResponse.status, 202);
+  const longQueue = await queueResponse.json();
+  try {
+    const queueManifestUrl = base + longQueue.playlist;
+    const readQueueManifest = async () => (await fetch(queueManifestUrl)).text();
+    const readQueueState = async () => (await fetch(base + longQueue.status, { headers })).json();
+    const readSegment = async name => {
+      const response = await fetch(new URL(name, queueManifestUrl));
+      assert.equal(response.status, 200, `El segmento anunciado ${name} debe seguir disponible`);
+      return Buffer.from(await response.arrayBuffer());
+    };
+    const originalManifest = await waitFor(readQueueManifest, text => text.includes('segment-00000.ts'));
+    assert.doesNotMatch(originalManifest, /#EXT-X-ENDLIST/, 'El primer bloque no puede anunciar el final de toda la cola');
+    const initialQueueState = await readQueueState();
+    assert.equal(initialQueueState.continuationStatus, 'pending', 'El servidor conserva la cola antes de iniciar el audio');
+    assert.deepEqual(initialQueueState.tracks.map(track => track.id), queueMetadata.slice(0, 3).map(track => track.id));
+    const firstSegment = await readSegment('segment-00000.ts');
+    const continued = await waitFor(readQueueState, state => ['rejected', 'applied'].includes(state.continuationStatus),
+      120_000, 'El primer segmento debe iniciar la continuación en el servidor');
+    assert.equal(continued.continuationStatus, 'applied', JSON.stringify(continued));
+    assert.deepEqual(continued.tracks.map(track => track.id), queueMetadata.map(track => track.id),
+      'Una fuente caída al final no debe descartar las demás pistas de la extensión');
+    assert.ok(upstreamRequests.some(request => request.id === unavailableTrack.id), 'La prueba incluye una fuente tardía caída');
+    assert.deepEqual(await readSegment('segment-00000.ts'), firstSegment, 'La extensión conserva el prefijo publicado');
+    const encodedQueue = await waitFor(readQueueState, state => ['complete', 'failed'].includes(state.status),
+      180_000, 'La cola real debe terminar de codificarse para acelerar el reloj');
+    assert.equal(encodedQueue.status, 'complete', JSON.stringify(encodedQueue));
+
+    // Desde el primer segmento, solo el servidor extiende la mezcla. Un
+    // cliente HLS bloqueado puede seguir pidiendo el mismo manifiesto y sus
+    // segmentos sin ejecutar JavaScript que prepare o cambie otra fuente.
+    const transport = [];
+    let published = [];
+    let finalManifest = '';
+    for (let elapsed = 0; elapsed <= queueSeconds + 16; elapsed += 16) {
+      await seekTestClock(elapsed);
+      const manifestText = await readQueueManifest();
+      assert.match(manifestText, /^#EXTM3U/);
+      const entries = [...manifestText.matchAll(/^#EXTINF:([\d.]+),[^\r\n]*\r?\n(segment-\d{5}\.ts)$/gm)]
+        .map(([, seconds, file]) => ({ seconds: Number(seconds), file }));
+      assert.deepEqual(entries.slice(0, published.length), published, 'El manifiesto EVENT solo crece');
+      for (const { file } of entries.slice(published.length)) {
+        transport.push(await readSegment(file));
+      }
+      published = entries;
+      if (manifestText.includes('#EXT-X-ENDLIST')) {
+        finalManifest = manifestText;
+        break;
+      }
+    }
+    assert.match(finalManifest, /#EXT-X-ENDLIST/, 'La cola completa debe terminar dentro de la ventana simulada');
+    const advertisedSeconds = published.reduce((sum, entry) => sum + entry.seconds, 0);
+    assert.ok(Math.abs(advertisedSeconds - queueSeconds) < 0.3, 'El final no se anuncia en el primer bloque');
+    const queueDecoder = spawn(ffmpeg,
+      ['-v', 'error', '-f', 'mpegts', '-i', 'pipe:0', '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1']);
+    const decoded = [];
+    const errors = [];
+    queueDecoder.stdout.on('data', data => decoded.push(data));
+    queueDecoder.stderr.on('data', data => errors.push(data));
+    const finished = once(queueDecoder, 'close');
+    queueDecoder.stdin.end(Buffer.concat(transport));
+    const [exitCode] = await finished;
+    assert.equal(exitCode, 0, Buffer.concat(errors).toString());
+    checkLongQueueAudio(Buffer.concat(decoded));
+    console.log(`MIXER COLA LARGA OK: ${queueSeconds} s, ${published.length} segmentos y ${queueTracks.length - 1} fundidos sin cortes bajo la misma URL`);
+  } finally {
+    assert.equal((await fetch(base + longQueue.status, { method: 'DELETE', headers })).status, 200);
+    await seekTestClock(0);
+  }
+
+  const unavailableResponse = await fetch(base + '/sessions', {
+    method: 'POST', headers,
+    body: JSON.stringify({ ...queueRequest, id: 'c'.repeat(48), continuation: [unavailableTrack] })
+  });
+  assert.equal(unavailableResponse.status, 202);
+  const unavailable = await unavailableResponse.json();
+  try {
+    const listUrl = base + unavailable.playlist;
+    const statusUrl = base + unavailable.status;
+    const originalSegmentUrl = new URL('segment-00000.ts', listUrl);
+    await waitFor(async () => (await fetch(listUrl)).text(), text => text.includes('segment-00000.ts'));
+    const sound = await fetch(originalSegmentUrl);
+    assert.equal(sound.status, 200);
+    const baseline = Buffer.from(await sound.arrayBuffer());
+    const state = await waitFor(async () => (await fetch(statusUrl, { headers })).json(),
+      value => value.continuationStatus === 'rejected', 20_000);
+    assert.deepEqual(state.tracks.map(track => track.id), queueMetadata.slice(0, 3).map(track => track.id));
+    assert.equal(state.revision, 0);
+    const after = await fetch(originalSegmentUrl);
+    assert.equal(after.status, 200);
+    assert.deepEqual(Buffer.from(await after.arrayBuffer()), baseline, 'La fuente caída no corta la mezcla actual');
+  } finally {
+    assert.equal((await fetch(base + unavailable.status, { method: 'DELETE', headers })).status, 200);
+  }
+  console.log('MIXER FUENTE CAÍDA OK: una extensión fallida conserva el bloque original');
 } finally {
   child.kill('SIGTERM');
   upstream.close();

@@ -1,4 +1,4 @@
-// FreeSong Web Music Player v3.9.55 para iPhone (iOS) y Web
+// FreeSong Web Music Player v3.9.56 para iPhone (iOS) y Web
 // Motores: Audio Blindado Edge CDN, Modo Offline Cache API, Perfil de Artista, DJ IA ✨, Live Search y Canvas Lyrics Share
 (() => {
   'use strict';
@@ -83,7 +83,7 @@
   const findLyricIndex = (t) => LyricsUtil.findIndex(S.syncedLyrics, t);
 
   // Versión de la app (fuente única) y puente al diagnóstico local.
-  const APP_VERSION = '3.9.55';
+  const APP_VERSION = '3.9.56';
 
   // El diagnóstico vive en www/diag.js para no engordar este archivo. Si no
   // cargara por cualquier motivo, la app sigue igual: las métricas se ignoran.
@@ -3291,6 +3291,8 @@
   const audiusStream = track => `https://api.audius.co/v1/tracks/${track.id.slice(7)}/stream?app_name=FreeSong`;
   const queueMixStatus = message => { $('queueMixStatus').textContent = message; };
   const mixDuration = track => Number(track.durationSeconds || track.duration);
+  const longMixTrackLimit = 12;
+  const longMixDurationLimit = 42 * 60;
   const mixerTrack = track => ({
     id: track.id,
     title: String(track.title || '').slice(0, 120),
@@ -3306,7 +3308,7 @@
       const measured = Array.isArray(reported) ? reported[index] : null;
       if (Number.isFinite(measured) && measured > fade && measured <= 600) return measured;
       const oldIndex = previous ? previous.tracks.indexOf(track) : -1;
-      return oldIndex >= 0 ? previous.durations[oldIndex] : mixDuration(track);
+      return oldIndex >= 0 && Number.isFinite(previous.durations[oldIndex]) ? previous.durations[oldIndex] : mixDuration(track);
     });
   }
 
@@ -3438,13 +3440,20 @@
 
     const track = S.queue[index];
     const fade = mixFade();
-    const candidates = S.queue.slice(index, index + 3);
-    const unsuitable = candidates.findIndex((item) => {
+    const candidates = S.queue.slice(index, index + longMixTrackLimit);
+    const planned = [];
+    let playLength = 0;
+    for (const item of candidates) {
       const duration = mixDuration(item);
-      return isDownloaded(item.id) || !/^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/.test(item.id) ||
-        !Number.isFinite(duration) || duration <= fade || duration > 600;
-    });
-    const tracks = unsuitable === -1 ? candidates : candidates.slice(0, unsuitable);
+      if (isDownloaded(item.id) || !/^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/.test(item.id) ||
+          !Number.isFinite(duration) || duration <= fade || duration > 600) break;
+      const nextLength = playLength + duration - (planned.length ? fade : 0);
+      if (nextLength > longMixDurationLimit) break;
+      planned.push(item);
+      playLength = nextLength;
+    }
+    const tracks = planned.slice(0, 3);
+    const tail = planned.slice(3);
     const radio = candidates.length === 1 && tracks.length === 1 && S.autoplayInfinite && !isAudiusTrack(track);
     if (tracks.length < 2 && !radio) return false;
     const durations = tracks.map(mixDuration);
@@ -3456,9 +3465,14 @@
     const query = new URLSearchParams({ session: id, ids: tracks.map(track => track.id).join(','), fade });
     if (radio) query.set('radio', '1');
     else query.set('metadata', JSON.stringify(tracks.map(mixerTrack)));
+    if (tail.length) {
+      query.set('tail', tail.map(item => item.id).join(','));
+      query.set('tailSeconds', tail.map(item => Math.ceil(mixDuration(item))).join(','));
+    }
     if (startAt) query.set('startAt', String(startAt));
     const mix = { id, tracks, durations, offsets: mixOffsets(durations, fade), fade, part: 0,
-      active: true, editable: true, nativeLaunch: true, starting: true, startAt };
+      active: true, editable: true, nativeLaunch: true, starting: true, startAt,
+      continuation: tail.length ? planned : null };
     queueMix = mix;
     S.pendingResume = null;
     S.isPlaying = true;
@@ -3505,31 +3519,48 @@
     else syncMediaSessionPlayback();
   }
 
-  async function readNativeMixTracks(mix) {
-    if (mix.readingTracks) return;
-    mix.readingTracks = true;
-    try {
-      const state = await queueMixRequest('GET', mix.id);
-      if (queueMix !== mix) return;
-      if (mix.tracks.length === 1 && Array.isArray(state.tracks)) {
-        const found = validTracks(state.tracks.slice(1, 3));
-        S.queue.push(...found);
-        mix.tracks.push(...found);
-        renderQueue();
-      }
-      mix.durations = mixTrackDurations(mix.tracks, state.trackDurations, mix.fade, mix);
-      mix.offsets = mixOffsets(mix.durations, mix.fade);
-      updateQueueMixPosition();
-    } catch {
-      // The audio and the server-side transition continue when metadata is delayed.
-    } finally {
-      mix.readingTracks = false;
-      mix.trackListReady = mix.tracks.length > 1;
-      if (queueMix === mix && mix.trackListReady && mix.pendingNext) {
+  function readNativeMixTracks(mix) {
+    if (mix.readingTracks) return mix.readingTracks;
+    mix.lastTrackRead = Date.now();
+    mix.readingTracks = refreshNativeMixTracks(mix).finally(() => {
+      mix.readingTracks = null;
+      mix.trackListReady = mix.tracks.length > 1 && !mix.continuation;
+      if (queueMix === mix && mix.trackListReady && mix.pendingNext && !queueMixAudio.ended) {
         const pending = mix.pendingNext;
         mix.pendingNext = null;
         queueTrackNext(pending);
       }
+    });
+    return mix.readingTracks;
+  }
+
+  async function refreshNativeMixTracks(mix) {
+    try {
+      const state = await queueMixRequest('GET', mix.id);
+      if (queueMix !== mix) return;
+      let tracks = mix.tracks;
+      if (mix.continuation && state.continuationStatus !== 'pending') {
+        const applied = Array.isArray(state.tracks) && state.continuationStatus === 'applied' &&
+          state.tracks.length > tracks.length && state.tracks.length <= mix.continuation.length &&
+          state.tracks.every((item, i) => item.id === mix.continuation[i].id);
+        if (applied) {
+          tracks = mix.continuation.slice(0, state.tracks.length);
+          mix.longQueue = true;
+        }
+        mix.continuation = null;
+        Diag.log('mixer-continuation', { applied: !!applied, tracks: tracks.length });
+      } else if (!mix.continuation && tracks.length === 1 && Array.isArray(state.tracks)) {
+        const found = validTracks(state.tracks.slice(1, 3));
+        S.queue.push(...found);
+        tracks = [...tracks, ...found];
+        renderQueue();
+      }
+      mix.durations = mixTrackDurations(tracks, state.trackDurations, mix.fade, mix);
+      mix.tracks = tracks;
+      mix.offsets = mixOffsets(mix.durations, mix.fade);
+      updateQueueMixPosition();
+    } catch {
+      // The audio and the server-side transition continue when metadata is delayed.
     }
   }
 
@@ -3742,8 +3773,11 @@
     }
     const tail = S.queue.slice(S.currentIndex + 1);
     const selected = tail.find(t => t === track) || tail.find(t => t.id === track.id) || { ...track };
+    const length = mix.longQueue
+      ? Math.min(longMixTrackLimit, Math.max(mix.tracks.length, part + 2))
+      : Math.max(3, part + 2);
     const tracks = [...mix.tracks.slice(0, part + 1), selected,
-      ...tail.filter(t => t.id !== selected.id)].slice(0, Math.max(3, part + 2));
+      ...tail.filter(t => t.id !== selected.id)].slice(0, length);
     const durations = mixTrackDurations(tracks, null, mix.fade, mix);
     if (durations.some(d => !Number.isFinite(d) || d <= mix.fade || d > 600)) {
       queueTrackNext(track, true);
@@ -3779,11 +3813,14 @@
         if (edit?.status === 'applied') {
           const start = S.queue.indexOf(mix.tracks[0]);
           if (start < 0) return;
-          const rest = S.queue.slice(start).filter(t => !tracks.includes(t));
-          S.queue.splice(start, S.queue.length - start, ...tracks, ...rest);
-          mix.durations = mixTrackDurations(tracks, state.trackDurations, mix.fade, mix);
+          const trimmed = mix.longQueue && Array.isArray(state.tracks) && state.tracks.length < tracks.length &&
+            state.tracks.length > part + 1 && state.tracks.every((item, i) => item.id === tracks[i].id);
+          const applied = trimmed ? tracks.slice(0, state.tracks.length) : tracks;
+          const rest = S.queue.slice(start).filter(t => !applied.includes(t));
+          S.queue.splice(start, S.queue.length - start, ...applied, ...rest);
+          mix.durations = mixTrackDurations(applied, state.trackDurations, mix.fade, mix);
           mix.offsets = mixOffsets(mix.durations, mix.fade);
-          mix.tracks = tracks;
+          mix.tracks = applied;
           mix.part = -1;
           updateQueueMixPosition();
           renderQueue();
@@ -3857,6 +3894,7 @@
   function updateQueueMixPosition() {
     const mix = queueMix;
     if (!mix?.active) return;
+    if (mix.continuation && !mix.starting && Date.now() - mix.lastTrackRead >= 4000) void readNativeMixTracks(mix);
     syncMediaSessionPlayback();
     // La transición ya está codificada en HLS. Este evento solo sincroniza la interfaz.
     const part = mix.offsets.reduce((found, offset, i) => queueMixAudio.currentTime >= offset ? i : found, 0);
@@ -3886,9 +3924,12 @@
     saveSession(false, position);
   }
   queueMixAudio.addEventListener('timeupdate', updateQueueMixPosition);
-  queueMixAudio.addEventListener('ended', () => {
-    if (!queueMix?.active) return;
-    const index = S.queue.indexOf(queueMix.tracks.at(-1));
+  queueMixAudio.addEventListener('ended', async () => {
+    const mix = queueMix;
+    if (!mix?.active) return;
+    if (mix.continuation) await readNativeMixTracks(mix);
+    if (queueMix !== mix) return;
+    const index = S.queue.indexOf(mix.tracks.at(-1));
     stopQueueMix('Terminó el bloque mezclado.');
     if (index >= 0 && index + 1 < S.queue.length) playTrack(index + 1, true, true);
     else syncMediaSessionPlayback();
@@ -6447,7 +6488,8 @@
     const lastMixedTrack = activeMix?.tracks.at(-1);
     const lastMixedIndex = lastMixedTrack ? S.queue.indexOf(lastMixedTrack) : -1;
     const afterBlock = lastMixedIndex > S.currentIndex;
-    if (!afterBlockOnly && activeMix?.editable && activeMix.part < 3 && lastMixedIndex >= 0) {
+    const lastEditablePart = activeMix?.longQueue ? longMixTrackLimit - 1 : 3;
+    if (!afterBlockOnly && activeMix?.editable && activeMix.part < lastEditablePart && lastMixedIndex >= 0) {
       replaceQueueMixNext(activeMix, track);
       return;
     }

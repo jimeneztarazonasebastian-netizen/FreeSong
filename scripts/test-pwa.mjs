@@ -491,24 +491,33 @@ try {
     { id: 'TestAudio01', title: 'Pista nativa inicial', artist: 'Prueba', duration: 8 },
     { id: 'TestAudio02', title: 'Pista nativa siguiente', artist: 'Prueba', duration: 8 }
   ];
+  const longQueue = Array.from({ length: 11 }, (_, index) => ({
+    id: `LongTrack${String(index + 1).padStart(2, '0')}`,
+    title: `Pista de cola larga ${index + 1}`,
+    artist: 'Prueba',
+    duration: 168
+  }));
   const unsuitableThird = { id: 'ThirdTrack0', title: 'Tercera sin duración', artist: 'Prueba', duration: 0 };
   const failedProbeTrack = { id: 'DeadProbe01', title: 'Pista de precarga caída', artist: 'Prueba', duration: 8 };
-  for (const mode of ['cola', 'radio', 'fallo']) {
+  for (const mode of ['cola', 'radio', 'fallo', 'cola-larga']) {
     const nativePage = await nativeContext.newPage();
-    const mixTracks = mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
-    const queue = mode === 'cola' ? [...mixTracks, unsuitableThird] : mixTracks;
+    const long = mode === 'cola-larga';
+    const mixTracks = long ? longQueue.slice(0, 3) : mode === 'radio' ? nativeTracks.slice(0, 1) : nativeTracks;
+    const queue = long ? longQueue : mode === 'cola' ? [...mixTracks, unsuitableThird] : mixTracks;
+    const fade = long ? 4 : 2;
     const sessionRequests = [];
     const errors = [];
+    let continuationReady = false;
     let releaseMedia;
     const mediaReady = new Promise(resolve => { releaseMedia = resolve; });
     nativePage.on('pageerror', error => errors.push(error.message));
     try {
-      await nativePage.addInitScript(({ queue, radio, position }) => {
+      await nativePage.addInitScript(({ queue, radio, position, fade }) => {
         Object.defineProperty(navigator, 'standalone', { value: true });
         localStorage.setItem('fs_crossfade', 'true');
         localStorage.setItem('fs_session_v2', JSON.stringify({
           queue, currentIndex: 0, repeat: 'off', autoplay: radio, crossfade: true,
-          crossfadeDuration: 2, position, savedAt: Date.now()
+          crossfadeDuration: fade, position, savedAt: Date.now()
         }));
         const canPlayType = HTMLMediaElement.prototype.canPlayType;
         HTMLMediaElement.prototype.canPlayType = function (type) {
@@ -542,7 +551,7 @@ try {
           });
           return play.call(this);
         };
-      }, { queue, radio: mode === 'radio', position: mode === 'fallo' ? 3 : 0 });
+      }, { queue, radio: mode === 'radio', position: mode === 'fallo' ? 3 : 0, fade });
       await nativePage.route('https://**/*', route => route.abort());
       await nativePage.route(wakeUrl, route =>
         route.fulfill({ headers: { 'Access-Control-Allow-Origin': '*' }, json: { ok: true } }));
@@ -563,6 +572,15 @@ try {
           return route.fulfill({ json: { configured: true, nativeStart: true, wakeUrl } });
         }
         sessionRequests.push([request.method(), url.searchParams.get('session')]);
+        if (long) {
+          const tracks = continuationReady ? queue : mixTracks;
+          return route.fulfill({ json: {
+            status: continuationReady ? 'complete' : 'preparing',
+            continuationStatus: continuationReady ? 'applied' : 'pending',
+            tracks,
+            trackDurations: tracks.map(track => track.duration)
+          } });
+        }
         return route.fulfill({ json: { status: 'complete', tracks: nativeTracks, trackDurations: [8, 8] } });
       });
       await nativePage.route('**/api/mixer-start.m3u8?**', async route => {
@@ -600,10 +618,15 @@ try {
       assert.equal(request.resourceType(), 'media', 'El elemento de audio debe solicitar el HLS directamente');
       assert.equal(url.searchParams.get('ids'), mixTracks.map(track => track.id).join(','),
         'Una tercera pista sin duración no debe impedir el fundido entre las dos primeras');
-      assert.equal(url.searchParams.get('fade'), '2');
+      assert.equal(url.searchParams.get('fade'), String(fade));
+      if (long) {
+        assert.equal(url.searchParams.get('tail'), queue.slice(3).map(track => track.id).join(','),
+          'El servidor debe recibir la cola restante en el toque inicial');
+        assert.equal(url.searchParams.get('tailSeconds'), queue.slice(3).map(track => track.duration).join(','));
+      }
       assert.equal(url.searchParams.get('radio'), mode === 'radio' ? '1' : null);
       assert.equal(url.searchParams.get('startAt'), mode === 'fallo' ? '3' : null);
-      if (mode !== 'radio') {
+      if (!long && mode !== 'radio') {
         assert.deepEqual(JSON.parse(url.searchParams.get('metadata')), nativeTracks);
       }
       const expectedPlay = { id: 'queueMixAudio', src: request.url(), muted: false, trustedClick: true, activated: true };
@@ -611,7 +634,57 @@ try {
         'El toque real inicia el HLS audible sin esperar al servidor ni reproducir una pista aparte');
       assert.deepEqual(sessionRequests, [], 'No se necesita un POST ni obtener la sesión para iniciar el elemento de audio');
 
-      if (mode === 'fallo') {
+      if (long) {
+        await nativePage.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        const pendingStatus = nativePage.waitForResponse(response => {
+          const url = new URL(response.url());
+          return url.searchParams.get('mixer') === '1' && url.searchParams.get('session') === id;
+        });
+        releaseMedia();
+        assert.equal((await (await pendingStatus).json()).continuationStatus, 'pending');
+        continuationReady = true;
+        await nativePage.waitForFunction(count => {
+          const state = window.FreeSongDiag.report().playback;
+          return state.engine === 'hls-mixer' && state.mixer.tracks === count;
+        }, queue.length, { timeout: 10000 });
+
+        // La mezcla real se comprueba en test-mixer. Aquí se adelanta el reloj
+        // que la PWA observa sin reabrir el elemento ni cambiar el HLS de prueba.
+        for (const [seconds, index] of [[492.5, 3], [984.5, 6], [1800, 10]]) {
+          const state = await nativePage.evaluate(seconds => {
+            const audio = document.getElementById('queueMixAudio');
+            Object.defineProperty(audio, 'currentTime', { configurable: true, get: () => seconds });
+            audio.dispatchEvent(new Event('timeupdate'));
+            const report = window.FreeSongDiag.report();
+            return {
+              visibility: report.visibility,
+              engine: report.playback.engine,
+              track: report.playback.track?.id,
+              playing: report.playback.isPlaying && !audio.paused,
+              title: navigator.mediaSession.metadata?.title,
+              position: window.mixerMediaPosition?.position,
+              src: audio.src
+            };
+          }, seconds);
+          assert.deepEqual(state, {
+            visibility: 'hidden',
+            engine: 'hls-mixer',
+            track: queue[index].id,
+            playing: true,
+            title: queue[index].title,
+            position: seconds - index * (queue[index].duration - fade),
+            src: expectedPlay.src
+          });
+        }
+        assert.deepEqual(await nativePage.evaluate(() => window.nativePlayCalls), [expectedPlay],
+          'La cola larga debe cruzar los bloques sin iniciar otro elemento de audio');
+        assert.ok(sessionRequests.length >= 2 && sessionRequests.every(([method, session]) => method === 'GET' && session === id),
+          'Con la pantalla oculta solo se consulta el estado de la misma mezcla');
+        console.log('  cola simulada de 30 min: mismo audio, dos cambios de bloque y metadatos de pantalla bloqueada');
+      } else if (mode === 'fallo') {
         releaseMedia();
         await nativePage.waitForFunction(id => {
           const state = window.FreeSongDiag.report().playback;

@@ -43,7 +43,7 @@ try {
   assert.equal(result.data.playlist, `https://freesong-mixer.onrender.com/sessions/${id}/index.m3u8`);
   assert.equal((await call('GET', null, null, '../health')).code, 400);
   globalThis.fetch = async () => new Response(JSON.stringify({ trackDurations: [321.326, null, '281', 601, 99] }));
-  assert.deepEqual((await call('GET', null, null, id)).data.trackDurations, [321.326, null, null, null]);
+  assert.deepEqual((await call('GET', null, null, id)).data.trackDurations, [321.326, null, null, null, 99]);
   globalThis.fetch = async () => new Response('{}', { status: 401 });
   assert.equal((await call('GET', null, null, id)).code, 502);
   console.log('MIXER BRIDGE OK: clave privada, origen, rutas, configuración y errores');
@@ -140,6 +140,44 @@ try {
     return Response.json({ ok: true });
   };
   assert.equal((await call('GET', null, null, id, native)).code, 503);
+  const longIds = Array.from({ length: 12 }, (_, index) => `LongTrack${String(index).padStart(2, '0')}`);
+  const longQueue = {
+    ...native, ids: longIds.slice(0, 3).join(','), tail: longIds.slice(3).join(','),
+    tailSeconds: longIds.slice(3).map(() => 168).join(',')
+  };
+  let longCreations = 0;
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url).pathname;
+    if (path === '/health') return Response.json({ ok: true, nativeStart: true });
+    if (path === '/sessions') {
+      longCreations++;
+      const payload = JSON.parse(options.body);
+      assert.deepEqual(payload.tracks.map(track => track.id), longIds.slice(0, 3));
+      assert.deepEqual(payload.continuation.map(track => track.id), longIds.slice(3));
+      assert.deepEqual(payload.continuation.map(track => track.duration), Array(9).fill(168));
+      return Response.json({ id }, { status: 202 });
+    }
+    return new Response('#EXTM3U\n#EXTINF:4.0,\nsegment-00000.ts\n',
+      { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  };
+  assert.equal((await call('GET', null, null, id, { ...longQueue, tail: longQueue.tail + ',LongTrack12' })).code, 400);
+  assert.equal((await call('GET', null, null, id, { ...longQueue, tail: '../untrusted' })).code, 400);
+  assert.equal((await call('GET', null, null, id, { ...longQueue, tailSeconds: '168,601' })).code, 400);
+  assert.equal((await call('GET', null, null, id, longQueue)).code, 307);
+  assert.equal(longCreations, 1);
+  globalThis.fetch = async () => Response.json({
+    continuationStatus: 'applied',
+    tracks: longIds.map(id => ({ id, title: id, duration: 168 })),
+    trackDurations: longIds.map(() => 168)
+  });
+  const expanded = (await call('GET', null, null, id)).data;
+  assert.equal(expanded.continuationStatus, 'applied');
+  assert.deepEqual(expanded.tracks.map(track => track.id), longIds);
+  assert.equal(expanded.trackDurations.length, 12);
+  globalThis.fetch = async () => Response.json({ error: 'Preparando' }, { status: 429, headers: { 'Retry-After': '1' } });
+  const waiting = await call('PATCH', prod, { tracks: [] }, id);
+  assert.equal(waiting.code, 429);
+  assert.equal(waiting.headers['Retry-After'], '1');
   let radioCreations = 0;
   globalThis.fetch = async (url, options) => {
     const address = new URL(url);

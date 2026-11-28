@@ -259,8 +259,12 @@ confirmó el control Audius.
   prueba de producción en Render con Audius. Conservó tres segmentos ya
   publicados y el flujo se pudo decodificar hasta después de la transición
   bajo la misma URL. Se aplica cuando la transición aún no se publicó y la
-  variante llega a tiempo. Falta verificar el gesto y el fundido resultante
-  en la cola habitual del iPhone bloqueado y encadenar bloques con fundido.
+  variante llega a tiempo. Falta verificar el gesto en un iPhone bloqueado.
+- Desde 3.9.56 el mezclador puede ampliar el bloque inicial en la misma URL
+  HLS. La prueba local sirvió y decodificó 30:08 de audio con diez fundidos
+  reales, conservando los segmentos ya publicados. Una prueba de la PWA con
+  la página oculta recorrió la cola simulada con el mismo reproductor y sin
+  guardar descargas. Queda pendiente comprobarlo en un iPhone físico.
 - El diagnóstico de la PWA registra cambios de mezcla, errores y motivo
   del aplazamiento. La credencial de reproducción HLS queda oculta.
 - Render valida primero un rango AAC del relay europeo para el ID solicitado.

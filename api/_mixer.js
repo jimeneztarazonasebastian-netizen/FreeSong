@@ -8,6 +8,7 @@ const recent = new Map();
 const sessionId = /^[a-f0-9]{48}$/;
 const youtubeId = /^[A-Za-z0-9_-]{11}$/;
 const trackId = /^(?:[A-Za-z0-9_-]{11}|audius:[A-Za-z0-9]{1,32})$/;
+const longQueueLimit = 12;
 const reply = (res, code, body) => {
   res.setHeader('Cache-Control', 'no-store');
   return res.status(code).json(body);
@@ -87,12 +88,18 @@ async function nativeMixerStart(req, res, url, key, id) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return reply(res, 405, { error: 'Método no admitido' });
   if (!nativeStartOriginAllowed(req.headers)) return reply(res, 403, { error: 'Origen no permitido' });
   const ids = (url.searchParams.get('ids') || '').split(',');
+  const tail = (url.searchParams.get('tail') || '').split(',').filter(Boolean);
+  const tailSeconds = url.searchParams.get('tailSeconds')?.split(',').map(Number);
   const fade = Number(url.searchParams.get('fade'));
   const startAt = Number(url.searchParams.get('startAt'));
   const radio = url.searchParams.get('radio') === '1';
   const validIds = radio ? ids.length === 1 && youtubeId.test(ids[0]) :
     ids.length >= 2 && ids.length <= 3 && ids.every(value => trackId.test(value));
   if (!sessionId.test(id || '') || !validIds || !Number.isInteger(startAt) || startAt < 0 || startAt > 180 ||
+      (tail.length && (ids.length !== 3 || radio || ids.length + tail.length > longQueueLimit ||
+        tail.some(id => !trackId.test(id)))) ||
+      (tailSeconds && (tailSeconds.length !== tail.length ||
+        tailSeconds.some(seconds => !Number.isFinite(seconds) || seconds <= 0 || seconds > 600))) ||
       !Number.isFinite(fade) || fade < 1 || fade > 10) {
     return reply(res, 400, { error: 'Mezcla inválida' });
   }
@@ -134,7 +141,8 @@ async function nativeMixerStart(req, res, url, key, id) {
     if (!queue) return reply(res, 502, { error: 'No se encontraron pistas compatibles para el crossfade.' });
     const created = await requestRender('/sessions', {
       method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, tracks: queue, crossfade: fade, editable: true, radio, ...(startAt ? { startAt } : {}) })
+      body: JSON.stringify({ id, tracks: queue, crossfade: fade, editable: true, radio, ...(startAt ? { startAt } : {}),
+        ...(tail.length ? { continuation: tail.map((id, index) => launchTrack({ id, duration: tailSeconds?.[index] })) } : {}) })
     }, 12_000);
     const data = await created.json();
     if (created.status === 429) return reply(res, 429, { error: 'No hay espacio para preparar esta mezcla.' });
@@ -206,8 +214,12 @@ export async function mixerControl(req, res, url) {
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000)
     });
     const data = await upstream.json();
-    if (!upstream.ok) return reply(res, upstream.status === 401 ? 502 : upstream.status,
-      { error: upstream.status === 401 ? 'La clave de Vercel no coincide con Render.' : (data.error || 'El mezclador no está disponible.') });
+    if (!upstream.ok) {
+      const retryAfter = upstream.headers.get('retry-after');
+      if (upstream.status === 429 && /^[1-9]$|^1[0-5]$/.test(retryAfter || '')) res.setHeader('Retry-After', retryAfter);
+      return reply(res, upstream.status === 401 ? 502 : upstream.status,
+        { error: upstream.status === 401 ? 'La clave de Vercel no coincide con Render.' : (data.error || 'El mezclador no está disponible.') });
+    }
     if (req.method === 'POST') {
       if (!/^[a-f0-9]{48}$/.test(data.id)) throw new Error('Respuesta inválida');
       return reply(res, 202, { id: data.id, playlist: `${origin}/sessions/${data.id}/index.m3u8`,
@@ -215,16 +227,17 @@ export async function mixerControl(req, res, url) {
     }
     if (req.method === 'PATCH') return reply(res, 202, { edit: data.edit });
     const trackDurations = Array.isArray(data.trackDurations)
-      ? data.trackDurations.slice(0, 4).map(seconds =>
+      ? data.trackDurations.slice(0, longQueueLimit).map(seconds =>
         Number.isFinite(seconds) && seconds > 0 && seconds <= 600 ? seconds : null)
       : undefined;
     const relayIssues = Array.isArray(data.relayIssues)
-      ? data.relayIssues.slice(0, 4).map(issue => typeof issue === 'string' && /^(metadata|media)_(\d{3}|format|no_aac|empty|redirect|timeout|unavailable)$/.test(issue) ? issue : null)
+      ? data.relayIssues.slice(0, longQueueLimit).map(issue => typeof issue === 'string' && /^(metadata|media)_(\d{3}|format|no_aac|empty|redirect|timeout|unavailable)$/.test(issue) ? issue : null)
       : undefined;
-    const tracks = Array.isArray(data.tracks) && data.tracks.length <= 4 && data.tracks.every(track => trackId.test(track?.id || ''))
+    const tracks = Array.isArray(data.tracks) && data.tracks.length <= longQueueLimit && data.tracks.every(track => trackId.test(track?.id || ''))
       ? data.tracks.map(launchTrack) : undefined;
+    const continuationStatus = ['pending', 'applied', 'rejected'].includes(data.continuationStatus) ? data.continuationStatus : undefined;
     return reply(res, 200, { status: data.status, ok: data.ok,
       sources: data.sources, failure: data.failure, upstreamStatus: data.upstreamStatus,
-      exitCode: data.exitCode, exitSignal: data.exitSignal, revision: data.revision, edit: data.edit, trackDurations, relayIssues, tracks });
+      exitCode: data.exitCode, exitSignal: data.exitSignal, revision: data.revision, edit: data.edit, trackDurations, relayIssues, tracks, continuationStatus });
   } catch { return reply(res, 502, { error: 'Render no respondió a tiempo; puede estar arrancando. Reintenta en un minuto.' }); }
 }
