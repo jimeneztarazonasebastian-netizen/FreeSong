@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mock } from 'node:test';
-import { mixerControl } from '../api/_mixer.js';
+import { mixerControl } from '../../api/_mixer.js';
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.MIXER_API_KEY;
 const id = 'a'.repeat(48);

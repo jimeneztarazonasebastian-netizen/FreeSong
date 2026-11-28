@@ -20,9 +20,14 @@ La clave generada debe permanecer en el servidor; nunca incluirla en JavaScript 
 {"tracks":[{"id":"video1","title":"Uno"},{"id":"video2","title":"Dos"}],"crossfade":6}
 ```
 
-Devuelve rutas de estado y lista HLS. Hay que esperar a que la lista esté disponible.
-FFmpeg mezcla audio AAC y sirve segmentos temporales; no exige descargas manuales en el teléfono.
-Máximo 2 sesiones simultáneas. Se pueden preparar 2–3 canciones de hasta 10 minutos cada una.
+Devuelve rutas de estado y lista HLS. El flujo queda listo cuando publica su
+primer segmento. FFmpeg genera audio AAC y sirve segmentos temporales en streaming.
+
+Máximo 2 sesiones simultáneas. El arranque prepara un bloque inicial de 2–3
+canciones de hasta 10 minutos cada una. Con una cola compatible, pedir el
+primer segmento inicia la ampliación en segundo plano. El servidor puede
+incluir hasta 12 pistas con un límite de 45 minutos de audio. Conserva la URL
+HLS y solo publica la ampliación si coinciden los segmentos anunciados.
 Una sesión caduca tras 20 minutos sin reproducir segmentos o al cumplir 60 minutos.
 Los identificadores aleatorios de sesión son credenciales de reproducción: no compartirlos.
 
@@ -35,7 +40,8 @@ Los identificadores aleatorios de sesión son credenciales de reproducción: no 
 - `relay-eu` y `relay-us` identifican la fuente directa. `relayIssues` distingue
   rechazos de metadatos y de audio sin mostrar las URLs de origen.
 - Medir tiempo hasta primer segmento y CPU real. No se garantiza que la instancia gratuita sea suficiente.
-- Quedan por completar las sesiones por usuario y la renovación de la cola.
+- La ampliación automática está acotada a la sesión. Queda por medir la
+  capacidad con varias personas y la continuidad en un iPhone bloqueado.
 - Verificar varios cambios de canción con un iPhone físico bloqueado, sin actualizar iOS.
 
 Las sesiones creadas con `editable: true` publican el manifiesto de forma progresiva.
@@ -57,4 +63,4 @@ vigente en Render además de Vercel.
 
 Render Free se suspende tras 15 minutos sin tráfico y el arranque puede tardar cerca de un minuto.
 Sin método de pago, al agotar el tráfico incluido suspende los servicios gratuitos.
-Fuentes: https://render.com/docs/free y https://ffmpeg.org/ffmpeg-filters.html#acrossfade
+[Límites de Render Free](https://render.com/docs/free) · [Filtro acrossfade de FFmpeg](https://ffmpeg.org/ffmpeg-filters.html#acrossfade)

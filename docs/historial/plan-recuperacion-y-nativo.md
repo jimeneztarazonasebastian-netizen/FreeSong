@@ -1,5 +1,8 @@
 # Plan de recuperación y evolución de FreeSong
 
+Plan histórico del motor nativo. La [guía de iPhone](../ios.md) describe
+la instalación y el motor actuales.
+
 Fecha: 15 de noviembre de 2026.
 Estado: análisis y plan. No se publican cambios de reproducción en esta sesión.
 Base revisada: commit `6910cf67fc89b5adeaffdff180ff051d95766b2d`, versión web/IPA 3.9.29.

@@ -9,9 +9,17 @@ visual que Spotify en todos los dispositivos y estados.
 
 ## Actualizar el IPA
 
-Instalar el FreeSong.ipa vigente desde AltStore → My Apps → +, sobre la aplicación
-existente, con la misma cuenta de Apple. No borrar FreeSong como paso previo.
-Las bibliotecas de la PWA y del IPA son independientes.
+Abre la [compilación iOS 3.9.56](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/runs/46145857482)
+y baja el artefacto **FreeSong-iPhone-IPA** desde **Artifacts**. GitHub puede
+pedir que inicies sesión. Extrae `FreeSong.ipa` del ZIP y selecciónalo en
+**AltStore → My Apps → +** para actualizar la instalación con la misma
+cuenta de Apple. Las bibliotecas de la PWA y del IPA son independientes.
+El IPA de Actions se genera sin firma y AltStore lo firma para tu cuenta.
+
+El enlace directo antiguo de la web contiene un IPA 1.0. Para otras versiones,
+busca la ejecución completada en [GitHub Actions](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/workflows/build-ios.yml).
+Los artefactos se conservan 30 días. La compilación 3.9.56 tiene iOS 15 como
+versión mínima.
 
 La interfaz continúa en `https://freesong-pied.vercel.app`, conservando el origen
 de almacenamiento de la versión anterior. App Bound Domains permite usar el
@@ -36,11 +44,11 @@ configurados; no incorpora un extractor universal ni garantiza todas las cancion
 Las descargas nuevas siguen usando el flujo de rangos existente y después se
 copian al almacenamiento nativo; no hay aún un gestor de descargas iOS en segundo plano.
 
-El crossfade nativo solo comienza con la siguiente pista preparada. Si falta
-audio preparado, continúa la transición normal. La PWA para iPhone también
-ofrece una mezcla en el servidor desde **Siguiente**. Render entrega un flujo HLS
-con el fundido incorporado; consulta [la documentación del mezclador](services/mixer/README.md)
-para conocer la ventana de edición y los límites.
+El crossfade nativo comienza cuando la siguiente pista está preparada. Si falta
+audio preparado, continúa la transición normal. Con Crossfade activado, la PWA
+puede iniciar una mezcla HLS en una cola compatible desde el primer toque de
+reproducción. El servidor incorpora el fundido al flujo y puede ampliar la cola
+en esa misma URL. Consulta [la guía del mezclador](../services/mixer/README.md).
 
 ## Firma gratuita
 
@@ -56,7 +64,7 @@ renovación. Cambiar el motor a Swift no elimina las reglas de firma de Apple.
 ## Validación
 
 GitHub Actions ejecuta las pruebas Swift del resolver y las políticas de cola,
-duración y ganancias; compila el proyecto con Xcode y empaqueta el IPA. Las
+duración y ganancias. También compila con Xcode y empaqueta el IPA. Las
 pruebas de navegador validan el contrato del puente, cola, controles y separación
 de motores. Ninguna sustituye una prueba audible con el iPhone físico.
 
@@ -64,8 +72,8 @@ Después de instalar: activar crossfade de seis segundos, reproducir una cola de
 varias canciones, dejar cinco transiciones bloqueado y comprobar pausa, siguiente
 y seek desde la pantalla bloqueada. Repetir con descargas y modo avión. Exportar
 el diagnóstico: debe indicar `engine: avplayer`, versión del paquete y versión iOS.
-Verificar además llamadas, auriculares y reapertura antes de considerar cerrada
-la validación en hardware. No se necesita actualizar iOS para instalar esta versión.
+Verificar además llamadas, auriculares y reapertura antes de cerrar la
+validación en hardware.
 
 ## Referencias
 

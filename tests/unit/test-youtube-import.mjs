@@ -4,7 +4,7 @@ import { runInNewContext } from 'node:vm';
 
 const token = 'test-access-token';
 const window = {};
-const code = readFileSync(new URL('../www/youtube-import.js', import.meta.url), 'utf8');
+const code = readFileSync(new URL('../../www/youtube-import.js', import.meta.url), 'utf8');
 runInNewContext(code, { window, URL, URLSearchParams, DOMException, AbortSignal });
 const { getChannel, listPlaylists, readPlaylist, readLikedVideos } = window.FreeSongYouTubeImport;
 

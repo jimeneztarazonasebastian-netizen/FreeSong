@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('../www/native-audio.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../../www/native-audio.js', import.meta.url), 'utf8');
 function setup(available = true) {
   const calls = [];
   let listener;

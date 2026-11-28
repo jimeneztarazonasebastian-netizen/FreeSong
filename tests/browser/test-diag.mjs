@@ -5,7 +5,7 @@
 //  2. Los eventos (errores JS, fallos HTTP, errores de reproducción) se guardan.
 //  3. Los botones «Copiar JSON» y «Compartir» existen en Ajustes.
 //
-// Uso: node scripts/test-diag.mjs
+// Uso: node tests/browser/test-diag.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';

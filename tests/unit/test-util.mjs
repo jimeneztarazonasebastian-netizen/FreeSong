@@ -7,9 +7,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
-import { rankRadioTracks } from '../api/queue.js';
+import { rankRadioTracks } from '../../api/queue.js';
 
-const source = readFileSync(new URL('../www/util.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../www/util.js', import.meta.url), 'utf8');
 const sandbox = {
   URL,
   window: { location: { href: 'https://freesong-pied.vercel.app/' } }

@@ -3,9 +3,9 @@ import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { idleSessionMs, publishManifest, sessionExpired } from '../services/mixer/hls.mjs';
+import { idleSessionMs, publishManifest, sessionExpired } from '../../services/mixer/hls.mjs';
 import { mock } from 'node:test';
-import { relayPlaybackOrigin, relayUserAgent, resolveMixerRelayAudio } from '../services/mixer/european-relay.mjs';
+import { relayPlaybackOrigin, relayUserAgent, resolveMixerRelayAudio } from '../../services/mixer/european-relay.mjs';
 
 async function verifyMixerRelays() {
   const trackId = 'bfl76Sr-Rsk';

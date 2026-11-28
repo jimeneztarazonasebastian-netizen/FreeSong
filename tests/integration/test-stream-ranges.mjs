@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import handler, { parseStreamRange, serveBuffer } from '../api/stream.js';
+import handler, { parseStreamRange, serveBuffer } from '../../api/stream.js';
 
 const audio = Buffer.from('0123456789');
 const respond = (raw, full = false, method = 'GET') => serveBuffer(

@@ -6,7 +6,7 @@
 //     el vídeo.
 // Comprueba que el blob queda en Cache API y en la biblioteca de descargas.
 //
-// Uso: node scripts/test-download.mjs
+// Uso: node tests/browser/test-download.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';

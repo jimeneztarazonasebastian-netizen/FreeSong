@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { pickFormat } from '../api/stream.js';
+import { pickFormat } from '../../api/stream.js';
 
 const silent = { itag: 137, url: 'https://example.test/video', mimeType: 'video/mp4' };
 const muxed = { itag: 18, url: 'https://example.test/muxed', mimeType: 'video/mp4' };

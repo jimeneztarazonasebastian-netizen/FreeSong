@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 
-const source = readFileSync(new URL('../www/storage.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../www/storage.js', import.meta.url), 'utf8');
 const data = new Map();
 let failWrites = false;
 const localStorageMock = {

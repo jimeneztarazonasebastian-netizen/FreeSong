@@ -1,5 +1,8 @@
 # Auditoría de FreeSong — 14 de noviembre de 2026
 
+Registro de versiones 3.9.27 a 3.9.30. Consulta la
+[auditoría vigente](../auditoria.md) para el estado actual.
+
 Revisión más reciente: **15 de noviembre de 2026, v3.9.29**, documentada al final.
 
 Versión revisada: 3.9.27. Prioridad: PWA instalada desde Safari con «Agregar a inicio».
@@ -180,7 +183,7 @@ solo por tener una URL configurada.
   instalación al revisar. No equivale a ausencia de fallos de aplicación.
 - `git diff --check` y sintaxis JavaScript antes de publicar.
 - No se reescribió el motor de audio como AVPlayer. El IPA sigue siendo híbrido.
-  Véase [IOS.md](IOS.md) para arquitectura, renovación gratuita y migración nativa.
+  Véase la [guía de iPhone](../ios.md) para arquitectura, renovación gratuita y migración nativa.
 - Una única instancia de relay continúa siendo un punto de dependencia externo.
   No se añadieron instancias públicas desconocidas ni servicios de pago.
 - La corrección visual debe volver a comprobarse en la pantalla bloqueada del
@@ -237,4 +240,4 @@ más rápida ni presencia continua en Dynamic Island en el teléfono físico. Ha
 falta instalar el nuevo IPA y medirlo allí. La carga inicial todavía requiere red;
 la disponibilidad de canciones sigue condicionada a proveedores externos. Los
 capítulos anteriores describen las versiones históricas y no son una declaración
-de la arquitectura de 3.9.30. El protocolo de prueba actualizado está en IOS.md.
+de la arquitectura de 3.9.30. El protocolo de prueba está en la [guía de iPhone](../ios.md).
