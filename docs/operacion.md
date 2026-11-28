@@ -14,8 +14,10 @@ como respaldo. La configuración de audio está descrita en la
 - Desde la raíz, `node scripts/check-production.mjs 3.9.56` prueba búsqueda,
   audio y avance con una fuente real en Chromium. Sustituye el número por la
   versión que se desplegó. Las pruebas de `npm test` usan datos simulados.
-- Cuando cambie el motor Swift, verifica la compilación de GitHub Actions
-  y descarga el artefacto de esa versión. [Guía de iPhone](ios.md)
+- Para publicar un IPA nuevo, descarga el artefacto de GitHub Actions de esa
+  versión y verifica la versión interna del paquete. Sustituye
+  `www/FreeSong.ipa` y comprueba que la [descarga pública](https://freesong-pied.vercel.app/FreeSong.ipa)
+  entrega el mismo archivo tras el despliegue. Actualiza la [guía de iPhone](ios.md).
 
 ## Fuentes de audio
 

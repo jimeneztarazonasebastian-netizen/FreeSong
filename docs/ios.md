@@ -9,17 +9,13 @@ visual que Spotify en todos los dispositivos y estados.
 
 ## Actualizar el IPA
 
-Abre la [compilación iOS 3.9.56](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/runs/46145857482)
-y baja el artefacto **FreeSong-iPhone-IPA** desde **Artifacts**. GitHub puede
-pedir que inicies sesión. Extrae `FreeSong.ipa` del ZIP y selecciónalo en
-**AltStore → My Apps → +** para actualizar la instalación con la misma
-cuenta de Apple. Las bibliotecas de la PWA y del IPA son independientes.
-El IPA de Actions se genera sin firma y AltStore lo firma para tu cuenta.
+Desde el iPhone, descarga el [IPA 3.9.56](https://freesong-pied.vercel.app/FreeSong.ipa).
+Selecciónalo desde **AltStore → My Apps → + → Descargas** para actualizar la
+instalación con la misma cuenta de Apple. Las bibliotecas de la PWA y del IPA
+son independientes. AltStore firma el IPA para tu cuenta.
 
-El enlace directo antiguo de la web contiene un IPA 1.0. Para otras versiones,
-busca la ejecución completada en [GitHub Actions](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/workflows/build-ios.yml).
-Los artefactos se conservan 30 días. La compilación 3.9.56 tiene iOS 15 como
-versión mínima.
+El archivo publicado corresponde a la compilación 124 de 3.9.56, con iOS 15
+como versión mínima. [Compilación iOS en GitHub Actions](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/runs/46146976227)
 
 La interfaz continúa en `https://freesong-pied.vercel.app`, conservando el origen
 de almacenamiento de la versión anterior. App Bound Domains permite usar el

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
@@ -44,6 +45,15 @@ try {
     await navigator.serviceWorker.ready;
   });
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  const [ipa] = await Promise.all([
+    page.waitForEvent('download', { timeout: 7000 }),
+    page.evaluate(() => window.location.assign('/FreeSong.ipa'))
+  ]);
+  assert.equal(ipa.suggestedFilename(), 'FreeSong.ipa');
+  const downloadedIpa = await readFile(await ipa.path());
+  const publishedIpa = await readFile(new URL('../../www/FreeSong.ipa', import.meta.url));
+  assert.equal(downloadedIpa.equals(publishedIpa), true, 'La descarga a través de la PWA debe entregar el IPA publicado');
+
   // Una navegación bajo el worker activo debe abrir la página de mezcla.
   await page.route('**/api/health?mixer=1', route => route.fulfill({ json: { configured: true } }));
   for (const path of ['/mixer-test', '/mixer-test.html']) {
@@ -61,6 +71,7 @@ try {
   });
   assert.ok(shellPaths.includes('/'), 'Debe guardar la página inicial en su ruta canónica');
   assert.ok(!shellPaths.includes('/index.html'), 'No debe duplicar la página inicial en la caché');
+  assert.ok(!shellPaths.includes('/FreeSong.ipa'), 'El IPA debe quedar fuera de la caché de la PWA');
 
   // Biblioteca grande: abrir no debe leer todos sus archivos de audio.
   await page.evaluate(async () => {

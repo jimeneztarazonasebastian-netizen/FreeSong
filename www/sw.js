@@ -54,6 +54,8 @@ self.addEventListener('fetch', (event) => {
   if (!['GET', 'HEAD'].includes(req.method) || url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith('/api/')) return;
+  // La descarga del IPA usa el archivo publicado, fuera de la caché del shell.
+  if (url.pathname === '/FreeSong.ipa') return;
   if (url.pathname === '/youtube-privacy' || url.pathname === '/youtube-privacy.html') return;
   // La prueba es una página independiente. Su navegación, redirecciones y
   // segmentos HLS deben ir a la red, sin recibir el shell ni perder rangos.

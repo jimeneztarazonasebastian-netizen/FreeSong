@@ -7,7 +7,8 @@ con crossfade. [Abrir FreeSong](https://freesong-pied.vercel.app)
 En iPhone, abre la web en Safari y toca **Compartir → Agregar a inicio**. La
 PWA puede iniciar una mezcla HLS con el primer toque de reproducción cuando
 Crossfade está activado y la cola es compatible. El IPA usa la misma
-interfaz web con audio nativo AVPlayer. [Instalación y firma del IPA](docs/ios.md)
+interfaz web con audio nativo AVPlayer. [Descargar IPA](https://freesong-pied.vercel.app/FreeSong.ipa)
+· [Instalación y firma del IPA](docs/ios.md)
 
 - **Cola y reproducción**. Desliza una canción para ponerla de siguiente.
   Cuando el flujo HLS ya publicó la transición, la app la añade tras el

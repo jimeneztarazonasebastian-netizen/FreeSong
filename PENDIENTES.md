@@ -17,8 +17,8 @@ decisiones y las comprobaciones de revisiones anteriores.
 - [ ] Medir 20 pistas variadas. Registrar disponibilidad, tiempo al primer
   audio, duración, errores y recuperación. Comprobar el arranque en frío, la
   cancelación de inicios y las dos sesiones simultáneas en Render.
-- [ ] Mantener una descarga pública del IPA alineada con la versión publicada.
-  Probar el IPA vigente en hardware, con controles de bloqueo, auriculares,
+- [x] Actualizar la [descarga pública del IPA](https://freesong-pied.vercel.app/FreeSong.ipa) a 3.9.56.
+- [ ] Probar el IPA vigente en hardware, con controles de bloqueo, auriculares,
   llamadas y descargas ya guardadas en modo avión.
 - [ ] Probar listas y Me gusta con una cuenta externa. Confirmar que
   reimportar no duplica y que desconectar retira las copias. Verificar el estado

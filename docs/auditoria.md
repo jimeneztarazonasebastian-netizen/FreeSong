@@ -35,6 +35,9 @@ estable.
   se verificó con las pistas de prueba. [CI web y mezclador de 3.9.56](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/runs/46145857471)
 - Compilaron el proyecto iOS y el IPA 3.9.56. Las pruebas Swift cubren el
   resolvedor y las políticas de audio. [CI y artefacto iOS de 3.9.56](https://github.com/jimeneztarazonasebastian-netizen/FreeSong/actions/runs/46145857482)
+- La descarga que servía el IPA 1.0 se actualizó a 3.9.56, compilación 124.
+  La prueba de navegador verifica los bytes del IPA con el service worker
+  activo. [Descarga pública](https://freesong-pied.vercel.app/FreeSong.ipa)
 - `npm audit` devolvió cero avisos de dependencias en la revisión. El
   resultado cubre los paquetes registrados en npm.
 
@@ -43,7 +46,6 @@ estable.
 | Prioridad | Hallazgo | Evidencia e impacto |
 | --- | --- | --- |
 | Alta | Reproducción con un iPhone bloqueado | Falta completar una sesión física de 30 minutos, con el bloqueo desde el primer toque y el paso del bloque inicial. Quedan por comprobar los controles del sistema, las interrupciones y el retorno desde segundo plano. [Prueba de PWA](../tests/browser/test-pwa.mjs) |
-| Alta | IPA público desactualizado | El archivo servido en `/FreeSong.ipa` contiene la versión 1.0, compilación 1. La versión 3.9.56 se descarga desde el artefacto de la ejecución iOS. El enlace directo requiere un mecanismo de publicación de la versión vigente. [Guía de iPhone](ios.md) |
 | Alta | Arranque y capacidad de Render | Hay dos sesiones simultáneas y una preparación de reemplazo a la vez. El arranque nativo espera hasta 54 segundos, cerca del minuto que puede tardar Render Free en salir del reposo. Si la variante tarda demasiado o la pista falla, se conserva el bloque inicial. [Puente de Vercel](../api/_mixer.js) · [Servidor del mezclador](../services/mixer/server.mjs) · [Límites de Render Free](https://render.com/docs/free#spinning-down-on-idle) |
 | Alta para distribución | Dependencia del catálogo | Superar una prueba de resolución confirma esa grabación en ese momento. Disponibilidad, tiempos y permisos dependen del proveedor. Hace falta una muestra repetible y revisar qué catálogo se puede ofrecer. [Resolución de audio](../api/stream.js) · [Relays](../api/_relay.js) |
 | Media | Protección y recuperación de sesiones | La admisión del mezclador usa límites en memoria. Un inicio cancelado antes de recibir el primer segmento puede retener una de las dos sesiones durante su limpieza por inactividad. Revisar cancelación y admisión antes de ampliar el acceso. [Puente](../api/_mixer.js) · [Caducidad](../services/mixer/hls.mjs) |
@@ -58,8 +60,8 @@ estable.
 2. Medir el arranque y la disponibilidad con 20 pistas variadas. Registrar
    publicación exacta, tiempo hasta audio, duración y fallo. Repetir la muestra
    otro día y comprobar recuperación al cambiar rápido de canción.
-3. Vincular un IPA vigente y probarlo en hardware con el iPhone bloqueado,
-   auriculares e interrupciones. Comprobar por separado importación de listas
+3. Probar el IPA vigente en hardware con el iPhone bloqueado, auriculares e
+   interrupciones. Comprobar por separado importación de listas
    y Me gusta, reimportación y desconexión de la cuenta.
 4. Revisar los permisos del catálogo y la capacidad del servicio antes de
    distribuirlo públicamente. Ver [pendientes vigentes](../PENDIENTES.md).

@@ -24,6 +24,10 @@
   ],
   "headers": [
     {
+      "source": "/FreeSong.ipa",
+      "headers": [{ "key": "Content-Disposition", "value": "attachment; filename=\"FreeSong.ipa\"" }]
+    },
+    {
       "source": "/mixer-demo/index.m3u8",
       "headers": [{ "key": "Content-Type", "value": "application/vnd.apple.mpegurl" }]
     },
